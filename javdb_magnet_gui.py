@@ -101,7 +101,9 @@ def create_session():
     if HAS_CURL_CFFI:
         return cffi_requests.Session(impersonate="chrome124", headers=headers, timeout=30.0), "curl_cffi"
     headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    return requests.Session(), "requests"
+    session = requests.Session()
+    session.headers.update(headers)
+    return session, "requests"
 
 
 def parse_size_gb(size_str: str) -> float:
