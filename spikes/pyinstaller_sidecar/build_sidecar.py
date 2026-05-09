@@ -21,11 +21,14 @@ from pathlib import Path
 # spikes/pyinstaller_sidecar/build_sidecar.py → repo root
 SPIKE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SPIKE_DIR.parent.parent
-ENTRY = REPO_ROOT / "spikes" / "python_sidecar_protocol" / "sidecar.py"
-DIST = SPIKE_DIR / "dist"
+# M3: entry promoted from spikes/python_sidecar_protocol/ to sidecar/
+ENTRY = REPO_ROOT / "sidecar" / "sidecar.py"
+# M3: output goes directly into the Tauri externalBin layout.
+# Tauri 2 expects `binaries/<name>-<target-triple>` (with `.exe` on Windows).
+DIST = REPO_ROOT / "app" / "src-tauri" / "binaries"
 BUILD = SPIKE_DIR / "build"
-SPEC = SPIKE_DIR / "sidecar.spec"
-APP_NAME = "sidecar"
+APP_NAME = "sidecar-x86_64-pc-windows-msvc"
+SPEC = SPIKE_DIR / f"{APP_NAME}.spec"
 
 
 def ensure_pyinstaller():
@@ -87,15 +90,16 @@ def post_build():
     size_mb = exe.stat().st_size / 1024 / 1024
     print(f"\n✅ Build complete: {exe}", file=sys.stderr)
     print(f"   Size: {size_mb:.1f} MB", file=sys.stderr)
-    print(f"\nUsage (M1+):", file=sys.stderr)
-    print(f"  {exe.name} --cookies-file <path> fetch-javdb <url>", file=sys.stderr)
-    print(f"  {exe.name} --handshake-stdin fetch-javdb <url>"
-          f"   (reads JSON line on stdin)", file=sys.stderr)
+    print(f"\nUsage (M3 daemon):", file=sys.stderr)
+    print(f"  Tauri spawns this exe as an externalBin sidecar; the daemon", file=sys.stderr)
+    print(f"  reads JSON-line commands from stdin and writes responses to", file=sys.stderr)
+    print(f"  stdout. See docs/superpowers/specs/2026-05-10-tauri-rewrite-design.md §5.", file=sys.stderr)
     print(f"\nLog destination:", file=sys.stderr)
     print(f"  Set $env:JAVDB_LOG_DIR or rely on the "
           f"%LOCALAPPDATA%\\JavDBMagnet\\logs fallback.", file=sys.stderr)
-    print(f"  The sidecar no longer requires cookies.txt next to itself.",
-          file=sys.stderr)
+    print(f"\nBinary placement:", file=sys.stderr)
+    print(f"  This output IS the Tauri externalBin path:", file=sys.stderr)
+    print(f"    {exe}", file=sys.stderr)
 
 
 if __name__ == "__main__":
