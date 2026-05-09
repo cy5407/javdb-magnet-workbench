@@ -4,12 +4,26 @@
 //!     cargo run -- "https://javdb.com/v/xxxx"
 //!
 //! 不會輸出完整 magnet / cookie / token，sidecar 的 stdout/stderr 也不會原樣轉印。
+//!
+//! ⚠️ **僅供 dev / spike harness。** Production（Tauri 整合）應改用
+//! `tauri::api::process::Command::new_sidecar()`，由 Tauri sidecar 機制負責
+//! binary 解析、權限、路徑與 process lifecycle；此檔的 `locate_sidecar_exe()`
+//! 走法只在本 spike 與 cargo run 場景成立。
 
 use std::env;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode, Stdio};
 
 use serde::{Deserialize, Serialize};
+
+/// sidecar binary 名稱（依平台選副檔名，避免硬寫 `.exe` 造成非 Windows 永遠找不到）。
+#[cfg(windows)]
+const SIDECAR_NAME: &str = "sidecar.exe";
+#[cfg(not(windows))]
+const SIDECAR_NAME: &str = "sidecar";
+
+/// env 短路：若使用者顯式指定 sidecar 路徑（測試/CI/容器場景），優先採用。
+const SIDECAR_EXE_ENV: &str = "SIDECAR_EXE";
 
 #[derive(Debug, Deserialize)]
 struct SidecarResponse {
@@ -36,16 +50,27 @@ struct DriverSummary {
     error: Option<String>,
 }
 
-/// 找 sidecar.exe：優先使用 CARGO_MANIFEST_DIR/../dist/sidecar.exe，
-/// 否則從 current_exe 上溯尋找
+/// 找 sidecar binary。
+///
+/// 優先序：
+/// 1. `SIDECAR_EXE` 環境變數（顯式指定，給 CI/測試/容器用）
+/// 2. `CARGO_MANIFEST_DIR/../dist/<SIDECAR_NAME>`（cargo run 在 source tree）
+/// 3. `current_exe()` 往上 6 層找 `dist/<SIDECAR_NAME>` 或
+///    `spikes/pyinstaller_sidecar/dist/<SIDECAR_NAME>`
+///
+/// 注意：第 3 條是 spike harness 走法，production 應改走 Tauri sidecar 機制。
 fn locate_sidecar_exe() -> Result<PathBuf, String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(p) = env::var(SIDECAR_EXE_ENV) {
+        candidates.push(PathBuf::from(p));
+    }
 
     if let Ok(manifest) = env::var("CARGO_MANIFEST_DIR") {
         let mut p = PathBuf::from(manifest);
         p.pop(); // pyinstaller_sidecar/
         p.push("dist");
-        p.push("sidecar.exe");
+        p.push(SIDECAR_NAME);
         candidates.push(p);
     }
 
@@ -55,12 +80,12 @@ fn locate_sidecar_exe() -> Result<PathBuf, String> {
             if !p.pop() {
                 break;
             }
-            candidates.push(p.join("dist").join("sidecar.exe"));
+            candidates.push(p.join("dist").join(SIDECAR_NAME));
             candidates.push(
                 p.join("spikes")
                     .join("pyinstaller_sidecar")
                     .join("dist")
-                    .join("sidecar.exe"),
+                    .join(SIDECAR_NAME),
             );
         }
     }
@@ -71,7 +96,9 @@ fn locate_sidecar_exe() -> Result<PathBuf, String> {
         }
     }
     Err(format!(
-        "找不到 sidecar.exe；請先執行 `python spikes/pyinstaller_sidecar/build_sidecar.py`（已嘗試 {} 個位置）",
+        "找不到 {}；請先執行 `python spikes/pyinstaller_sidecar/build_sidecar.py`，或設定 {} 環境變數（已嘗試 {} 個位置）",
+        SIDECAR_NAME,
+        SIDECAR_EXE_ENV,
         candidates.len()
     ))
 }
@@ -92,6 +119,7 @@ fn run(url: &str) -> DriverSummary {
         }
     };
 
+    // Spike 不加 timeout；production driver 必須加（避免 sidecar hang 拖垮 Tauri command）。
     let output = Command::new(&exe)
         .arg("fetch-javdb")
         .arg(url)
@@ -110,7 +138,7 @@ fn run(url: &str) -> DriverSummary {
                 magnet_count: 0,
                 first_magnet_redacted_present: false,
                 stderr_nonempty: false,
-                error: Some(format!("無法啟動 sidecar.exe: {}", e)),
+                error: Some(format!("無法啟動 {}: {}", SIDECAR_NAME, e)),
             }
         }
     };
