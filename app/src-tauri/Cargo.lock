@@ -1667,6 +1667,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-shell",
  "tauri-plugin-store",
+ "tokio",
 ]
 
 [[package]]

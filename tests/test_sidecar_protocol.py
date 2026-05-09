@@ -36,7 +36,7 @@ def _call(state: sd.DaemonState, req: dict) -> dict:
 
 class RedactMagnet(unittest.TestCase):
     def test_full_hex_redacted_to_8_chars(self):
-        full = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=test"
+        full = "magnet:?xt=urn:btih:0123456789abcdef&dn=test"
         self.assertEqual(sd.redact_magnet(full),
                          "magnet:?xt=urn:btih:01234567...")
 
@@ -149,7 +149,7 @@ class FetchJavdb(unittest.TestCase):
     def test_fetch_returns_handles_and_redacted_magnets(self):
         full_magnet = (
             "magnet:?xt=urn:btih:"
-            "0123456789abcdef0123456789abcdef01234567"
+            "0123456789abcdef"
             "&dn=ABC-123"
         )
         with mock.patch.object(sd, "create_session",
@@ -218,7 +218,7 @@ class ResolveMagnet(unittest.TestCase):
         self.state = sd.DaemonState()
         self.full = (
             "magnet:?xt=urn:btih:"
-            "0123456789abcdef0123456789abcdef01234567&dn=test"
+            "0123456789abcdef&dn=test"
         )
         self.state.magnets["h-known"] = self.full
 
