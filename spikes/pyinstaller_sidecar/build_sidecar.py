@@ -82,13 +82,20 @@ def build():
 def post_build():
     exe = DIST / f"{APP_NAME}.exe"
     if not exe.exists():
-        print(f"⚠️ 找不到產物: {exe}", file=sys.stderr)
+        print(f"⚠️ build artifact not found: {exe}", file=sys.stderr)
         sys.exit(1)
     size_mb = exe.stat().st_size / 1024 / 1024
-    print(f"\n✅ 打包完成: {exe}", file=sys.stderr)
-    print(f"   大小: {size_mb:.1f} MB", file=sys.stderr)
-    print(f"\n注意：sidecar.exe 會去 exe 所在資料夾找 cookies.txt（透過主程式的 app_dir() 邏輯）。", file=sys.stderr)
-    print(f"        spike 測試需要把 repo root 的 cookies.txt 複製到 {DIST}/", file=sys.stderr)
+    print(f"\n✅ Build complete: {exe}", file=sys.stderr)
+    print(f"   Size: {size_mb:.1f} MB", file=sys.stderr)
+    print(f"\nUsage (M1+):", file=sys.stderr)
+    print(f"  {exe.name} --cookies-file <path> fetch-javdb <url>", file=sys.stderr)
+    print(f"  {exe.name} --handshake-stdin fetch-javdb <url>"
+          f"   (reads JSON line on stdin)", file=sys.stderr)
+    print(f"\nLog destination:", file=sys.stderr)
+    print(f"  Set $env:JAVDB_LOG_DIR or rely on the "
+          f"%LOCALAPPDATA%\\JavDBMagnet\\logs fallback.", file=sys.stderr)
+    print(f"  The sidecar no longer requires cookies.txt next to itself.",
+          file=sys.stderr)
 
 
 if __name__ == "__main__":
