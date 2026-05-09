@@ -1,0 +1,38 @@
+:root[data-theme="light"] {
+  --color-bg: #fafafa;
+  --color-fg: #111;
+  --color-muted: #555;
+  --color-border: #ddd;
+  --color-button-bg: #fff;
+  --color-button-bg-hover: #eee;
+}
+
+:root[data-theme="dark"] {
+  --color-bg: #1a1a1a;
+  --color-fg: #eaeaea;
+  --color-muted: #999;
+  --color-border: #333;
+  --color-button-bg: #2a2a2a;
+  --color-button-bg-hover: #353535;
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    "Microsoft JhengHei",
+    sans-serif;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
