@@ -211,7 +211,7 @@ class RealDebrid:
     def process_magnet(
         self,
         magnet: str,
-        strategy: str = "largest",
+        strategy: str = "smart",
         cache_wait: int = 15,
         progress: Optional[Callable[[str], None]] = None,
     ) -> dict:

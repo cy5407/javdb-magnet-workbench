@@ -21,10 +21,14 @@ JavDB 磁力連結擷取與 Real-Debrid 直連產生工具。
 
 ```
 JavDBMagnet/
-├── JavDBMagnet.exe       ← 主程式
-├── .env.example          ← 設定檔範本
-├── README.md             ← 本文件
-└── (執行後會自動產生 .env / cookies.txt / logs/ / pending_torrents.json)
+├── JavDBMagnet.exe         ← 主程式
+├── .env.example            ← 設定檔範本
+├── README.md               ← 本文件
+│
+├── .env                    ← 在「設定」視窗按儲存後產生／更新（首次啟動不會自動產生）
+├── cookies.txt             ← 需要使用者手動建立（步驟 2）
+├── logs/                   ← 程式執行時自動產生（debug.log）
+└── pending_torrents.json   ← 送 RD 過程中自動產生的待處理清單
 ```
 
 ### 步驟 1：執行程式並設定 Real-Debrid Token
@@ -43,6 +47,8 @@ JavDBMagnet/
 - **最小檔案大小** 門檻（預設 500MB）
 - **快取等待秒數**（預設 15 秒）
 - **超時時間**（預設 300 秒）
+- **UI 縮放**（`auto` 依系統 DPI；或手動指定 `1.0`/`1.25`/`1.5`/`2.0` 等倍率，4K 螢幕建議 1.5–2.0）
+- **主題**（`light` 或 `dark`，修改後重新啟動程式生效）
 
 ### 步驟 2：取得 JavDB cookie（讓你能看到磁力連結）
 
