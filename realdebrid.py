@@ -1,0 +1,375 @@
+"""Real-Debrid API 模組
+
+文件：https://api.real-debrid.com/
+"""
+
+import time
+from pathlib import Path
+from typing import Callable, Optional
+
+import requests
+
+from app_logging import get_logger
+
+logger = get_logger(__name__)
+
+API_BASE = "https://api.real-debrid.com/rest/1.0"
+VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".wmv", ".mov", ".m4v", ".ts", ".webm"}
+
+
+def load_env(path: Path) -> dict[str, str]:
+    """簡易 .env 檔案解析器"""
+    env: dict[str, str] = {}
+    if not path.exists():
+        return env
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        env[key.strip()] = value.strip().strip('"').strip("'")
+    return env
+
+
+class RealDebridError(Exception):
+    pass
+
+
+class RealDebrid:
+    def __init__(self, token: str, min_size_mb: int = 500):
+        if not token:
+            raise RealDebridError("RD_API_TOKEN 未設定，請編輯 .env 檔案貼上 token")
+        self.session = requests.Session()
+        self.session.headers["Authorization"] = f"Bearer {token}"
+        self.min_size_mb = min_size_mb
+
+    def _request(self, method: str, path: str, _retry_count: int = 0, **kwargs):
+        url = f"{API_BASE}{path}"
+        # 不要把 magnet 整串寫進 log（太長），只記前 80 字
+        log_kwargs = {}
+        if "data" in kwargs:
+            log_data = {}
+            for k, v in kwargs["data"].items():
+                s = str(v)
+                log_data[k] = (s[:80] + "...") if len(s) > 80 else s
+            log_kwargs["data"] = log_data
+        logger.debug(f"→ {method} {path} {log_kwargs}")
+
+        resp = self.session.request(method, url, timeout=30, **kwargs)
+
+        logger.debug(f"← HTTP {resp.status_code} ({len(resp.content)} bytes)")
+
+        if resp.status_code == 401:
+            logger.error("API token 無效或已過期")
+            raise RealDebridError("API token 無效或已過期")
+        if resp.status_code == 403:
+            logger.error("帳號權限不足")
+            raise RealDebridError("帳號權限不足（需要 Premium 會員）")
+
+        # 429 自動重試（最多 3 次）
+        if resp.status_code == 429:
+            if _retry_count >= 3:
+                logger.error("429 重試 3 次仍失敗")
+                raise RealDebridError("HTTP 429: 請求頻率過高，請稍後再試")
+            wait = self._parse_retry_after(resp)
+            logger.warning(f"429 速率限制，等待 {wait}s 後重試（第 {_retry_count + 1}/3 次）")
+            time.sleep(wait)
+            return self._request(method, path, _retry_count=_retry_count + 1, **kwargs)
+
+        if not resp.ok:
+            try:
+                msg = resp.json().get("error", resp.text)
+            except Exception:
+                msg = resp.text
+            logger.error(f"HTTP {resp.status_code}: {msg}")
+            raise RealDebridError(f"HTTP {resp.status_code}: {msg}")
+        if resp.status_code == 204 or not resp.content:
+            return None
+        result = resp.json()
+        # 對於 torrent_info，記錄重點欄位避免太冗長
+        if isinstance(result, dict) and "files" in result:
+            logger.debug(
+                f"  status={result.get('status')} progress={result.get('progress')} "
+                f"files={len(result.get('files', []))} links={len(result.get('links', []))}"
+            )
+        return result
+
+    @staticmethod
+    def _parse_retry_after(resp) -> float:
+        """從回應 header 取得 Retry-After 秒數，沒給就用指數退避"""
+        retry_after = resp.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return float(retry_after)
+            except ValueError:
+                pass
+        # 預設退避：5 秒
+        return 5.0
+
+    def add_magnet(self, magnet: str) -> str:
+        """新增磁力，回傳 torrent id"""
+        result = self._request("POST", "/torrents/addMagnet", data={"magnet": magnet})
+        return result["id"]
+
+    def torrent_info(self, torrent_id: str) -> dict:
+        return self._request("GET", f"/torrents/info/{torrent_id}")
+
+    def select_files(self, torrent_id: str, file_ids: list[int] | str = "all"):
+        files_param = file_ids if isinstance(file_ids, str) else ",".join(str(i) for i in file_ids)
+        self._request("POST", f"/torrents/selectFiles/{torrent_id}", data={"files": files_param})
+
+    def delete_torrent(self, torrent_id: str):
+        try:
+            self._request("DELETE", f"/torrents/delete/{torrent_id}")
+        except RealDebridError:
+            pass
+
+    def unrestrict_link(self, link: str) -> dict:
+        return self._request("POST", "/unrestrict/link", data={"link": link})
+
+    @staticmethod
+    def _extract_code(magnet: str) -> str | None:
+        """從磁力的 dn= 參數抽出 JAV 番號（如 SNOS-192, IPZZ-851）"""
+        import re as _re
+        from urllib.parse import unquote
+        m = _re.search(r"dn=([^&]+)", magnet or "")
+        if not m:
+            return None
+        name = unquote(m.group(1))
+        # 比對 ABCD-1234 / ABCDEF-12345 等格式（2-6 字母 + 3-5 數字）
+        code_match = _re.search(r"\b([A-Za-z]{2,6})[-_]?(\d{3,5})\b", name)
+        if code_match:
+            return f"{code_match.group(1).upper()}-{code_match.group(2)}"
+        return None
+
+    @staticmethod
+    def _filename_matches_code(filename: str, code: str) -> bool:
+        """檔名是否含番號（容忍大小寫、底線/橫線、有無分隔符）"""
+        if not code:
+            return False
+        name = filename.upper().replace("_", "-")
+        code_up = code.upper()
+        # 接受 SNOS-192 或 SNOS192（去掉橫線）
+        return code_up in name or code_up.replace("-", "") in name.replace("-", "")
+
+    def pick_files(self, files: list[dict], strategy: str = "smart", magnet: str = "") -> list[int]:
+        """根據策略決定要選哪些檔案，回傳 file id 清單"""
+        if not files:
+            return []
+
+        if strategy == "all":
+            return [f["id"] for f in files]
+
+        if strategy == "video":
+            picked = [f for f in files if Path(f["path"]).suffix.lower() in VIDEO_EXTS]
+            return [f["id"] for f in picked] or [max(files, key=lambda f: f["bytes"])["id"]]
+
+        if strategy == "smart":
+            min_bytes = self.min_size_mb * 1024 * 1024
+
+            # Step 1: 用磁力的番號過濾檔名（JavDB 主要情境）
+            code = self._extract_code(magnet) if magnet else None
+            if code:
+                code_matches = [
+                    f for f in files
+                    if Path(f["path"]).suffix.lower() in VIDEO_EXTS
+                    and self._filename_matches_code(Path(f["path"]).name, code)
+                ]
+                if code_matches:
+                    # 番號匹配後仍套 size 門檻（過濾極少見的同番號廣告）
+                    size_filtered = [f for f in code_matches if f["bytes"] >= min_bytes]
+                    final = size_filtered if size_filtered else code_matches
+                    logger.info(
+                        f"smart 策略：番號 {code} 匹配 {len(code_matches)} 個影片檔，"
+                        f"套用 {self.min_size_mb}MB 門檻後保留 {len(final)} 個"
+                    )
+                    return [f["id"] for f in final]
+                logger.debug(f"smart 策略：番號 {code} 沒有檔名匹配，退回 size 門檻")
+
+            # Step 2: size 門檻（動畫等非 JAV 內容）
+            picked = [
+                f for f in files
+                if Path(f["path"]).suffix.lower() in VIDEO_EXTS and f["bytes"] >= min_bytes
+            ]
+            if picked:
+                logger.debug(f"smart 策略：size 門檻 {self.min_size_mb}MB，符合 {len(picked)}/{len(files)} 個")
+                return [f["id"] for f in picked]
+
+            # Step 3: 退回最大檔
+            logger.warning(f"smart 策略：沒有檔案 >= {self.min_size_mb}MB，退回選最大檔")
+            biggest = max(files, key=lambda f: f["bytes"])
+            return [biggest["id"]]
+
+        # largest: 只選最大的影片檔；如果沒影片副檔名就選最大檔
+        videos = [f for f in files if Path(f["path"]).suffix.lower() in VIDEO_EXTS]
+        candidates = videos if videos else files
+        biggest = max(candidates, key=lambda f: f["bytes"])
+        return [biggest["id"]]
+
+    def process_magnet(
+        self,
+        magnet: str,
+        strategy: str = "largest",
+        cache_wait: int = 15,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> dict:
+        """加磁力 → 選檔案 → 等待 cache_wait 秒 → 判定快取狀態
+
+        回傳格式：
+        - 已快取：{"status": "completed", "name": ..., "torrent_id": ..., "links": [...]}
+        - 未快取：{"status": "pending", "name": ..., "torrent_id": ..., "progress": ..., "rd_status": ...}
+
+        注意：未快取或解析中（magnet_conversion）都會保留 RD 上的 torrent，回傳 pending
+        只有 magnet_error 會真正刪除並丟出例外
+        """
+        def log(msg: str):
+            logger.info(msg)
+            if progress:
+                progress(msg)
+
+        import re as _re
+        hash_match = _re.search(r"btih:([a-fA-F0-9]+)", magnet)
+        magnet_hash = hash_match.group(1)[:8] if hash_match else "unknown"
+        logger.info(f"=== 開始處理磁力 [{magnet_hash}] ===")
+
+        log("新增磁力...")
+        torrent_id = self.add_magnet(magnet)
+        logger.info(f"取得 torrent id: {torrent_id}")
+
+        # 等待 RD 解析磁力（最長 cache_wait 秒）
+        log(f"等待解析檔案清單（最多 {cache_wait} 秒）...")
+        deadline = time.time() + cache_wait
+        info = None
+        files_selected = False
+        last_status = ""
+        last_progress = 0
+
+        while time.time() < deadline:
+            info = self.torrent_info(torrent_id)
+            last_status = info.get("status", "")
+            last_progress = info.get("progress", 0)
+
+            if last_status == "magnet_error":
+                self.delete_torrent(torrent_id)
+                raise RealDebridError(f"磁力解析失敗: {info.get('filename', '')}")
+            if last_status == "error":
+                self.delete_torrent(torrent_id)
+                raise RealDebridError("下載失敗")
+
+            if last_status == "waiting_files_selection" and not files_selected:
+                files = info.get("files", [])
+                logger.debug(f"檔案清單 ({len(files)} 個):")
+                for f in files:
+                    logger.debug(f"  id={f['id']} {Path(f['path']).name} ({f['bytes'] / 1024**3:.2f}GB)")
+                picked = self.pick_files(files, strategy, magnet=magnet)
+                if not picked:
+                    self.delete_torrent(torrent_id)
+                    raise RealDebridError("沒有可選的檔案")
+                picked_files = [f for f in files if f["id"] in picked]
+                picked_names = ", ".join(f"{Path(f['path']).name} ({f['bytes'] / 1024**3:.2f}GB)" for f in picked_files)
+                log(f"選擇檔案 (策略={strategy}): {picked_names}")
+                self.select_files(torrent_id, picked)
+                files_selected = True
+                continue  # 立刻再查一次狀態
+
+            if last_status == "downloaded":
+                log("已快取，取得下載連結")
+                results = self._collect_links(info)
+                logger.info(f"=== 磁力 [{magnet_hash}] 已快取，{len(results)} 個連結 ===")
+                return {
+                    "status": "completed",
+                    "name": info.get("filename", ""),
+                    "torrent_id": torrent_id,
+                    "links": results,
+                }
+
+            time.sleep(3)
+
+        # 超時：保留 RD torrent，回傳 pending
+        if not files_selected:
+            log(f"解析中（{last_status}），加入待處理清單稍後重試")
+        else:
+            log(f"未快取（{last_status} {last_progress}%），加入待處理清單")
+        logger.info(f"=== 磁力 [{magnet_hash}] 待處理 (status={last_status}, files_selected={files_selected}) ===")
+        return {
+            "status": "pending",
+            "name": info.get("filename", "") if info else "",
+            "torrent_id": torrent_id,
+            "progress": last_progress,
+            "rd_status": last_status,
+            "files_selected": files_selected,
+        }
+
+    def check_torrent(self, torrent_id: str, strategy: str = "smart", magnet: str = "") -> dict:
+        """查詢 torrent 目前狀態，必要時自動選檔案
+
+        - 若狀態為 waiting_files_selection，會用指定策略自動選檔案再查一次
+          （傳入 magnet 可讓 smart 策略使用番號比對）
+        - 若已完成（downloaded），回傳 completed 與下載連結
+        - 否則回傳 pending（含 RD 狀態與進度）
+        - 找不到（404）回傳 missing
+        """
+        try:
+            info = self.torrent_info(torrent_id)
+        except RealDebridError as e:
+            if "404" in str(e):
+                logger.warning(f"torrent {torrent_id} 不存在於 RD")
+                return {"status": "missing", "torrent_id": torrent_id}
+            raise
+
+        status = info.get("status", "")
+
+        # 如果還沒選檔案，現在補選
+        if status == "waiting_files_selection":
+            files = info.get("files", [])
+            picked = self.pick_files(files, strategy, magnet=magnet)
+            if picked:
+                picked_files = [f for f in files if f["id"] in picked]
+                picked_names = ", ".join(
+                    f"{Path(f['path']).name} ({f['bytes'] / 1024**3:.2f}GB)" for f in picked_files
+                )
+                logger.info(f"重試時補選檔案 (策略={strategy}): {picked_names}")
+                self.select_files(torrent_id, picked)
+                # 立刻再查一次
+                info = self.torrent_info(torrent_id)
+                status = info.get("status", "")
+
+        if status == "downloaded":
+            results = self._collect_links(info)
+            return {
+                "status": "completed",
+                "name": info.get("filename", ""),
+                "torrent_id": torrent_id,
+                "links": results,
+            }
+        return {
+            "status": "pending",
+            "name": info.get("filename", ""),
+            "torrent_id": torrent_id,
+            "progress": info.get("progress", 0),
+            "rd_status": status,
+        }
+
+    def _collect_links(self, info: dict) -> list[dict]:
+        """從 torrent info 取得所有 unrestrict 後的下載連結"""
+        links = info.get("links", [])
+        if not links:
+            return []
+        results = []
+        for link in links:
+            try:
+                unrestricted = self.unrestrict_link(link)
+                results.append({
+                    "original": link,
+                    "download": unrestricted.get("download", ""),
+                    "filename": unrestricted.get("filename", ""),
+                    "filesize": unrestricted.get("filesize", 0),
+                    "streamable": unrestricted.get("streamable", 0),
+                })
+                logger.info(f"  ✓ {unrestricted.get('filename', '')} → {unrestricted.get('download', '')}")
+            except RealDebridError as e:
+                logger.warning(f"  ✗ unrestrict 失敗: {link} - {e}")
+                results.append({"original": link, "error": str(e)})
+        return results
