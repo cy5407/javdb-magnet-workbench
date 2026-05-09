@@ -20,6 +20,11 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# tokio mpsc is used by SidecarManager to bridge plugin-shell stdout events
+# to per-request response reads. tauri's async runtime is built on tokio so
+# this aligns with what's already in the binary; we just need the explicit
+# dep to import mpsc::unbounded_channel without going through tauri internals.
+tokio = { version = "1", features = ["sync"] }
 
 [profile.release]
 panic = "abort"

@@ -1,2 +1,5 @@
 target/
 gen/
+# PyInstaller-built sidecar binary (rebuild via spikes/pyinstaller_sidecar/build_sidecar.py).
+# 24 MB; never source-controlled. M8 release pipeline will produce this artifact.
+binaries/
