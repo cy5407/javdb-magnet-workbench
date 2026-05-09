@@ -25,12 +25,14 @@ except ImportError:
 import requests
 from bs4 import BeautifulSoup
 
-from app_logging import setup_logging, get_logger, app_dir
+from app_logging import setup_logging, get_logger, app_dir, get_log_file
 from realdebrid import RealDebrid, RealDebridError, load_env
 
-LOG_FILE = setup_logging()
 logger = get_logger(__name__)
 
+# TODO(M7): legacy paths next to the exe — migration moves these to
+#           %APPDATA%\JavDBMagnet\ as part of milestone M7. Until then,
+#           the tkinter app keeps the original behavior.
 COOKIE_FILE = app_dir() / "cookies.txt"
 ENV_FILE = app_dir() / ".env"
 PENDING_FILE = app_dir() / "pending_torrents.json"
@@ -498,14 +500,15 @@ class App:
     def open_log(self):
         """在系統預設編輯器開啟 log 檔"""
         import os
+        log_file = get_log_file()
         try:
-            if not LOG_FILE.exists():
+            if log_file is None or not log_file.exists():
                 messagebox.showinfo("日誌", "尚未產生日誌檔")
                 return
-            os.startfile(str(LOG_FILE))
+            os.startfile(str(log_file))
         except Exception as e:
             logger.exception("無法開啟 log 檔")
-            messagebox.showerror("日誌", f"無法開啟: {e}\n\n路徑: {LOG_FILE}")
+            messagebox.showerror("日誌", f"無法開啟: {e}\n\n路徑: {log_file}")
 
     def open_settings(self):
         SettingsDialog(self.root)
@@ -1458,6 +1461,9 @@ def _apply_ttk_font(root: tk.Tk, ui_font: str, base_size: int = 10):
 
 
 if __name__ == "__main__":
+    # Initialize logging before any GUI work (deferred from module scope in M1).
+    setup_logging()
+
     _enable_dpi_awareness()
     root = tk.Tk()
 
