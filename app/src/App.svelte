@@ -8,13 +8,24 @@
   } from "./lib/scraper";
   import { processGroupRows } from "./lib/magnetUtils";
   import {
+    rdErrorMessage,
+    retryPending,
+    sendBatch,
+    type RdRetryEvent,
+    type RdSendBatchEvent,
+    type RdSendItem,
+  } from "./lib/rdSender";
+  import {
     defaultFilterState,
     type CopyBulkResult,
     type FilterState,
     type GroupPick,
     type MagnetRow,
     type PathInfo,
+    type PendingEntry,
     type PingResponse,
+    type RdSendProgress,
+    type RdUserInfo,
     type ScrapedGroup,
     type Settings,
     type SortColumn,
@@ -49,6 +60,20 @@
   let collapsed = $state<Record<string, boolean>>({});
 
   let pingMessage = $state("");
+
+  // M5 — Real-Debrid state
+  let rdHasToken = $state(false);
+  let rdUser = $state<RdUserInfo | null>(null);
+  let rdTokenInput = $state("");
+  let rdShowToken = $state(false);
+  let rdMessage = $state("");
+  let rdSendProgress = $state<RdSendProgress[]>([]);
+  let rdSendDone = $state<{ done: number; total: number }>({ done: 0, total: 0 });
+  let isRdSending = $state(false);
+  let rdSendAbort: AbortController | null = null;
+  let pendingEntries = $state<PendingEntry[]>([]);
+  let isRetryingPending = $state(false);
+  let retryAbort: AbortController | null = null;
 
   function applyTheme(t: Theme) {
     document.documentElement.dataset.theme = t;
@@ -89,6 +114,19 @@
     } catch (e) {
       console.error("read_settings failed:", e);
       statusMessage = `讀取設定失敗：${e}`;
+    }
+
+    // RD token presence + pending list. Both are best-effort on startup.
+    try {
+      const r = await invoke<{ present: boolean }>("rd_has_token");
+      rdHasToken = r.present;
+    } catch (e) {
+      console.warn("rd_has_token failed:", e);
+    }
+    try {
+      pendingEntries = await invoke<PendingEntry[]>("pending_list");
+    } catch (e) {
+      console.warn("pending_list failed:", e);
     }
   });
 
@@ -275,11 +313,266 @@
   let visibleMagnets = $derived(
     groups.reduce((acc, g) => acc + processedRows(g).length, 0),
   );
+
+  // ---- M5: Real-Debrid handlers --------------------------------------
+  async function rdTestToken() {
+    rdMessage = "（測試中…）";
+    try {
+      const u = await invoke<RdUserInfo>("rd_test_token", {
+        token: rdTokenInput.trim(),
+      });
+      rdUser = u;
+      rdMessage = `測試成功：${u.username || "(無 username)"} / ${u.type} / 點數 ${u.points}`;
+    } catch (e) {
+      rdUser = null;
+      const code = e instanceof Error ? e.message : String(e);
+      rdMessage = `測試失敗：${rdErrorMessage(code)}`;
+    }
+  }
+
+  async function rdSaveToken() {
+    if (!rdTokenInput.trim()) {
+      rdMessage = "請先輸入 Token";
+      return;
+    }
+    try {
+      await invoke("rd_save_token", { token: rdTokenInput.trim() });
+      rdHasToken = true;
+      rdTokenInput = "";
+      rdShowToken = false;
+      rdMessage = "Token 已儲存到系統憑證管理員";
+      // Refresh user info from saved token (no token sent over IPC).
+      try {
+        rdUser = await invoke<RdUserInfo>("rd_check_user");
+      } catch (e) {
+        const code = e instanceof Error ? e.message : String(e);
+        rdMessage = `Token 已儲存，但驗證失敗：${rdErrorMessage(code)}`;
+      }
+    } catch (e) {
+      const code = e instanceof Error ? e.message : String(e);
+      rdMessage = `儲存失敗：${rdErrorMessage(code)}`;
+    }
+  }
+
+  async function rdClearToken() {
+    try {
+      await invoke("rd_clear_token");
+      rdHasToken = false;
+      rdUser = null;
+      rdTokenInput = "";
+      rdMessage = "Token 已清除";
+    } catch (e) {
+      const code = e instanceof Error ? e.message : String(e);
+      rdMessage = `清除失敗：${rdErrorMessage(code)}`;
+    }
+  }
+
+  async function rdRefreshUser() {
+    if (!rdHasToken) {
+      rdMessage = "尚未設定 Token";
+      return;
+    }
+    rdMessage = "（查詢中…）";
+    try {
+      rdUser = await invoke<RdUserInfo>("rd_check_user");
+      rdMessage = `已連線：${rdUser.username || "(無 username)"} / ${rdUser.type}`;
+    } catch (e) {
+      const code = e instanceof Error ? e.message : String(e);
+      rdMessage = `查詢失敗：${rdErrorMessage(code)}`;
+    }
+  }
+
+  /** Build the send-to-RD batch from the currently visible (filtered+sorted+
+   * group-picked) rows. */
+  function buildVisibleSendItems(): RdSendItem[] {
+    const out: RdSendItem[] = [];
+    for (const g of groups) {
+      const rows = processedRows(g);
+      const code = g.result?.code ?? "";
+      for (const m of rows) {
+        out.push({
+          handle_id: m.handle_id,
+          code: code || m.name || "(unknown)",
+          size_label: m.size,
+        });
+      }
+    }
+    return out;
+  }
+
+  async function sendVisibleToRd() {
+    if (isRdSending) return;
+    if (!rdHasToken) {
+      rdMessage = "請先到「Real-Debrid」區塊設定 Token";
+      return;
+    }
+    const items = buildVisibleSendItems();
+    if (items.length === 0) {
+      rdMessage = "目前沒有可送出的磁力";
+      return;
+    }
+    isRdSending = true;
+    rdSendProgress = items.map((it) => ({
+      handle_id: it.handle_id,
+      code: it.code,
+      status: "pending",
+      links: [],
+      error_code: null,
+    }));
+    rdSendDone = { done: 0, total: items.length };
+    rdSendAbort = new AbortController();
+    rdMessage = "";
+
+    try {
+      await sendBatch(
+        items,
+        (ev: RdSendBatchEvent) => {
+          rdSendProgress[ev.index - 1] = ev.item;
+          if (ev.item.status !== "sending") {
+            rdSendDone = { done: ev.index, total: ev.total };
+          }
+        },
+        {
+          signal: rdSendAbort.signal,
+          defaults: settings
+            ? {
+                strategy: settings.rd.file_pick,
+                min_size_mb: settings.rd.min_size_mb,
+                cache_wait: settings.rd.cache_wait_seconds,
+              }
+            : {},
+        },
+      );
+    } finally {
+      isRdSending = false;
+      rdSendAbort = null;
+      // Refresh persistent pending list — rd_send_magnet on the Rust side
+      // already added pending entries to disk.
+      try {
+        pendingEntries = await invoke<PendingEntry[]>("pending_list");
+      } catch (e) {
+        console.warn("pending_list failed:", e);
+      }
+    }
+  }
+
+  function cancelRdSend() {
+    rdSendAbort?.abort();
+  }
+
+  async function copyRdDownloads() {
+    const lines: string[] = [];
+    for (const row of rdSendProgress) {
+      if (row.status === "completed") {
+        for (const link of row.links) {
+          if (link.download) lines.push(link.download);
+        }
+      }
+    }
+    if (lines.length === 0) {
+      rdMessage = "目前沒有可複製的下載連結";
+      return;
+    }
+    try {
+      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+      await writeText(lines.join("\n"));
+      rdMessage = `已複製 ${lines.length} 個 RD 直連到剪貼簿`;
+    } catch (e) {
+      rdMessage = `複製失敗：${e}`;
+    }
+  }
+
+  async function refreshPending() {
+    try {
+      pendingEntries = await invoke<PendingEntry[]>("pending_list");
+    } catch (e) {
+      rdMessage = `讀取待處理清單失敗：${e}`;
+    }
+  }
+
+  async function retryAllPending() {
+    if (isRetryingPending) return;
+    if (pendingEntries.length === 0) return;
+    isRetryingPending = true;
+    retryAbort = new AbortController();
+    const completedLinks: string[] = [];
+    rdMessage = "";
+
+    try {
+      await retryPending(
+        pendingEntries,
+        (ev: RdRetryEvent) => {
+          if (ev.result.kind === "completed") {
+            for (const l of ev.result.links) {
+              if (l.download) completedLinks.push(l.download);
+            }
+          }
+        },
+        { signal: retryAbort.signal },
+      );
+    } finally {
+      isRetryingPending = false;
+      retryAbort = null;
+      await refreshPending();
+    }
+
+    if (completedLinks.length > 0) {
+      try {
+        const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+        await writeText(completedLinks.join("\n"));
+        rdMessage = `重試完成：${completedLinks.length} 個新連結已複製到剪貼簿`;
+      } catch (e) {
+        rdMessage = `重試完成 ${completedLinks.length} 個（剪貼簿寫入失敗）`;
+      }
+    } else {
+      rdMessage = `重試完成，目前沒有新完成的連結（剩 ${pendingEntries.length} 個）`;
+    }
+  }
+
+  function cancelRetry() {
+    retryAbort?.abort();
+  }
+
+  async function removePending(torrent_id: string) {
+    try {
+      pendingEntries = await invoke<PendingEntry[]>("pending_remove", {
+        torrentId: torrent_id,
+      });
+    } catch (e) {
+      rdMessage = `移除失敗：${e}`;
+    }
+  }
+
+  async function clearAllPending() {
+    try {
+      await invoke("pending_clear");
+      pendingEntries = [];
+      rdMessage = "待處理清單已清空";
+    } catch (e) {
+      rdMessage = `清空失敗：${e}`;
+    }
+  }
+
+  let rdCompletedCount = $derived(
+    rdSendProgress.filter((r) => r.status === "completed").length,
+  );
+  let rdPendingCount = $derived(
+    rdSendProgress.filter((r) => r.status === "in_pending").length,
+  );
+  let rdErrorCount = $derived(
+    rdSendProgress.filter((r) => r.status === "error").length,
+  );
+  let rdDownloadLinkCount = $derived(
+    rdSendProgress.reduce(
+      (acc, r) => acc + (r.status === "completed" ? r.links.filter((l) => l.download).length : 0),
+      0,
+    ),
+  );
 </script>
 
 <main class="container">
   <h1>JavDBMagnet</h1>
-  <p class="subtitle">M4 — 批次擷取 + 篩選 + 清除</p>
+  <p class="subtitle">M5 — 批次擷取 + Real-Debrid</p>
 
   <section>
     <h2>儲存位置</h2>
@@ -312,6 +605,60 @@
   </section>
 
   <section>
+    <h2>Real-Debrid</h2>
+    <div class="row">
+      <span class="muted">
+        Token：{rdHasToken ? "✓ 已設定" : "✗ 未設定"}
+      </span>
+      {#if rdHasToken}
+        <button onclick={rdRefreshUser}>查詢帳號</button>
+        <button onclick={rdClearToken}>清除 Token</button>
+      {/if}
+    </div>
+    {#if rdUser}
+      <p class="muted small">
+        {rdUser.username || "(無 username)"} ／ {rdUser.type} ／ 點數 {rdUser.points}
+        {#if rdUser.expiration}
+          ／ 到期 {rdUser.expiration}
+        {/if}
+      </p>
+    {/if}
+
+    <div class="row stack">
+      <label class="grow" for="rd-token-input">
+        新增 / 更新 Token（取得：
+        <a
+          href="https://real-debrid.com/apitoken"
+          target="_blank"
+          rel="noreferrer">real-debrid.com/apitoken</a>）
+      </label>
+      <div class="row">
+        <input
+          id="rd-token-input"
+          type={rdShowToken ? "text" : "password"}
+          bind:value={rdTokenInput}
+          placeholder="貼上 Token"
+          spellcheck="false"
+          autocomplete="off"
+        />
+        <label class="check small">
+          <input type="checkbox" bind:checked={rdShowToken} />
+          顯示
+        </label>
+        <button onclick={rdTestToken} disabled={!rdTokenInput.trim()}>
+          測試連線
+        </button>
+        <button onclick={rdSaveToken} disabled={!rdTokenInput.trim()}>
+          儲存
+        </button>
+      </div>
+    </div>
+    {#if rdMessage}
+      <p class="status">{rdMessage}</p>
+    {/if}
+  </section>
+
+  <section>
     <h2>批次擷取</h2>
     <p class="hint">貼上 JavDB 網址，每行一個。以 <code>#</code> 開頭或非 http(s) 的行會被忽略。</p>
 
@@ -331,6 +678,13 @@
       {#if groups.length > 0}
         <button onclick={copyVisible} disabled={isScraping || visibleMagnets === 0}>
           複製可見磁力（{visibleMagnets}）
+        </button>
+        <button
+          onclick={sendVisibleToRd}
+          disabled={isScraping || isRdSending || visibleMagnets === 0 || !rdHasToken}
+          title={rdHasToken ? "" : "請先設定 Real-Debrid Token"}
+        >
+          送至 Real-Debrid（{visibleMagnets}）
         </button>
         <button onclick={clearResults}>清空結果</button>
       {/if}
@@ -503,6 +857,136 @@
       </ul>
     {/if}
   </section>
+
+  {#if rdSendProgress.length > 0}
+    <section>
+      <h2>送至 Real-Debrid 進度</h2>
+      <div class="status-bar">
+        <span>{rdSendDone.done} / {rdSendDone.total}</span>
+        <span class="ok">✓ 完成 {rdCompletedCount}</span>
+        <span class="muted">⏳ 待處理 {rdPendingCount}</span>
+        <span class="err">✗ 錯誤 {rdErrorCount}</span>
+        <span class="muted">直連：{rdDownloadLinkCount}</span>
+      </div>
+      <div class="row">
+        {#if isRdSending}
+          <button onclick={cancelRdSend}>取消</button>
+        {/if}
+        <button
+          onclick={copyRdDownloads}
+          disabled={isRdSending || rdDownloadLinkCount === 0}
+        >
+          複製所有 RD 直連（{rdDownloadLinkCount}）
+        </button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>番號</th>
+            <th>狀態</th>
+            <th>連結 / 訊息</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each rdSendProgress as row (row.handle_id)}
+            <tr>
+              <td>{row.code}</td>
+              <td>
+                {#if row.status === "pending"}
+                  待送出
+                {:else if row.status === "sending"}
+                  送出中…
+                {:else if row.status === "completed"}
+                  <span class="status-ok">已完成</span>
+                {:else if row.status === "in_pending"}
+                  <span class="status-warn">RD 處理中</span>
+                {:else if row.status === "error"}
+                  <span class="status-err">失敗</span>
+                {/if}
+              </td>
+              <td>
+                {#if row.status === "completed"}
+                  <ul class="links">
+                    {#each row.links as link}
+                      <li class="mono small">
+                        {link.filename}
+                        {#if link.filesize > 0}
+                          <span class="muted">
+                            （{(link.filesize / 1024 / 1024 / 1024).toFixed(2)} GB）
+                          </span>
+                        {/if}
+                      </li>
+                    {/each}
+                  </ul>
+                {:else if row.status === "in_pending"}
+                  <span class="muted small">已加入待處理清單，可稍後重試</span>
+                {:else if row.status === "error"}
+                  <span class="small">{rdErrorMessage(row.error_code ?? "")}</span>
+                {/if}
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </section>
+  {/if}
+
+  {#if pendingEntries.length > 0}
+    <section>
+      <h2>待處理（Real-Debrid）</h2>
+      <p class="hint">
+        這些 torrent RD 尚未完成下載。重試時不需要原始磁力（不存在 sidecar 之外）。
+      </p>
+
+      <div class="row">
+        <button
+          onclick={retryAllPending}
+          disabled={isRetryingPending || pendingEntries.length === 0}
+        >
+          {isRetryingPending ? "重試中…" : "全部重試"}
+        </button>
+        {#if isRetryingPending}
+          <button onclick={cancelRetry}>取消</button>
+        {/if}
+        <button onclick={refreshPending} disabled={isRetryingPending}>
+          重新載入
+        </button>
+        <button onclick={clearAllPending} disabled={isRetryingPending}>
+          全部清空
+        </button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>番號</th>
+            <th>大小</th>
+            <th>RD 狀態</th>
+            <th>進度</th>
+            <th>策略</th>
+            <th>新增</th>
+            <th>動作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each pendingEntries as p (p.torrent_id)}
+            <tr>
+              <td>{p.code || "（無）"}</td>
+              <td>{p.size_label}</td>
+              <td>{p.last_rd_status || "—"}</td>
+              <td>{p.last_progress.toFixed(0)}%</td>
+              <td>{p.strategy}</td>
+              <td class="small muted">{p.added_at.slice(0, 10)}</td>
+              <td>
+                <button onclick={() => removePending(p.torrent_id)}>移除</button>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </section>
+  {/if}
 </main>
 
 <style>
@@ -695,6 +1179,36 @@
     border-radius: 6px;
     text-align: center;
     color: var(--color-muted);
+  }
+
+  .grow {
+    flex: 1;
+  }
+
+  .links {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .status-ok {
+    color: #2ecc71;
+    font-weight: 600;
+  }
+
+  .status-warn {
+    color: #f39c12;
+    font-weight: 600;
+  }
+
+  .status-err {
+    color: #c0392b;
+    font-weight: 600;
+  }
+
+  a {
+    color: var(--color-fg);
+    text-decoration: underline;
   }
 
   .status-bar {
