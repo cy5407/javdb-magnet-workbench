@@ -105,3 +105,80 @@ export interface SortState {
   column: SortColumn | null;
   direction: SortDirection;
 }
+
+// ---------------------------------------------------------------------------
+// M5: Real-Debrid integration
+// ---------------------------------------------------------------------------
+
+export interface RdUserInfo {
+  username: string;
+  type: string;
+  expiration: string;
+  points: number;
+}
+
+export interface RdLink {
+  original: string;
+  download: string;
+  filename: string;
+  filesize: number;
+  streamable: number;
+}
+
+/** Result of `rd_send_magnet`. Discriminated union on `status`. */
+export type RdSendOutcome =
+  | {
+      status: "completed";
+      torrent_id: string;
+      name: string;
+      links: RdLink[];
+    }
+  | {
+      status: "pending";
+      torrent_id: string;
+      name: string;
+      rd_status: string;
+      progress: number;
+    };
+
+/** Result of `rd_check_pending`. */
+export type RdCheckOutcome =
+  | {
+      status: "completed";
+      torrent_id: string;
+      name: string;
+      links: RdLink[];
+    }
+  | {
+      status: "pending";
+      torrent_id: string;
+      name: string;
+      rd_status: string;
+      progress: number;
+    }
+  | {
+      status: "missing";
+      torrent_id: string;
+    };
+
+/** Persisted pending entry shape (matches the Rust `PendingEntry`). */
+export interface PendingEntry {
+  torrent_id: string;
+  code: string;
+  name: string;
+  size_label: string;
+  strategy: string;
+  added_at: string;
+  last_progress: number;
+  last_rd_status: string;
+  last_checked_at: string | null;
+}
+
+/** Per-row state inside the "send to RD" progress UI. */
+export interface RdSendProgress {
+  handle_id: string;
+  code: string;
+  status: "pending" | "sending" | "completed" | "in_pending" | "error";
+  links: RdLink[];
+  error_code: string | null;
+}
