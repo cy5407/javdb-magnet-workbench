@@ -371,13 +371,15 @@ pub async fn rd_send_magnet(
         .unwrap_or("smart")
         .to_string();
 
-    let entry = PendingEntry::new(
+    let mut entry = PendingEntry::new(
         torrent_id.clone(),
         opts.code.unwrap_or_default(),
         name.clone(),
         opts.size_label.unwrap_or_default(),
         strategy_used,
     );
+    entry.last_rd_status = rd_status.clone();
+    entry.last_progress = progress;
     pending::add(&path_manager.data_dir, entry)?;
 
     Ok(RdSendOutcome::Pending {
