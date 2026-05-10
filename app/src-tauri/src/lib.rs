@@ -82,6 +82,7 @@ pub fn run() {
             commands::fetch_javdb,
             commands::copy_magnet,
             commands::copy_magnets_bulk,
+            commands::forget_magnets,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

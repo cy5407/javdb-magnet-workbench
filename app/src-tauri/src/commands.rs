@@ -75,6 +75,27 @@ pub struct CopyBulkResult {
     pub unknown: usize,
 }
 
+/// Drop the sidecar's magnet handle table for the given ids (or all of
+/// them when called with `None`). Used when the UI clears the result tree
+/// so the sidecar doesn't pile up stale handles for entries the frontend
+/// can never address again.
+#[tauri::command]
+pub async fn forget_magnets(
+    sidecar: State<'_, SidecarManager>,
+    handle_ids: Option<Vec<String>>,
+) -> Result<u64, String> {
+    let payload = match handle_ids {
+        Some(ids) => json!({ "handle_ids": ids }),
+        None => Value::Null,
+    };
+    let resp = sidecar.request("forget_magnets", payload).await?;
+    Ok(resp
+        .get("forgot")
+        .or_else(|| resp.get("forgotten"))
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0))
+}
+
 #[tauri::command]
 pub async fn copy_magnets_bulk(
     app: AppHandle,

@@ -54,6 +54,22 @@
     document.documentElement.dataset.theme = t;
   }
 
+  /**
+   * Apply settings.ui.scale as a CSS variable that index.css can hook into
+   * via `font-size: calc(... * var(--ui-scale, 1))` if it wants. We also
+   * scale the root font-size directly so default `rem` units track DPI.
+   * Accepts "auto" → 1.0; numeric strings 0.5–3.0 clamp; everything else → 1.
+   */
+  function applyScale(raw: string) {
+    let scale = 1;
+    if (raw && raw.toLowerCase() !== "auto") {
+      const v = parseFloat(raw);
+      if (isFinite(v) && v >= 0.5 && v <= 3.0) scale = v;
+    }
+    document.documentElement.style.setProperty("--ui-scale", String(scale));
+    document.documentElement.style.fontSize = `${scale * 16}px`;
+  }
+
   onMount(async () => {
     try {
       const paths = await invoke<PathInfo>("get_paths");
@@ -69,6 +85,7 @@
       settings = s;
       theme = s.ui.theme;
       applyTheme(theme);
+      applyScale(s.ui.scale);
     } catch (e) {
       console.error("read_settings failed:", e);
       statusMessage = `read_settings error: ${e}`;
@@ -218,6 +235,37 @@
     collapsed[url] = !collapsed[url];
   }
 
+  async function clearResults() {
+    if (isScraping) {
+      scrapeAbort?.abort();
+    }
+    // Snapshot handle ids before nuking the array so the sidecar can drop them.
+    const ids: string[] = [];
+    for (const g of groups) {
+      if (g.result) {
+        for (const m of g.result.magnets) ids.push(m.handle_id);
+      }
+    }
+    groups = [];
+    scrapeProgress = { done: 0, total: 0 };
+    collapsed = {};
+    if (ids.length > 0) {
+      try {
+        const forgotten = await invoke<number>("forget_magnets", {
+          handleIds: ids,
+        });
+        statusMessage = `cleared ${forgotten} magnet handles`;
+      } catch (e) {
+        // Don't surface as an error — UI is already cleared, sidecar will GC
+        // stale handles on its own eventually.
+        console.warn("forget_magnets failed:", e);
+        statusMessage = "results cleared (sidecar gc deferred)";
+      }
+    } else {
+      statusMessage = "results cleared";
+    }
+  }
+
   // ---- derived counts for status bar ---------------------------------
   let okCount = $derived(groups.filter((g) => g.status === "ok").length);
   let errCount = $derived(groups.filter((g) => g.status === "error").length);
@@ -231,7 +279,7 @@
 
 <main class="container">
   <h1>JavDBMagnet</h1>
-  <p class="subtitle">M4b — filter / sort / group pick</p>
+  <p class="subtitle">M4 — batch scrape + filter + clear</p>
 
   <section>
     <h2>Storage</h2>
@@ -284,6 +332,7 @@
         <button onclick={copyVisible} disabled={isScraping || visibleMagnets === 0}>
           Copy visible magnets ({visibleMagnets})
         </button>
+        <button onclick={clearResults}>Clear results</button>
       {/if}
     </div>
 
@@ -346,6 +395,10 @@
         </label>
         <button onclick={resetFilter}>Reset</button>
       </div>
+    {/if}
+
+    {#if groups.length === 0 && !isScraping}
+      <p class="empty-state">No results yet — paste URLs above and press <strong>Start scrape</strong>.</p>
     {/if}
 
     {#if groups.length > 0}
@@ -421,7 +474,12 @@
                   </thead>
                   <tbody>
                     {#each rows as m (m.handle_id)}
-                      <tr>
+                      <tr
+                        class="row-copyable"
+                        title="Double-click to copy magnet"
+                        ondblclick={() =>
+                          copyOne(m.handle_id, m.name || g.result!.code)}
+                      >
                         <td>{m.name}</td>
                         <td>{m.size}</td>
                         <td>{m.tags.join(", ")}</td>
@@ -620,6 +678,23 @@
 
   .th-sort:hover {
     color: var(--color-fg);
+  }
+
+  .row-copyable {
+    cursor: copy;
+  }
+
+  .row-copyable:hover {
+    background: var(--color-button-bg-hover);
+  }
+
+  .empty-state {
+    margin-top: 1.5rem;
+    padding: 1.5rem;
+    border: 1px dashed var(--color-border);
+    border-radius: 6px;
+    text-align: center;
+    color: var(--color-muted);
   }
 
   .status-bar {
