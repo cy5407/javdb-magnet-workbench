@@ -128,6 +128,7 @@ pub fn run() {
             commands::copy_magnet,
             commands::copy_magnets_bulk,
             commands::forget_magnets,
+            commands::register_magnets,
             commands::rd_has_token,
             commands::rd_test_token,
             commands::rd_save_token,

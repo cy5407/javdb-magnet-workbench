@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   isRateLimitError,
+  parseMagnetBatch,
   parseUrlBatch,
   randomDelayMs,
   scrapeBatch,
@@ -45,6 +46,35 @@ describe("parseUrlBatch", () => {
   it("empty input → []", () => {
     expect(parseUrlBatch("")).toEqual([]);
     expect(parseUrlBatch("   \n  \n")).toEqual([]);
+  });
+});
+
+describe("parseMagnetBatch", () => {
+  it("trims, dedupes, drops blanks/comments/non-magnets", () => {
+    const raw = [
+      "magnet:?xt=urn:btih:abc&dn=A",
+      "  magnet:?xt=urn:btih:def&dn=B",
+      "",
+      "# comment",
+      "magnet:?xt=urn:btih:abc&dn=A", // dup
+      "https://javdb.com/v/x",         // wrong scheme
+      "not a magnet",
+    ].join("\n");
+    expect(parseMagnetBatch(raw)).toEqual([
+      "magnet:?xt=urn:btih:abc&dn=A",
+      "magnet:?xt=urn:btih:def&dn=B",
+    ]);
+  });
+
+  it("MAGNET: prefix is case-insensitive for parsing", () => {
+    expect(parseMagnetBatch("MAGNET:?xt=urn:btih:abc")).toEqual([
+      "MAGNET:?xt=urn:btih:abc",
+    ]);
+  });
+
+  it("empty input → []", () => {
+    expect(parseMagnetBatch("")).toEqual([]);
+    expect(parseMagnetBatch("   \n  \n")).toEqual([]);
   });
 });
 

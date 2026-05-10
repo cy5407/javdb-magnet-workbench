@@ -4,7 +4,7 @@ JSON-lines protocol over stdin/stdout. One JSON object per line, UTF-8.
 
 M3 commands implemented:
     hello, handshake, ping, fetch_javdb, resolve_magnet, resolve_magnets,
-    forget_magnets, update_settings, shutdown, cancel.
+    forget_magnets, register_magnets, update_settings, shutdown, cancel.
 
 M5 commands implemented:
     rd_user, rd_set_token, rd_send_magnet, rd_check_pending.
@@ -224,6 +224,53 @@ def cmd_forget_magnets(state: DaemonState, req: dict) -> dict:
     n = len(state.magnets)
     state.magnets.clear()
     return _ok(req, {"forgot": n})
+
+
+def cmd_register_magnets(state: DaemonState, req: dict) -> dict:
+    """Register raw magnet URIs into the handle table without going through
+    a JavDB fetch. Used by the "paste magnet → send to RD" UI path.
+
+    Each input must start with `magnet:`; non-magnets are returned in
+    `invalid` so the frontend can flag them. Duplicate magnet URIs in the
+    input are deduped (one handle_id per unique URI).
+    """
+    magnets_in = req.get("magnets")
+    if not isinstance(magnets_in, list):
+        return _err(req, "bad_request", "magnets must be a list of strings")
+
+    registered: list[dict] = []
+    invalid: list[str] = []
+    seen_to_handle: dict[str, str] = {}
+
+    for raw in magnets_in:
+        if not isinstance(raw, str):
+            invalid.append(str(raw))
+            continue
+        s = raw.strip()
+        if not s.startswith("magnet:"):
+            invalid.append(s)
+            continue
+
+        # Dedupe within this request: identical magnet text → single handle.
+        if s in seen_to_handle:
+            existing = seen_to_handle[s]
+            registered.append({
+                "handle_id": existing,
+                "magnet_redacted": redact_magnet(s),
+                "deduped": True,
+            })
+            continue
+
+        handle_id = f"h-{uuid.uuid4()}"
+        state.magnets[handle_id] = s
+        seen_to_handle[s] = handle_id
+        registered.append({
+            "handle_id": handle_id,
+            "magnet_redacted": redact_magnet(s),
+            "deduped": False,
+        })
+
+    return _ok(req, {"registered": registered, "invalid": invalid})
 
 
 def cmd_update_settings(state: DaemonState, req: dict) -> dict:
@@ -468,6 +515,7 @@ DISPATCH = {
     "resolve_magnet": cmd_resolve_magnet,
     "resolve_magnets": cmd_resolve_magnets,
     "forget_magnets": cmd_forget_magnets,
+    "register_magnets": cmd_register_magnets,
     "update_settings": cmd_update_settings,
     "cancel": cmd_cancel,
     "rd_user": cmd_rd_user,

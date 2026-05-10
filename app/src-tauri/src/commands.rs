@@ -78,6 +78,53 @@ pub struct CopyBulkResult {
     pub unknown: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisteredMagnet {
+    pub handle_id: String,
+    pub magnet_redacted: String,
+    #[serde(default)]
+    pub deduped: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RegisterMagnetsResult {
+    pub registered: Vec<RegisteredMagnet>,
+    pub invalid: Vec<String>,
+}
+
+/// Register raw magnet URIs into the sidecar's handle table. The frontend
+/// uses this for the "paste magnet → send to RD" path (no JavDB scrape
+/// involved). Returns one redacted handle per input magnet plus a list of
+/// inputs that didn't start with `magnet:`.
+///
+/// Full magnet text only crosses the IPC boundary in the inbound direction;
+/// nothing in the response carries a complete magnet URI.
+#[tauri::command]
+pub async fn register_magnets(
+    sidecar: State<'_, SidecarManager>,
+    magnets: Vec<String>,
+) -> Result<RegisterMagnetsResult, String> {
+    let resp = sidecar
+        .request("register_magnets", json!({ "magnets": magnets }))
+        .await?;
+    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(_err_code(&resp));
+    }
+
+    let registered = resp
+        .get("registered")
+        .cloned()
+        .unwrap_or(json!([]));
+    let invalid = resp.get("invalid").cloned().unwrap_or(json!([]));
+
+    let registered: Vec<RegisteredMagnet> =
+        serde_json::from_value(registered).map_err(|e| e.to_string())?;
+    let invalid: Vec<String> =
+        serde_json::from_value(invalid).map_err(|e| e.to_string())?;
+
+    Ok(RegisterMagnetsResult { registered, invalid })
+}
+
 /// Drop the sidecar's magnet handle table for the given ids (or all of
 /// them when called with `None`). Used when the UI clears the result tree
 /// so the sidecar doesn't pile up stale handles for entries the frontend
