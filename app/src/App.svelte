@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import {
+    parseMagnetBatch,
     parseUrlBatch,
     scrapeBatch,
     type ScrapeProgressEvent,
@@ -41,6 +42,8 @@
 
   // M4a — batch scrape state
   let urlBatch = $state("https://javdb.com/v/RkX3Rp\n");
+  let magnetBatch = $state("");
+  let isRegistering = $state(false);
   let groups = $state<ScrapedGroup[]>([]);
   let scrapeProgress = $state<{ done: number; total: number }>({
     done: 0,
@@ -197,6 +200,67 @@
 
   function cancelScrape() {
     scrapeAbort?.abort();
+  }
+
+  /**
+   * "Paste magnet → register" path. Sidecar deduces and assigns handle_ids;
+   * the result becomes a synthetic group in `groups[]` so all the existing
+   * filter / sort / send-to-RD plumbing applies unchanged.
+   */
+  async function registerPastedMagnets() {
+    if (isRegistering) return;
+    const magnets = parseMagnetBatch(magnetBatch);
+    if (magnets.length === 0) {
+      statusMessage = "未偵測到有效磁力連結（必須以 magnet: 開頭）";
+      return;
+    }
+    isRegistering = true;
+    try {
+      const resp = await invoke<{
+        registered: { handle_id: string; magnet_redacted: string; deduped: boolean }[];
+        invalid: string[];
+      }>("register_magnets", { magnets });
+
+      const rows: MagnetRow[] = resp.registered.map((r) => ({
+        handle_id: r.handle_id,
+        name: "",
+        size: "",
+        tags: [],
+        date: "",
+        magnet_redacted: r.magnet_redacted,
+      }));
+
+      // Synthetic group: unique URL key uses a timestamp so multiple paste
+      // batches don't collide. UI shows "(直接貼上)" instead of a JavDB URL.
+      const syntheticUrl = `manual://${Date.now()}`;
+      groups = [
+        ...groups,
+        {
+          url: syntheticUrl,
+          status: "ok" as const,
+          finished_at: new Date().toISOString(),
+          error: null,
+          result: {
+            engine: "manual",
+            url: syntheticUrl,
+            code: `(直接貼上 ${rows.length})`,
+            title: "",
+            magnet_count: rows.length,
+            magnets: rows,
+          },
+        },
+      ];
+      magnetBatch = "";
+      const skipped = resp.invalid.length;
+      statusMessage =
+        skipped > 0
+          ? `已註冊 ${rows.length} 個磁力（忽略 ${skipped} 個無效輸入）`
+          : `已註冊 ${rows.length} 個磁力`;
+    } catch (e) {
+      statusMessage = `註冊失敗：${e}`;
+    } finally {
+      isRegistering = false;
+    }
   }
 
   async function copyOne(handle_id: string, label: string) {
@@ -754,6 +818,31 @@
     {#if groups.length === 0 && !isScraping}
       <p class="empty-state">尚無結果 — 在上方貼上網址後按下<strong>開始擷取</strong>。</p>
     {/if}
+  </section>
+
+  <section>
+    <h2>直接貼上磁力連結</h2>
+    <p class="hint">
+      不想經 JavDB 擷取，直接貼 <code>magnet:?xt=...</code> 也可以送至 Real-Debrid。
+      註冊後會以「直接貼上」群組顯示，套用相同的篩選 / 排序 / 送 RD 流程。
+    </p>
+
+    <textarea
+      class="url-batch"
+      bind:value={magnetBatch}
+      rows="4"
+      spellcheck="false"
+      placeholder="magnet:?xt=urn:btih:...&#10;magnet:?xt=urn:btih:..."
+    ></textarea>
+
+    <div class="row">
+      <button onclick={registerPastedMagnets} disabled={isRegistering}>
+        {isRegistering ? "註冊中…" : "註冊磁力"}
+      </button>
+      <span class="muted small">
+        註冊後可在下方搭配「送至 Real-Debrid」按鈕送出。
+      </span>
+    </div>
 
     {#if groups.length > 0}
       <ul class="groups">

@@ -651,5 +651,85 @@ class RdDispatchRegistration(unittest.TestCase):
             self.assertIn(cmd, sd.DISPATCH, f"{cmd} missing from DISPATCH")
 
 
+class RegisterMagnets(unittest.TestCase):
+    """Paste-raw-magnet path: register magnets straight into the handle table
+    without going through a JavDB fetch."""
+
+    def test_registers_unique_magnets(self):
+        state = sd.DaemonState()
+        m1 = "magnet:?xt=urn:btih:0123456789abcdef&dn=A"
+        m2 = "magnet:?xt=urn:btih:fedcba9876543210&dn=B"
+        resp = _call(state, {
+            "cmd": "register_magnets", "request_id": "r",
+            "magnets": [m1, m2],
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(len(resp["registered"]), 2)
+        self.assertEqual(resp["invalid"], [])
+        # Both got distinct handle_ids and the table now holds the full URIs
+        ids = {r["handle_id"] for r in resp["registered"]}
+        self.assertEqual(len(ids), 2)
+        self.assertEqual(state.magnets[resp["registered"][0]["handle_id"]], m1)
+        self.assertEqual(state.magnets[resp["registered"][1]["handle_id"]], m2)
+        # And only the redacted form is returned
+        self.assertTrue(
+            resp["registered"][0]["magnet_redacted"].startswith("magnet:?xt=urn:btih:01234567")
+        )
+
+    def test_dedupes_identical_magnets(self):
+        state = sd.DaemonState()
+        m = "magnet:?xt=urn:btih:0123456789abcdef&dn=Same"
+        resp = _call(state, {
+            "cmd": "register_magnets", "request_id": "r",
+            "magnets": [m, m, "  " + m + "  "],
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(len(resp["registered"]), 3)
+        # Only one handle in the state table
+        self.assertEqual(len(state.magnets), 1)
+        # All three entries share the same handle_id
+        ids = {r["handle_id"] for r in resp["registered"]}
+        self.assertEqual(len(ids), 1)
+        # The 2nd and 3rd entries are flagged deduped
+        self.assertFalse(resp["registered"][0]["deduped"])
+        self.assertTrue(resp["registered"][1]["deduped"])
+        self.assertTrue(resp["registered"][2]["deduped"])
+
+    def test_invalid_inputs_separated(self):
+        state = sd.DaemonState()
+        m_ok = "magnet:?xt=urn:btih:abc&dn=X"
+        resp = _call(state, {
+            "cmd": "register_magnets", "request_id": "r",
+            "magnets": [m_ok, "https://not-a-magnet.example", "", 123],
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(len(resp["registered"]), 1)
+        self.assertEqual(len(resp["invalid"]), 3)
+        # Only the valid one ended up in the handle table
+        self.assertEqual(len(state.magnets), 1)
+
+    def test_non_list_input_returns_bad_request(self):
+        state = sd.DaemonState()
+        resp = _call(state, {
+            "cmd": "register_magnets", "request_id": "r",
+            "magnets": "magnet:?xt=urn:btih:abc",
+        })
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_empty_list_returns_empty_arrays(self):
+        state = sd.DaemonState()
+        resp = _call(state, {
+            "cmd": "register_magnets", "request_id": "r", "magnets": [],
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["registered"], [])
+        self.assertEqual(resp["invalid"], [])
+        self.assertEqual(len(state.magnets), 0)
+
+    def test_dispatch_registered(self):
+        self.assertIn("register_magnets", sd.DISPATCH)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

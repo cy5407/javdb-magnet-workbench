@@ -86,6 +86,28 @@ export function parseUrlBatch(raw: string): string[] {
 }
 
 /**
+ * Parse a "paste magnets directly" textarea into a deduped list of magnet
+ * URIs. Strips inline whitespace, drops blank/comment lines, rejects
+ * anything that doesn't start with `magnet:`. Sidecar dedupes again on
+ * its side; this dedupe is mainly UX (the user sees fewer rows).
+ */
+export function parseMagnetBatch(raw: string): string[] {
+  if (!raw) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith("#")) continue;
+    if (!/^magnet:/i.test(trimmed)) continue;
+    if (seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+/**
  * Run the batch. `onProgress` fires after every group settles (ok or error).
  * Returns the final array of groups in the order URLs were submitted.
  */
