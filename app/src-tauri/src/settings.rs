@@ -72,6 +72,15 @@ impl Default for Settings {
     }
 }
 
+fn without_secrets(mut settings: Settings) -> Settings {
+    // M5 moved RD token storage to the OS credential store. Keep the legacy
+    // field in the schema for migration compatibility, but never return it
+    // to the WebView and never persist a new plaintext value through this
+    // command surface.
+    settings.rd.api_token.clear();
+    settings
+}
+
 #[derive(Debug, Serialize)]
 pub struct PathInfo {
     pub data_dir: String,
@@ -97,8 +106,10 @@ pub fn read_settings(
     let store_path = path_manager.data_dir.join(STORE_FILE);
     let store = app.store(store_path).map_err(|e| e.to_string())?;
     match store.get(SETTINGS_KEY) {
-        Some(v) => serde_json::from_value::<Settings>(v).map_err(|e| e.to_string()),
-        None => Ok(Settings::default()),
+        Some(v) => serde_json::from_value::<Settings>(v)
+            .map(without_secrets)
+            .map_err(|e| e.to_string()),
+        None => Ok(without_secrets(Settings::default())),
     }
 }
 
@@ -110,8 +121,23 @@ pub fn write_settings(
 ) -> Result<(), String> {
     let store_path = path_manager.data_dir.join(STORE_FILE);
     let store = app.store(store_path).map_err(|e| e.to_string())?;
-    let value = serde_json::to_value(&settings).map_err(|e| e.to_string())?;
+    let value = serde_json::to_value(without_secrets(settings)).map_err(|e| e.to_string())?;
     store.set(SETTINGS_KEY, value);
     store.save().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn without_secrets_clears_legacy_rd_token_field() {
+        let mut settings = Settings::default();
+        settings.rd.api_token = "SECRET_TOKEN_SHOULD_NOT_CROSS_WEBVIEW".to_string();
+
+        let sanitized = without_secrets(settings);
+
+        assert_eq!(sanitized.rd.api_token, "");
+    }
 }
