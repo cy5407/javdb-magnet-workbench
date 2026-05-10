@@ -44,6 +44,10 @@
   let urlBatch = $state("https://javdb.com/v/RkX3Rp\n");
   let magnetBatch = $state("");
   let isRegistering = $state(false);
+  /** Inline status for the "register pasted magnets" section. Kept separate
+   * from the global `statusMessage` so the user sees the result next to the
+   * button they just clicked, not at the top of the page. */
+  let registerStatus = $state<{ kind: "info" | "error" | "ok"; text: string } | null>(null);
   let groups = $state<ScrapedGroup[]>([]);
   let scrapeProgress = $state<{ done: number; total: number }>({
     done: 0,
@@ -211,10 +215,18 @@
     if (isRegistering) return;
     const magnets = parseMagnetBatch(magnetBatch);
     if (magnets.length === 0) {
-      statusMessage = "未偵測到有效磁力連結（必須以 magnet: 開頭）";
+      // Detect a common user mistake: pasting JavDB URLs into the magnet box.
+      const looksLikeUrls = /^\s*https?:\/\//im.test(magnetBatch);
+      registerStatus = {
+        kind: "error",
+        text: looksLikeUrls
+          ? "你貼的看起來是 JavDB 網址（http/https）。請改貼到上方「批次擷取」按「開始擷取」；本欄只接受 magnet:?xt=... 開頭的磁力連結。"
+          : "未偵測到有效磁力連結（必須以 magnet: 開頭）",
+      };
       return;
     }
     isRegistering = true;
+    registerStatus = { kind: "info", text: "註冊中…" };
     try {
       const resp = await invoke<{
         registered: { handle_id: string; magnet_redacted: string; deduped: boolean }[];
@@ -252,12 +264,15 @@
       ];
       magnetBatch = "";
       const skipped = resp.invalid.length;
-      statusMessage =
-        skipped > 0
-          ? `已註冊 ${rows.length} 個磁力（忽略 ${skipped} 個無效輸入）`
-          : `已註冊 ${rows.length} 個磁力`;
+      registerStatus = {
+        kind: "ok",
+        text:
+          skipped > 0
+            ? `已註冊 ${rows.length} 個磁力（忽略 ${skipped} 個無效輸入）。捲動到下方「結果」即可使用送 RD / 複製。`
+            : `已註冊 ${rows.length} 個磁力。捲動到下方「結果」即可使用送 RD / 複製。`,
+      };
     } catch (e) {
-      statusMessage = `註冊失敗：${e}`;
+      registerStatus = { kind: "error", text: `註冊失敗：${e}` };
     } finally {
       isRegistering = false;
     }
@@ -753,6 +768,12 @@
         <button onclick={clearResults}>清空結果</button>
       {/if}
     </div>
+    {#if groups.length > 0 && !rdHasToken}
+      <p class="inline-msg" data-kind="info">
+        ※「送至 Real-Debrid」目前停用：請往上捲動到
+        <strong>Real-Debrid</strong> 區塊貼上 Token 並按「儲存」。
+      </p>
+    {/if}
 
     <div class="status-bar" data-active={isScraping}>
       {#if scrapeProgress.total > 0}
@@ -843,6 +864,12 @@
         註冊後可在下方搭配「送至 Real-Debrid」按鈕送出。
       </span>
     </div>
+    {#if registerStatus}
+      <p
+        class="inline-msg"
+        data-kind={registerStatus.kind}
+      >{registerStatus.text}</p>
+    {/if}
 
     {#if groups.length > 0}
       <ul class="groups">
@@ -1267,6 +1294,30 @@
     border: 1px dashed var(--color-border);
     border-radius: 6px;
     text-align: center;
+    color: var(--color-muted);
+  }
+
+  .inline-msg {
+    margin: 0.5rem 0 0;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    border: 1px solid var(--color-border);
+    background: var(--color-button-bg);
+  }
+
+  .inline-msg[data-kind="error"] {
+    border-color: #c0392b;
+    color: #c0392b;
+  }
+
+  .inline-msg[data-kind="ok"] {
+    border-color: #2ecc71;
+    color: #1f8b4c;
+  }
+
+  .inline-msg[data-kind="info"] {
     color: var(--color-muted);
   }
 
