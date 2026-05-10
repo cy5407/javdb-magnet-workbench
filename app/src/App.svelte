@@ -6,13 +6,20 @@
     scrapeBatch,
     type ScrapeProgressEvent,
   } from "./lib/scraper";
-  import type {
-    CopyBulkResult,
-    PathInfo,
-    PingResponse,
-    ScrapedGroup,
-    Settings,
-    Theme,
+  import { processGroupRows } from "./lib/magnetUtils";
+  import {
+    defaultFilterState,
+    type CopyBulkResult,
+    type FilterState,
+    type GroupPick,
+    type MagnetRow,
+    type PathInfo,
+    type PingResponse,
+    type ScrapedGroup,
+    type Settings,
+    type SortColumn,
+    type SortDirection,
+    type Theme,
   } from "./lib/types";
 
   let dataDir = $state("(loading)");
@@ -30,6 +37,16 @@
   });
   let isScraping = $state(false);
   let scrapeAbort: AbortController | null = null;
+
+  // M4b — filter / sort / collapse state
+  let filter = $state<FilterState>(defaultFilterState());
+  // Bound separately because the inputs return strings; we coerce on commit.
+  let minSizeInput = $state("");
+  let maxSizeInput = $state("");
+  let sortColumn = $state<SortColumn | null>(null);
+  let sortDirection = $state<SortDirection>("asc");
+  /** Per-group collapsed flag keyed by URL. Default = expanded. */
+  let collapsed = $state<Record<string, boolean>>({});
 
   let pingMessage = $state("");
 
@@ -137,11 +154,10 @@
   }
 
   async function copyVisible() {
+    // Collect handle_ids from VISIBLE rows (after filter + group pick + sort).
     const ids: string[] = [];
     for (const g of groups) {
-      if (g.result) {
-        for (const m of g.result.magnets) ids.push(m.handle_id);
-      }
+      for (const m of processedRows(g)) ids.push(m.handle_id);
     }
     if (ids.length === 0) return;
     try {
@@ -157,17 +173,65 @@
     }
   }
 
+  // ---- M4b: filter / sort / group helpers ----------------------------
+  function processedRows(g: ScrapedGroup): MagnetRow[] {
+    return processGroupRows(g, filter, sortColumn, sortDirection);
+  }
+
+  function toggleSort(col: SortColumn) {
+    if (sortColumn === col) {
+      sortDirection = sortDirection === "asc" ? "desc" : "asc";
+    } else {
+      sortColumn = col;
+      sortDirection = "asc";
+    }
+  }
+
+  function sortIndicator(col: SortColumn): string {
+    if (sortColumn !== col) return "";
+    return sortDirection === "asc" ? " ▲" : " ▼";
+  }
+
+  function commitMinSize() {
+    const v = parseFloat(minSizeInput);
+    filter.min_size_gb = isFinite(v) && v > 0 ? v : null;
+  }
+
+  function commitMaxSize() {
+    const v = parseFloat(maxSizeInput);
+    filter.max_size_gb = isFinite(v) && v > 0 ? v : null;
+  }
+
+  function setGroupPick(p: GroupPick) {
+    filter.group_pick = p;
+  }
+
+  function resetFilter() {
+    filter = defaultFilterState();
+    minSizeInput = "";
+    maxSizeInput = "";
+    sortColumn = null;
+    sortDirection = "asc";
+  }
+
+  function toggleCollapsed(url: string) {
+    collapsed[url] = !collapsed[url];
+  }
+
   // ---- derived counts for status bar ---------------------------------
   let okCount = $derived(groups.filter((g) => g.status === "ok").length);
   let errCount = $derived(groups.filter((g) => g.status === "error").length);
-  let totalMagnets = $derived(
+  let totalRawMagnets = $derived(
     groups.reduce((acc, g) => acc + (g.result?.magnet_count ?? 0), 0),
+  );
+  let visibleMagnets = $derived(
+    groups.reduce((acc, g) => acc + processedRows(g).length, 0),
   );
 </script>
 
 <main class="container">
   <h1>JavDBMagnet</h1>
-  <p class="subtitle">M4a — batch scrape worker</p>
+  <p class="subtitle">M4b — filter / sort / group pick</p>
 
   <section>
     <h2>Storage</h2>
@@ -217,8 +281,8 @@
       </button>
       <button onclick={cancelScrape} disabled={!isScraping}>Cancel</button>
       {#if groups.length > 0}
-        <button onclick={copyVisible} disabled={isScraping || totalMagnets === 0}>
-          Copy all magnets ({totalMagnets})
+        <button onclick={copyVisible} disabled={isScraping || visibleMagnets === 0}>
+          Copy visible magnets ({visibleMagnets})
         </button>
       {/if}
     </div>
@@ -228,17 +292,77 @@
         <span>{scrapeProgress.done} / {scrapeProgress.total}</span>
         <span class="ok">✓ {okCount}</span>
         <span class="err">✗ {errCount}</span>
-        <span class="muted">magnets: {totalMagnets}</span>
+        <span class="muted">magnets: {visibleMagnets} / {totalRawMagnets}</span>
       {:else}
         <span class="muted">idle</span>
       {/if}
     </div>
 
     {#if groups.length > 0}
+      <div class="filter-row">
+        <label>
+          keyword
+          <input
+            type="text"
+            bind:value={filter.keyword}
+            placeholder="name / size / tag / date"
+          />
+        </label>
+        <label class="check">
+          <input type="checkbox" bind:checked={filter.hd_only} />
+          HD only
+        </label>
+        <label>
+          min GB
+          <input
+            type="number"
+            min="0"
+            step="0.1"
+            bind:value={minSizeInput}
+            onchange={commitMinSize}
+          />
+        </label>
+        <label>
+          max GB
+          <input
+            type="number"
+            min="0"
+            step="0.1"
+            bind:value={maxSizeInput}
+            onchange={commitMaxSize}
+          />
+        </label>
+        <label>
+          group pick
+          <select
+            value={filter.group_pick}
+            onchange={(e) => setGroupPick((e.currentTarget as HTMLSelectElement).value as GroupPick)}
+          >
+            <option value="all">all</option>
+            <option value="largest">largest</option>
+            <option value="smallest">smallest</option>
+            <option value="fewest_files">fewest files</option>
+          </select>
+        </label>
+        <button onclick={resetFilter}>Reset</button>
+      </div>
+    {/if}
+
+    {#if groups.length > 0}
       <ul class="groups">
         {#each groups as g, i (g.url)}
+          {@const rows = processedRows(g)}
+          {@const isCollapsed = collapsed[g.url] === true}
           <li class="group" data-status={g.status}>
             <header>
+              <button
+                class="toggle"
+                onclick={() => toggleCollapsed(g.url)}
+                aria-label={isCollapsed ? "expand" : "collapse"}
+                disabled={!g.result}
+              >
+                {isCollapsed ? "▶" : "▼"}
+              </button>
               <span class="status-dot"></span>
               <strong>
                 {#if g.result}
@@ -249,7 +373,9 @@
               </strong>
               <span class="muted url">{g.url}</span>
               {#if g.result}
-                <span class="muted">— {g.result.magnet_count} magnets</span>
+                <span class="muted">
+                  — {rows.length} / {g.result.magnet_count} magnets
+                </span>
               {/if}
             </header>
 
@@ -257,24 +383,44 @@
               <p class="muted">fetching…</p>
             {:else if g.status === "error"}
               <p class="error">error: {g.error}</p>
-            {:else if g.result}
+            {:else if g.result && !isCollapsed}
               {#if g.result.title}
                 <p class="title">{g.result.title}</p>
               {/if}
-              {#if g.result.magnets.length > 0}
+              {#if g.result.magnets.length === 0}
+                <p class="muted">(no magnets in this group)</p>
+              {:else if rows.length === 0}
+                <p class="muted">(no rows match the current filter)</p>
+              {:else}
                 <table>
                   <thead>
                     <tr>
-                      <th>name</th>
-                      <th>size</th>
-                      <th>tags</th>
-                      <th>date</th>
+                      <th>
+                        <button class="th-sort" onclick={() => toggleSort("name")}>
+                          name{sortIndicator("name")}
+                        </button>
+                      </th>
+                      <th>
+                        <button class="th-sort" onclick={() => toggleSort("size")}>
+                          size{sortIndicator("size")}
+                        </button>
+                      </th>
+                      <th>
+                        <button class="th-sort" onclick={() => toggleSort("tags")}>
+                          tags{sortIndicator("tags")}
+                        </button>
+                      </th>
+                      <th>
+                        <button class="th-sort" onclick={() => toggleSort("date")}>
+                          date{sortIndicator("date")}
+                        </button>
+                      </th>
                       <th>redacted</th>
                       <th>action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {#each g.result.magnets as m (m.handle_id)}
+                    {#each rows as m (m.handle_id)}
                       <tr>
                         <td>{m.name}</td>
                         <td>{m.size}</td>
@@ -399,6 +545,81 @@
     font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
     font-size: 0.9rem;
     resize: vertical;
+  }
+
+  .filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1rem;
+    align-items: end;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    margin-top: 0.5rem;
+  }
+
+  .filter-row label {
+    display: flex;
+    flex-direction: column;
+    font-size: 0.75rem;
+    color: var(--color-muted);
+    gap: 0.2rem;
+  }
+
+  .filter-row label.check {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.9rem;
+    color: var(--color-fg);
+  }
+
+  .filter-row input[type="text"],
+  .filter-row input[type="number"],
+  .filter-row select {
+    padding: 0.3rem 0.5rem;
+    border-radius: 4px;
+    border: 1px solid var(--color-border);
+    background: var(--color-button-bg);
+    color: var(--color-fg);
+    font: inherit;
+    font-size: 0.9rem;
+  }
+
+  .filter-row input[type="number"] {
+    width: 5.5rem;
+  }
+
+  .filter-row input[type="text"] {
+    width: 14rem;
+  }
+
+  .toggle {
+    padding: 0 0.4rem;
+    border: none;
+    background: transparent;
+    color: var(--color-muted);
+    cursor: pointer;
+  }
+
+  .toggle:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+
+  .th-sort {
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 600;
+    text-align: left;
+  }
+
+  .th-sort:hover {
+    color: var(--color-fg);
   }
 
   .status-bar {
