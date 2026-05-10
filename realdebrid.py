@@ -47,11 +47,15 @@ class RealDebrid:
 
     def _request(self, method: str, path: str, _retry_count: int = 0, **kwargs):
         url = f"{API_BASE}{path}"
-        # 不要把 magnet 整串寫進 log（太長），只記前 80 字
+        # log_kwargs 只用於 debug log；magnet 一律遮蔽（含 BTIH hash 不得落檔），
+        # 其他欄位維持 80 字截斷。實際送出的 kwargs 不變。
         log_kwargs = {}
         if "data" in kwargs:
             log_data = {}
             for k, v in kwargs["data"].items():
+                if k == "magnet":
+                    log_data[k] = "<redacted>"
+                    continue
                 s = str(v)
                 log_data[k] = (s[:80] + "...") if len(s) > 80 else s
             log_kwargs["data"] = log_data
