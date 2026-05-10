@@ -6,8 +6,12 @@ M3 commands implemented:
     hello, handshake, ping, fetch_javdb, resolve_magnet, resolve_magnets,
     forget_magnets, update_settings, shutdown, cancel.
 
-M5 commands deferred:
-    send_rd, retry_pending, rd_user.
+M5 commands implemented:
+    rd_user, rd_set_token, rd_send_magnet, rd_check_pending.
+    Per-magnet (singular) shape so the Rust caller can drive a batch loop
+    with progress events, cancellation between items, and dynamic pacing.
+    Pending state lives on the Rust side; the sidecar is stateless beyond
+    the single in-flight magnet handle table from M3.
 
 Stderr is for diagnostics only; it must NEVER contain cookies, RD token,
 full magnet URIs, or full traceback. Internal exceptions are caught at
@@ -237,6 +241,225 @@ def cmd_cancel(state: DaemonState, req: dict) -> dict:
     return _ok(req)
 
 
+# ---------------------------------------------------------------------------
+# M5: Real-Debrid commands
+#
+# Design notes:
+# - Per-magnet (singular) request/response. The Rust caller drives the batch
+#   loop, which lets us emit progress events between items and stop early
+#   on cancel without protocol-level streaming.
+# - Sidecar is the only place RD HTTP traffic happens; the Rust layer never
+#   sees the RD token in flight (only on rd_set_token).
+# - Pending state lives in Rust; sidecar does NOT persist torrent ids to disk.
+# - Errors are mapped to stable codes so the frontend can localize messages
+#   without regex-matching English strings.
+# ---------------------------------------------------------------------------
+
+_RD_ERR_AUTH = "rd_token_invalid"
+_RD_ERR_PREMIUM = "rd_premium_required"
+_RD_ERR_RATE = "rd_rate_limited"
+_RD_ERR_API = "rd_api_error"
+_RD_ERR_NO_TOKEN = "rd_no_token"
+_RD_ERR_MAGNET = "rd_magnet_error"
+_RD_ERR_DOWNLOAD = "rd_download_failed"
+_RD_ERR_NOT_FOUND = "rd_torrent_missing"
+_RD_ERR_INTERNAL = "rd_internal"
+
+
+def _classify_rd_error(message: str) -> str:
+    """Bucket a RealDebridError message into a stable error code."""
+    m = (message or "").lower()
+    if "401" in m or "token 無效" in m or "token" in m and "過期" in m:
+        return _RD_ERR_AUTH
+    if "403" in m or "premium" in m or "權限不足" in m:
+        return _RD_ERR_PREMIUM
+    if "429" in m or "rate" in m and "limit" in m:
+        return _RD_ERR_RATE
+    if "magnet_error" in m or "磁力解析失敗" in m or "磁力錯誤" in m:
+        return _RD_ERR_MAGNET
+    if "下載失敗" in m or "download failed" in m:
+        return _RD_ERR_DOWNLOAD
+    return _RD_ERR_API
+
+
+def _rd_client(state: DaemonState, token_override: str | None = None,
+               min_size_mb: int | None = None):
+    """Build a fresh RealDebrid client. Cheap (just a requests.Session).
+
+    `token_override` lets `rd_user` validate a candidate token without
+    mutating state.rd_token until the user confirms.
+    """
+    from realdebrid import RealDebrid, RealDebridError  # local import: heavy
+    token = token_override if token_override is not None else state.rd_token
+    if not token:
+        raise RealDebridError("RD_API_TOKEN not configured")
+    if min_size_mb is None:
+        rd_settings = (state.settings or {}).get("rd") or {}
+        try:
+            min_size_mb = int(rd_settings.get("min_size_mb", 500))
+        except (TypeError, ValueError):
+            min_size_mb = 500
+    return RealDebrid(token, min_size_mb=min_size_mb)
+
+
+def _resolve_strategy(state: DaemonState, override: str | None) -> str:
+    if isinstance(override, str) and override:
+        return override
+    rd_settings = (state.settings or {}).get("rd") or {}
+    s = rd_settings.get("file_pick")
+    return s if isinstance(s, str) and s else "smart"
+
+
+def _resolve_int_setting(state: DaemonState, key: str, override, default: int) -> int:
+    if isinstance(override, int) and override > 0:
+        return override
+    if isinstance(override, str) and override.isdigit():
+        return int(override)
+    rd_settings = (state.settings or {}).get("rd") or {}
+    v = rd_settings.get(key)
+    if isinstance(v, int) and v > 0:
+        return v
+    if isinstance(v, str) and v.isdigit():
+        return int(v)
+    return default
+
+
+def cmd_rd_user(state: DaemonState, req: dict) -> dict:
+    """Validate token + return account snapshot. Token override allowed
+    so the settings UI can probe a candidate token before saving."""
+    from realdebrid import RealDebridError
+    token_override = req.get("token")
+    if token_override is not None and not isinstance(token_override, str):
+        return _err(req, "bad_request", "token must be a string when provided")
+    if not token_override and not state.rd_token:
+        return _err(req, _RD_ERR_NO_TOKEN, "RD token not configured")
+    try:
+        client = _rd_client(state, token_override=token_override or None)
+        info = client._request("GET", "/user")
+    except RealDebridError as e:
+        return _err(req, _classify_rd_error(str(e)), str(e))
+    except Exception as e:
+        return _err(req, _RD_ERR_INTERNAL, f"{type(e).__name__}: <redacted>")
+    return _ok(req, {
+        "user": {
+            "username": info.get("username", ""),
+            "type": info.get("type", ""),
+            "expiration": info.get("expiration", ""),
+            "points": info.get("points", 0),
+        }
+    })
+
+
+def cmd_rd_set_token(state: DaemonState, req: dict) -> dict:
+    """Update state.rd_token at runtime. Used by the settings UI after the
+    user pastes / changes a token, so a sidecar restart isn't needed."""
+    token = req.get("token")
+    if token is None:
+        state.rd_token = ""
+        return _ok(req, {"set": False})
+    if not isinstance(token, str):
+        return _err(req, "bad_request", "token must be a string")
+    state.rd_token = token
+    return _ok(req, {"set": bool(token)})
+
+
+def cmd_rd_send_magnet(state: DaemonState, req: dict) -> dict:
+    """Add one magnet to RD, select files, wait `cache_wait` seconds.
+
+    Returns one of:
+      status="completed" with `links` (cached or quick cache hit)
+      status="pending"   with `torrent_id`+`progress`+`rd_status`
+                         (caller persists torrent_id on its side)
+      ok=false           on non-recoverable error (token, bad magnet, etc.)
+    """
+    from realdebrid import RealDebridError
+    if not state.handshake_done:
+        return _err(req, "bad_request", "handshake required before rd_send_magnet")
+    if not state.rd_token:
+        return _err(req, _RD_ERR_NO_TOKEN, "RD token not configured")
+
+    handle_id = req.get("handle_id")
+    if not isinstance(handle_id, str):
+        return _err(req, "bad_request", "handle_id must be a string")
+    magnet = state.magnets.get(handle_id)
+    if magnet is None:
+        return _err(req, "unknown_handle", "magnet handle not in current session")
+
+    strategy = _resolve_strategy(state, req.get("strategy"))
+    cache_wait = _resolve_int_setting(state, "cache_wait_seconds", req.get("cache_wait"), 15)
+    min_size_mb = _resolve_int_setting(state, "min_size_mb", req.get("min_size_mb"), 500)
+
+    try:
+        client = _rd_client(state, min_size_mb=min_size_mb)
+        result = client.process_magnet(magnet, strategy=strategy, cache_wait=cache_wait)
+    except RealDebridError as e:
+        return _err(req, _classify_rd_error(str(e)), str(e))
+    except Exception as e:
+        return _err(req, _RD_ERR_INTERNAL, f"{type(e).__name__}: <redacted>")
+
+    status = result.get("status")
+    if status == "completed":
+        return _ok(req, {
+            "status": "completed",
+            "torrent_id": result.get("torrent_id", ""),
+            "name": result.get("name", ""),
+            "links": result.get("links", []),
+        })
+    # pending
+    return _ok(req, {
+        "status": "pending",
+        "torrent_id": result.get("torrent_id", ""),
+        "name": result.get("name", ""),
+        "rd_status": result.get("rd_status", ""),
+        "progress": result.get("progress", 0),
+        "files_selected": bool(result.get("files_selected", False)),
+        "strategy": strategy,
+    })
+
+
+def cmd_rd_check_pending(state: DaemonState, req: dict) -> dict:
+    """Re-check a previously-pending torrent_id. No magnet is required:
+    caller-side pending records DO NOT store the magnet (per security model).
+    """
+    from realdebrid import RealDebridError
+    if not state.rd_token:
+        return _err(req, _RD_ERR_NO_TOKEN, "RD token not configured")
+    torrent_id = req.get("torrent_id")
+    if not isinstance(torrent_id, str) or not torrent_id:
+        return _err(req, "bad_request", "torrent_id must be a non-empty string")
+    strategy = _resolve_strategy(state, req.get("strategy"))
+
+    try:
+        client = _rd_client(state)
+        # We pass empty magnet — pending entries that still need file
+        # selection cannot be auto-fixed without the original magnet, by
+        # design (pending JSON never holds magnet text). The frontend
+        # surfaces this as "needs reselection" if it ever happens.
+        result = client.check_torrent(torrent_id, strategy=strategy, magnet="")
+    except RealDebridError as e:
+        return _err(req, _classify_rd_error(str(e)), str(e))
+    except Exception as e:
+        return _err(req, _RD_ERR_INTERNAL, f"{type(e).__name__}: <redacted>")
+
+    status = result.get("status")
+    if status == "completed":
+        return _ok(req, {
+            "status": "completed",
+            "torrent_id": torrent_id,
+            "name": result.get("name", ""),
+            "links": result.get("links", []),
+        })
+    if status == "missing":
+        return _ok(req, {"status": "missing", "torrent_id": torrent_id})
+    return _ok(req, {
+        "status": "pending",
+        "torrent_id": torrent_id,
+        "name": result.get("name", ""),
+        "rd_status": result.get("rd_status", ""),
+        "progress": result.get("progress", 0),
+    })
+
+
 DISPATCH = {
     "hello": cmd_hello,
     "handshake": cmd_handshake,
@@ -247,6 +470,10 @@ DISPATCH = {
     "forget_magnets": cmd_forget_magnets,
     "update_settings": cmd_update_settings,
     "cancel": cmd_cancel,
+    "rd_user": cmd_rd_user,
+    "rd_set_token": cmd_rd_set_token,
+    "rd_send_magnet": cmd_rd_send_magnet,
+    "rd_check_pending": cmd_rd_check_pending,
 }
 
 
