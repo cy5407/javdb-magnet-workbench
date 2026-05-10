@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
@@ -20,5 +21,12 @@ export default defineConfig({
     watch: {
       ignored: ["**/src-tauri/**"],
     },
+  },
+  test: {
+    // Pure unit tests for parse / filter / sort / group-pick / scraper.
+    // No DOM needed for the current set, but jsdom is set up so future
+    // component tests can be added without a config flip.
+    environment: "jsdom",
+    include: ["src/lib/**/*.test.ts"],
   },
 });
