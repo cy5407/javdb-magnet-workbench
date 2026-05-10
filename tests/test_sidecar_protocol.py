@@ -392,5 +392,264 @@ class DaemonLoop(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "")
 
 
+# ---------------------------------------------------------------------------
+# M5: Real-Debrid commands
+#
+# realdebrid.RealDebrid is mocked at the import boundary so no HTTP / token /
+# network is exercised. We assert the protocol envelope, not the RD library.
+# ---------------------------------------------------------------------------
+
+
+def _rd_state(token: str = "tok-x", settings: dict | None = None) -> "sd.DaemonState":
+    state = sd.DaemonState()
+    state.handshake_done = True
+    state.rd_token = token
+    state.settings = settings or {"rd": {"file_pick": "smart", "min_size_mb": 500,
+                                          "cache_wait_seconds": 15}}
+    return state
+
+
+class RdUser(unittest.TestCase):
+    def test_returns_user_snapshot_on_success(self):
+        state = _rd_state()
+        fake = mock.MagicMock()
+        fake._request.return_value = {
+            "username": "alice", "type": "premium",
+            "expiration": "2026-12-01", "points": 9999,
+        }
+        with mock.patch.object(sd, "_rd_client", return_value=fake):
+            resp = _call(state, {"cmd": "rd_user", "request_id": "r"})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["user"]["username"], "alice")
+        self.assertEqual(resp["user"]["type"], "premium")
+
+    def test_no_token_returns_rd_no_token(self):
+        state = sd.DaemonState()
+        state.handshake_done = True
+        state.rd_token = ""
+        resp = _call(state, {"cmd": "rd_user", "request_id": "r"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "rd_no_token")
+
+    def test_token_override_probes_without_state_token(self):
+        state = sd.DaemonState()
+        state.handshake_done = True  # but state.rd_token = ""
+        fake = mock.MagicMock()
+        fake._request.return_value = {"username": "bob", "type": "premium",
+                                       "expiration": "", "points": 0}
+        with mock.patch.object(sd, "_rd_client", return_value=fake):
+            resp = _call(state, {
+                "cmd": "rd_user", "request_id": "r", "token": "candidate",
+            })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["user"]["username"], "bob")
+
+    def test_invalid_token_classified_as_rd_token_invalid(self):
+        from realdebrid import RealDebridError
+        state = _rd_state()
+        with mock.patch.object(sd, "_rd_client",
+                               side_effect=RealDebridError("HTTP 401: token 無效或已過期")):
+            resp = _call(state, {"cmd": "rd_user", "request_id": "r"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "rd_token_invalid")
+
+    def test_premium_required_classified(self):
+        from realdebrid import RealDebridError
+        state = _rd_state()
+        with mock.patch.object(sd, "_rd_client",
+                               side_effect=RealDebridError("HTTP 403: 帳號權限不足")):
+            resp = _call(state, {"cmd": "rd_user", "request_id": "r"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "rd_premium_required")
+
+
+class RdSetToken(unittest.TestCase):
+    def test_set_token_updates_state(self):
+        state = sd.DaemonState()
+        resp = _call(state, {"cmd": "rd_set_token", "request_id": "r", "token": "new-tok"})
+        self.assertTrue(resp["ok"])
+        self.assertTrue(resp["set"])
+        self.assertEqual(state.rd_token, "new-tok")
+
+    def test_null_token_clears_state(self):
+        state = sd.DaemonState()
+        state.rd_token = "old"
+        resp = _call(state, {"cmd": "rd_set_token", "request_id": "r", "token": None})
+        self.assertTrue(resp["ok"])
+        self.assertFalse(resp["set"])
+        self.assertEqual(state.rd_token, "")
+
+    def test_non_string_token_rejected(self):
+        state = sd.DaemonState()
+        resp = _call(state, {"cmd": "rd_set_token", "request_id": "r", "token": 123})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
+
+class RdSendMagnet(unittest.TestCase):
+    def _state_with_magnet(self):
+        state = _rd_state()
+        state.magnets["h-1"] = "magnet:?xt=urn:btih:abc&dn=test"
+        return state
+
+    def test_handshake_required(self):
+        state = sd.DaemonState()
+        # handshake_done = False
+        state.rd_token = "tok"
+        resp = _call(state, {"cmd": "rd_send_magnet", "request_id": "r",
+                              "handle_id": "h-1"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_no_token_returns_rd_no_token(self):
+        state = self._state_with_magnet()
+        state.rd_token = ""
+        resp = _call(state, {"cmd": "rd_send_magnet", "request_id": "r",
+                              "handle_id": "h-1"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "rd_no_token")
+
+    def test_unknown_handle(self):
+        state = self._state_with_magnet()
+        resp = _call(state, {"cmd": "rd_send_magnet", "request_id": "r",
+                              "handle_id": "h-missing"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "unknown_handle")
+
+    def test_completed_path(self):
+        state = self._state_with_magnet()
+        fake = mock.MagicMock()
+        fake.process_magnet.return_value = {
+            "status": "completed",
+            "torrent_id": "ABC123",
+            "name": "test torrent",
+            "links": [{"original": "x", "download": "https://rd/y",
+                       "filename": "f.mp4", "filesize": 1234, "streamable": 0}],
+        }
+        with mock.patch.object(sd, "_rd_client", return_value=fake):
+            resp = _call(state, {"cmd": "rd_send_magnet", "request_id": "r",
+                                  "handle_id": "h-1"})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["status"], "completed")
+        self.assertEqual(resp["torrent_id"], "ABC123")
+        self.assertEqual(len(resp["links"]), 1)
+        # process_magnet called with strategy from settings
+        kwargs = fake.process_magnet.call_args.kwargs
+        self.assertEqual(kwargs["strategy"], "smart")
+        self.assertEqual(kwargs["cache_wait"], 15)
+
+    def test_pending_path(self):
+        state = self._state_with_magnet()
+        fake = mock.MagicMock()
+        fake.process_magnet.return_value = {
+            "status": "pending",
+            "torrent_id": "XYZ",
+            "name": "n",
+            "rd_status": "downloading",
+            "progress": 12.5,
+            "files_selected": True,
+        }
+        with mock.patch.object(sd, "_rd_client", return_value=fake):
+            resp = _call(state, {"cmd": "rd_send_magnet", "request_id": "r",
+                                  "handle_id": "h-1"})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["status"], "pending")
+        self.assertEqual(resp["torrent_id"], "XYZ")
+        self.assertEqual(resp["rd_status"], "downloading")
+        self.assertEqual(resp["progress"], 12.5)
+        self.assertEqual(resp["strategy"], "smart")
+        self.assertTrue(resp["files_selected"])
+
+    def test_strategy_override_in_request(self):
+        state = self._state_with_magnet()
+        fake = mock.MagicMock()
+        fake.process_magnet.return_value = {"status": "completed",
+                                             "torrent_id": "T", "name": "n",
+                                             "links": []}
+        with mock.patch.object(sd, "_rd_client", return_value=fake):
+            _call(state, {"cmd": "rd_send_magnet", "request_id": "r",
+                           "handle_id": "h-1", "strategy": "largest",
+                           "cache_wait": 5, "min_size_mb": 1000})
+        # Override flowed through to process_magnet
+        kwargs = fake.process_magnet.call_args.kwargs
+        self.assertEqual(kwargs["strategy"], "largest")
+        self.assertEqual(kwargs["cache_wait"], 5)
+
+    def test_magnet_error_classified(self):
+        from realdebrid import RealDebridError
+        state = self._state_with_magnet()
+        with mock.patch.object(sd, "_rd_client",
+                               side_effect=RealDebridError("磁力解析失敗: bad torrent")):
+            resp = _call(state, {"cmd": "rd_send_magnet", "request_id": "r",
+                                  "handle_id": "h-1"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "rd_magnet_error")
+
+
+class RdCheckPending(unittest.TestCase):
+    def test_no_token(self):
+        state = sd.DaemonState()
+        state.rd_token = ""
+        resp = _call(state, {"cmd": "rd_check_pending", "request_id": "r",
+                              "torrent_id": "ABC"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "rd_no_token")
+
+    def test_torrent_id_required(self):
+        state = _rd_state()
+        resp = _call(state, {"cmd": "rd_check_pending", "request_id": "r"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_completed_returns_links(self):
+        state = _rd_state()
+        fake = mock.MagicMock()
+        fake.check_torrent.return_value = {
+            "status": "completed", "name": "n",
+            "links": [{"original": "x", "download": "y",
+                       "filename": "f", "filesize": 0, "streamable": 0}],
+        }
+        with mock.patch.object(sd, "_rd_client", return_value=fake):
+            resp = _call(state, {"cmd": "rd_check_pending", "request_id": "r",
+                                  "torrent_id": "ABC"})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["status"], "completed")
+        self.assertEqual(resp["torrent_id"], "ABC")
+        self.assertEqual(len(resp["links"]), 1)
+        # Magnet param was empty (we don't store magnet in pending records)
+        kwargs = fake.check_torrent.call_args.kwargs
+        self.assertEqual(kwargs["magnet"], "")
+
+    def test_still_pending(self):
+        state = _rd_state()
+        fake = mock.MagicMock()
+        fake.check_torrent.return_value = {
+            "status": "pending", "name": "n",
+            "rd_status": "downloading", "progress": 30,
+        }
+        with mock.patch.object(sd, "_rd_client", return_value=fake):
+            resp = _call(state, {"cmd": "rd_check_pending", "request_id": "r",
+                                  "torrent_id": "ABC"})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["status"], "pending")
+        self.assertEqual(resp["progress"], 30)
+
+    def test_missing_torrent(self):
+        state = _rd_state()
+        fake = mock.MagicMock()
+        fake.check_torrent.return_value = {"status": "missing", "torrent_id": "ABC"}
+        with mock.patch.object(sd, "_rd_client", return_value=fake):
+            resp = _call(state, {"cmd": "rd_check_pending", "request_id": "r",
+                                  "torrent_id": "ABC"})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["status"], "missing")
+
+
+class RdDispatchRegistration(unittest.TestCase):
+    def test_all_rd_commands_dispatchable(self):
+        for cmd in ("rd_user", "rd_set_token", "rd_send_magnet", "rd_check_pending"):
+            self.assertIn(cmd, sd.DISPATCH, f"{cmd} missing from DISPATCH")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
