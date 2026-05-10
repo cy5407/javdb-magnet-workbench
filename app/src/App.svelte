@@ -687,7 +687,9 @@
     <h2>Real-Debrid</h2>
     <div class="row">
       <span class="muted">
-        Token：{rdHasToken ? "✓ 已設定" : "✗ 未設定"}
+        Token：{rdHasToken
+          ? "✓ 已設定（保留現狀即可，下方欄位僅在想更換時使用）"
+          : "✗ 未設定"}
       </span>
       {#if rdHasToken}
         <button onclick={rdRefreshUser}>查詢帳號</button>
@@ -705,7 +707,7 @@
 
     <div class="row stack">
       <label class="grow" for="rd-token-input">
-        新增 / 更新 Token（取得：
+        {rdHasToken ? "更換 Token" : "設定 Token"}（取得：
         <a
           href="https://real-debrid.com/apitoken"
           target="_blank"
