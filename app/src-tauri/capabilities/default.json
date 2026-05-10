@@ -4,6 +4,7 @@
   "description": "Capability for the main window. M2 only exposes core IPC; plugin permissions added in later milestones as features need them.",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "clipboard-manager:allow-write-text"
   ]
 }
