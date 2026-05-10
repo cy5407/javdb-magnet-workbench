@@ -8,11 +8,14 @@
 //!     returning
 //!   - The frontend receives only counts / status, never the magnet text
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
+use crate::path_manager::PathManager;
+use crate::pending::{self, PendingEntry};
+use crate::secret_store;
 use crate::sidecar_manager::SidecarManager;
 
 #[tauri::command]
@@ -136,4 +139,356 @@ pub async fn copy_magnets_bulk(
     // `lines` and `joined` drop here; never returned, never logged.
 
     Ok(CopyBulkResult { copied, unknown })
+}
+
+// ===========================================================================
+// M5: Real-Debrid commands
+//
+// Token storage:
+//   - The token lives in the OS credential store (see secret_store.rs).
+//   - rd_save_token writes the credential AND pushes it to the sidecar via
+//     rd_set_token, so a sidecar restart isn't required.
+//   - The frontend never gets the token back; it only sees rd_has_token's
+//     boolean and rd_check_user's account snapshot.
+//
+// Pending state:
+//   - <data_dir>/pending_torrents.json (see pending.rs).
+//   - Magnet text NEVER persisted (security model).
+// ===========================================================================
+
+fn _err_code(resp: &Value) -> String {
+    resp.get("error")
+        .and_then(|e| e.get("code"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RdUserInfo {
+    #[serde(default)]
+    pub username: String,
+    #[serde(default, rename = "type")]
+    pub r#type: String,
+    #[serde(default)]
+    pub expiration: String,
+    #[serde(default)]
+    pub points: i64,
+}
+
+#[derive(Serialize)]
+pub struct RdHasTokenResult {
+    pub present: bool,
+}
+
+#[tauri::command]
+pub async fn rd_has_token() -> Result<RdHasTokenResult, String> {
+    let present = secret_store::get_rd_token()?.is_some();
+    Ok(RdHasTokenResult { present })
+}
+
+/// Validate a candidate token without persisting it. Used by the settings
+/// dialog's "test connection" affordance.
+#[tauri::command]
+pub async fn rd_test_token(
+    sidecar: State<'_, SidecarManager>,
+    token: String,
+) -> Result<RdUserInfo, String> {
+    if token.is_empty() {
+        return Err("rd_no_token".to_string());
+    }
+    let resp = sidecar
+        .request("rd_user", json!({ "token": token }))
+        .await?;
+    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(_err_code(&resp));
+    }
+    let user = resp.get("user").cloned().unwrap_or(Value::Null);
+    let info: RdUserInfo = serde_json::from_value(user).map_err(|e| e.to_string())?;
+    Ok(info)
+}
+
+/// Persist a token to the credential store + push to the running sidecar.
+#[tauri::command]
+pub async fn rd_save_token(
+    sidecar: State<'_, SidecarManager>,
+    token: String,
+) -> Result<(), String> {
+    secret_store::set_rd_token(&token)?;
+    let payload: Value = if token.is_empty() {
+        json!({ "token": Value::Null })
+    } else {
+        json!({ "token": token })
+    };
+    let resp = sidecar.request("rd_set_token", payload).await?;
+    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(_err_code(&resp));
+    }
+    // The local `token` String drops here; the only persisted copy is in
+    // the credential store and the sidecar's in-memory state.
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rd_clear_token(sidecar: State<'_, SidecarManager>) -> Result<(), String> {
+    secret_store::delete_rd_token()?;
+    let resp = sidecar
+        .request("rd_set_token", json!({ "token": Value::Null }))
+        .await?;
+    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(_err_code(&resp));
+    }
+    Ok(())
+}
+
+/// Account snapshot for a token already saved in the credential store.
+/// Returns the same shape as rd_test_token; separate command so the UI
+/// can avoid sending the secret across IPC just to refresh the display.
+#[tauri::command]
+pub async fn rd_check_user(sidecar: State<'_, SidecarManager>) -> Result<RdUserInfo, String> {
+    let resp = sidecar.request("rd_user", Value::Null).await?;
+    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(_err_code(&resp));
+    }
+    let user = resp.get("user").cloned().unwrap_or(Value::Null);
+    let info: RdUserInfo = serde_json::from_value(user).map_err(|e| e.to_string())?;
+    Ok(info)
+}
+
+#[derive(Deserialize)]
+pub struct RdSendOptions {
+    pub strategy: Option<String>,
+    pub min_size_mb: Option<u32>,
+    pub cache_wait: Option<u32>,
+    /// Display-only metadata so a "pending" outcome can be persisted with
+    /// the JavDB code/size label (sidecar doesn't know these).
+    pub code: Option<String>,
+    pub size_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RdLink {
+    pub original: String,
+    pub download: String,
+    pub filename: String,
+    #[serde(default)]
+    pub filesize: i64,
+    #[serde(default)]
+    pub streamable: i64,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum RdSendOutcome {
+    Completed {
+        torrent_id: String,
+        name: String,
+        links: Vec<RdLink>,
+    },
+    Pending {
+        torrent_id: String,
+        name: String,
+        rd_status: String,
+        progress: f64,
+    },
+}
+
+/// Send one magnet (by handle_id) to RD. Returns either the unrestricted
+/// links (cache hit / quick cache) or a Pending outcome. In the pending
+/// case the entry is also persisted to pending_torrents.json so the
+/// frontend's "retry" loop can find it on next launch.
+#[tauri::command]
+pub async fn rd_send_magnet(
+    sidecar: State<'_, SidecarManager>,
+    path_manager: State<'_, PathManager>,
+    handle_id: String,
+    options: Option<RdSendOptions>,
+) -> Result<RdSendOutcome, String> {
+    let opts = options.unwrap_or(RdSendOptions {
+        strategy: None,
+        min_size_mb: None,
+        cache_wait: None,
+        code: None,
+        size_label: None,
+    });
+
+    let mut payload = json!({ "handle_id": handle_id });
+    if let Some(s) = &opts.strategy {
+        payload["strategy"] = json!(s);
+    }
+    if let Some(n) = opts.min_size_mb {
+        payload["min_size_mb"] = json!(n);
+    }
+    if let Some(n) = opts.cache_wait {
+        payload["cache_wait"] = json!(n);
+    }
+
+    let resp = sidecar.request("rd_send_magnet", payload).await?;
+    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(_err_code(&resp));
+    }
+
+    let status = resp
+        .get("status")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
+    let torrent_id = resp
+        .get("torrent_id")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+    let name = resp
+        .get("name")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if status == "completed" {
+        let links_val = resp.get("links").cloned().unwrap_or(json!([]));
+        let links: Vec<RdLink> =
+            serde_json::from_value(links_val).map_err(|e| e.to_string())?;
+        return Ok(RdSendOutcome::Completed {
+            torrent_id,
+            name,
+            links,
+        });
+    }
+
+    // Pending: persist to disk so the frontend can rebuild its retry
+    // queue on next launch.
+    let rd_status = resp
+        .get("rd_status")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+    let progress = resp
+        .get("progress")
+        .and_then(|n| n.as_f64())
+        .unwrap_or(0.0);
+    let strategy_used = resp
+        .get("strategy")
+        .and_then(|s| s.as_str())
+        .unwrap_or("smart")
+        .to_string();
+
+    let entry = PendingEntry::new(
+        torrent_id.clone(),
+        opts.code.unwrap_or_default(),
+        name.clone(),
+        opts.size_label.unwrap_or_default(),
+        strategy_used,
+    );
+    pending::add(&path_manager.data_dir, entry)?;
+
+    Ok(RdSendOutcome::Pending {
+        torrent_id,
+        name,
+        rd_status,
+        progress,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum RdCheckOutcome {
+    Completed {
+        torrent_id: String,
+        name: String,
+        links: Vec<RdLink>,
+    },
+    Pending {
+        torrent_id: String,
+        name: String,
+        rd_status: String,
+        progress: f64,
+    },
+    Missing {
+        torrent_id: String,
+    },
+}
+
+/// Re-poll a previously-pending torrent. Always updates pending_torrents.json:
+///   - on `completed` or `missing` → entry removed.
+///   - on `pending` → entry's last_progress / last_rd_status / last_checked_at refreshed.
+#[tauri::command]
+pub async fn rd_check_pending(
+    sidecar: State<'_, SidecarManager>,
+    path_manager: State<'_, PathManager>,
+    torrent_id: String,
+    strategy: Option<String>,
+) -> Result<RdCheckOutcome, String> {
+    let mut payload = json!({ "torrent_id": torrent_id });
+    if let Some(s) = strategy {
+        payload["strategy"] = json!(s);
+    }
+    let resp = sidecar.request("rd_check_pending", payload).await?;
+    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(_err_code(&resp));
+    }
+
+    let status = resp.get("status").and_then(|s| s.as_str()).unwrap_or("");
+    if status == "completed" {
+        // Persisted entry no longer needed.
+        pending::remove(&path_manager.data_dir, &torrent_id)?;
+        let name = resp
+            .get("name")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
+        let links_val = resp.get("links").cloned().unwrap_or(json!([]));
+        let links: Vec<RdLink> =
+            serde_json::from_value(links_val).map_err(|e| e.to_string())?;
+        return Ok(RdCheckOutcome::Completed {
+            torrent_id,
+            name,
+            links,
+        });
+    }
+    if status == "missing" {
+        pending::remove(&path_manager.data_dir, &torrent_id)?;
+        return Ok(RdCheckOutcome::Missing { torrent_id });
+    }
+
+    // pending — refresh persisted snapshot
+    let name = resp
+        .get("name")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+    let rd_status = resp
+        .get("rd_status")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+    let progress = resp
+        .get("progress")
+        .and_then(|n| n.as_f64())
+        .unwrap_or(0.0);
+    pending::update_status(&path_manager.data_dir, &torrent_id, &rd_status, progress)?;
+    Ok(RdCheckOutcome::Pending {
+        torrent_id,
+        name,
+        rd_status,
+        progress,
+    })
+}
+
+#[tauri::command]
+pub async fn pending_list(
+    path_manager: State<'_, PathManager>,
+) -> Result<Vec<PendingEntry>, String> {
+    pending::load(&path_manager.data_dir)
+}
+
+#[tauri::command]
+pub async fn pending_remove(
+    path_manager: State<'_, PathManager>,
+    torrent_id: String,
+) -> Result<Vec<PendingEntry>, String> {
+    pending::remove(&path_manager.data_dir, &torrent_id)
+}
+
+#[tauri::command]
+pub async fn pending_clear(path_manager: State<'_, PathManager>) -> Result<(), String> {
+    pending::clear(&path_manager.data_dir)
 }

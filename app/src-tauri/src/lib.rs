@@ -1,5 +1,7 @@
 mod commands;
 mod path_manager;
+mod pending;
+mod secret_store;
 mod settings;
 mod sidecar_manager;
 
@@ -14,6 +16,13 @@ const STORE_FILE: &str = "settings.json";
 /// Read on-disk handshake inputs from the data dir. Missing files are not
 /// errors — the sidecar accepts empty cookies (subsequent fetch_javdb will
 /// surface a cloudflare_block) and an empty settings/token snapshot.
+///
+/// Token sourcing in M5+:
+///   1. OS credential store (preferred)
+///   2. Legacy `settings.rd.api_token` field — kept ONLY for the M4→M5
+///      migration. If found, we copy it into the credential store and
+///      blank the JSON field, so subsequent reads come from the secure
+///      backend. The value is never returned to the frontend.
 fn load_handshake_inputs(path_manager: &PathManager) -> (String, Option<String>, Value) {
     let cookies_path = path_manager.data_dir.join("cookies.txt");
     let cookies = std::fs::read_to_string(&cookies_path)
@@ -27,14 +36,50 @@ fn load_handshake_inputs(path_manager: &PathManager) -> (String, Option<String>,
         .and_then(|v| v.get("settings").cloned())
         .unwrap_or(Value::Object(Default::default()));
 
-    let rd_token = settings_value
+    // Token: credential store first; otherwise migrate from legacy JSON.
+    let rd_token = match secret_store::get_rd_token() {
+        Ok(Some(t)) if !t.is_empty() => Some(t),
+        _ => migrate_legacy_token(path_manager, &settings_value),
+    };
+
+    (cookies, rd_token, settings_value)
+}
+
+/// One-shot migration: pull `settings.rd.api_token` (legacy plaintext) into
+/// the credential store, then rewrite the JSON file with the field cleared.
+/// Returns the migrated token (so the first sidecar handshake still has
+/// it) or None if there was nothing to migrate.
+fn migrate_legacy_token(path_manager: &PathManager, settings_value: &Value) -> Option<String> {
+    let token = settings_value
         .get("rd")
         .and_then(|r| r.get("api_token"))
         .and_then(|t| t.as_str())
-        .filter(|s| !s.is_empty())
-        .map(String::from);
+        .filter(|s| !s.is_empty())?
+        .to_string();
 
-    (cookies, rd_token, settings_value)
+    if let Err(e) = secret_store::set_rd_token(&token) {
+        eprintln!("[migrate] keyring write failed, leaving plaintext: {e}");
+        return Some(token);
+    }
+    // Best-effort scrub of the on-disk plaintext copy. tauri-plugin-store
+    // owns the file format so we re-read the wrapper, blank the field,
+    // and write the wrapper back.
+    let store_path = path_manager.data_dir.join(STORE_FILE);
+    if let Ok(raw) = std::fs::read_to_string(&store_path) {
+        if let Ok(mut wrapper) = serde_json::from_str::<Value>(&raw) {
+            if let Some(s) = wrapper
+                .get_mut("settings")
+                .and_then(|v| v.get_mut("rd"))
+                .and_then(|r| r.get_mut("api_token"))
+            {
+                *s = Value::String(String::new());
+                if let Ok(body) = serde_json::to_string_pretty(&wrapper) {
+                    let _ = std::fs::write(&store_path, body);
+                }
+            }
+        }
+    }
+    Some(token)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -83,6 +128,16 @@ pub fn run() {
             commands::copy_magnet,
             commands::copy_magnets_bulk,
             commands::forget_magnets,
+            commands::rd_has_token,
+            commands::rd_test_token,
+            commands::rd_save_token,
+            commands::rd_clear_token,
+            commands::rd_check_user,
+            commands::rd_send_magnet,
+            commands::rd_check_pending,
+            commands::pending_list,
+            commands::pending_remove,
+            commands::pending_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
