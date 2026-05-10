@@ -22,8 +22,8 @@
     type Theme,
   } from "./lib/types";
 
-  let dataDir = $state("(loading)");
-  let logDir = $state("(loading)");
+  let dataDir = $state("（載入中）");
+  let logDir = $state("（載入中）");
   let theme = $state<Theme>("light");
   let settings = $state<Settings | null>(null);
   let statusMessage = $state("");
@@ -76,8 +76,8 @@
       dataDir = paths.data_dir;
       logDir = paths.log_dir;
     } catch (e) {
-      dataDir = `error: ${e}`;
-      logDir = `error: ${e}`;
+      dataDir = `錯誤：${e}`;
+      logDir = `錯誤：${e}`;
     }
 
     try {
@@ -88,13 +88,13 @@
       applyScale(s.ui.scale);
     } catch (e) {
       console.error("read_settings failed:", e);
-      statusMessage = `read_settings error: ${e}`;
+      statusMessage = `讀取設定失敗：${e}`;
     }
   });
 
   async function toggleTheme() {
     if (settings === null) {
-      statusMessage = "settings not loaded yet";
+      statusMessage = "設定尚未載入";
       return;
     }
     theme = theme === "light" ? "dark" : "light";
@@ -102,20 +102,20 @@
     settings.ui.theme = theme;
     try {
       await invoke("write_settings", { settings });
-      statusMessage = `theme persisted: ${theme}`;
+      statusMessage = `主題已儲存：${theme}`;
     } catch (e) {
       console.error("write_settings failed:", e);
-      statusMessage = `write_settings error: ${e}`;
+      statusMessage = `儲存設定失敗：${e}`;
     }
   }
 
   async function pingSidecar() {
-    pingMessage = "(pinging…)";
+    pingMessage = "（ping 中…）";
     try {
       const resp = await invoke<PingResponse>("sidecar_ping");
-      pingMessage = `ok — uptime ${resp.uptime_seconds}s, request_id ${resp.request_id}`;
+      pingMessage = `回應正常 — 已執行 ${resp.uptime_seconds} 秒，request_id ${resp.request_id}`;
     } catch (e) {
-      pingMessage = `error: ${e}`;
+      pingMessage = `錯誤：${e}`;
     }
   }
 
@@ -123,7 +123,7 @@
     if (isScraping) return;
     const urls = parseUrlBatch(urlBatch);
     if (urls.length === 0) {
-      statusMessage = "no valid URLs in batch";
+      statusMessage = "批次中沒有有效網址";
       return;
     }
 
@@ -164,9 +164,9 @@
   async function copyOne(handle_id: string, label: string) {
     try {
       await invoke("copy_magnet", { handleId: handle_id });
-      statusMessage = `copied magnet for ${label}`;
+      statusMessage = `已複製 ${label} 的磁力連結`;
     } catch (e) {
-      statusMessage = `copy_magnet error: ${e}`;
+      statusMessage = `複製失敗：${e}`;
     }
   }
 
@@ -183,10 +183,10 @@
       });
       statusMessage =
         result.unknown > 0
-          ? `copied ${result.copied}, ${result.unknown} stale`
-          : `copied ${result.copied} magnets`;
+          ? `已複製 ${result.copied} 個，另有 ${result.unknown} 個過期`
+          : `已複製 ${result.copied} 個磁力連結`;
     } catch (e) {
-      statusMessage = `copy_magnets_bulk error: ${e}`;
+      statusMessage = `批次複製失敗：${e}`;
     }
   }
 
@@ -254,15 +254,15 @@
         const forgotten = await invoke<number>("forget_magnets", {
           handleIds: ids,
         });
-        statusMessage = `cleared ${forgotten} magnet handles`;
+        statusMessage = `已清空 ${forgotten} 筆磁力 handle`;
       } catch (e) {
         // Don't surface as an error — UI is already cleared, sidecar will GC
         // stale handles on its own eventually.
         console.warn("forget_magnets failed:", e);
-        statusMessage = "results cleared (sidecar gc deferred)";
+        statusMessage = "結果已清空（sidecar 之後會自動 GC）";
       }
     } else {
-      statusMessage = "results cleared";
+      statusMessage = "結果已清空";
     }
   }
 
@@ -279,22 +279,22 @@
 
 <main class="container">
   <h1>JavDBMagnet</h1>
-  <p class="subtitle">M4 — batch scrape + filter + clear</p>
+  <p class="subtitle">M4 — 批次擷取 + 篩選 + 清除</p>
 
   <section>
-    <h2>Storage</h2>
+    <h2>儲存位置</h2>
     <dl>
-      <dt>Data dir</dt>
+      <dt>資料目錄</dt>
       <dd>{dataDir}</dd>
-      <dt>Log dir</dt>
+      <dt>日誌目錄</dt>
       <dd>{logDir}</dd>
     </dl>
   </section>
 
   <section>
-    <h2>Theme</h2>
+    <h2>主題</h2>
     <button onclick={toggleTheme}>
-      Theme: {theme} (click to toggle)
+      主題：{theme}（點擊切換）
     </button>
     {#if statusMessage}
       <p class="status">{statusMessage}</p>
@@ -304,7 +304,7 @@
   <section>
     <h2>Sidecar</h2>
     <div class="row">
-      <button onclick={pingSidecar}>Ping sidecar</button>
+      <button onclick={pingSidecar}>Ping Sidecar</button>
       {#if pingMessage}
         <span class="ping">{pingMessage}</span>
       {/if}
@@ -312,8 +312,8 @@
   </section>
 
   <section>
-    <h2>Batch scrape</h2>
-    <p class="hint">Paste JavDB URLs, one per line. Lines starting with <code>#</code> or non-http(s) are ignored.</p>
+    <h2>批次擷取</h2>
+    <p class="hint">貼上 JavDB 網址，每行一個。以 <code>#</code> 開頭或非 http(s) 的行會被忽略。</p>
 
     <textarea
       class="url-batch"
@@ -325,14 +325,14 @@
 
     <div class="row">
       <button onclick={startScrape} disabled={isScraping}>
-        {isScraping ? "Scraping…" : "Start scrape"}
+        {isScraping ? "擷取中…" : "開始擷取"}
       </button>
-      <button onclick={cancelScrape} disabled={!isScraping}>Cancel</button>
+      <button onclick={cancelScrape} disabled={!isScraping}>取消</button>
       {#if groups.length > 0}
         <button onclick={copyVisible} disabled={isScraping || visibleMagnets === 0}>
-          Copy visible magnets ({visibleMagnets})
+          複製可見磁力（{visibleMagnets}）
         </button>
-        <button onclick={clearResults}>Clear results</button>
+        <button onclick={clearResults}>清空結果</button>
       {/if}
     </div>
 
@@ -341,28 +341,28 @@
         <span>{scrapeProgress.done} / {scrapeProgress.total}</span>
         <span class="ok">✓ {okCount}</span>
         <span class="err">✗ {errCount}</span>
-        <span class="muted">magnets: {visibleMagnets} / {totalRawMagnets}</span>
+        <span class="muted">磁力：{visibleMagnets} / {totalRawMagnets}</span>
       {:else}
-        <span class="muted">idle</span>
+        <span class="muted">閒置</span>
       {/if}
     </div>
 
     {#if groups.length > 0}
       <div class="filter-row">
         <label>
-          keyword
+          關鍵字
           <input
             type="text"
             bind:value={filter.keyword}
-            placeholder="name / size / tag / date"
+            placeholder="番號 / 大小 / 標籤 / 日期"
           />
         </label>
         <label class="check">
           <input type="checkbox" bind:checked={filter.hd_only} />
-          HD only
+          只顯示高清
         </label>
         <label>
-          min GB
+          最小 GB
           <input
             type="number"
             min="0"
@@ -372,7 +372,7 @@
           />
         </label>
         <label>
-          max GB
+          最大 GB
           <input
             type="number"
             min="0"
@@ -382,23 +382,23 @@
           />
         </label>
         <label>
-          group pick
+          每組只留
           <select
             value={filter.group_pick}
             onchange={(e) => setGroupPick((e.currentTarget as HTMLSelectElement).value as GroupPick)}
           >
-            <option value="all">all</option>
-            <option value="largest">largest</option>
-            <option value="smallest">smallest</option>
-            <option value="fewest_files">fewest files</option>
+            <option value="all">全部</option>
+            <option value="largest">最大檔</option>
+            <option value="smallest">最小檔</option>
+            <option value="fewest_files">檔案最少</option>
           </select>
         </label>
-        <button onclick={resetFilter}>Reset</button>
+        <button onclick={resetFilter}>重置</button>
       </div>
     {/if}
 
     {#if groups.length === 0 && !isScraping}
-      <p class="empty-state">No results yet — paste URLs above and press <strong>Start scrape</strong>.</p>
+      <p class="empty-state">尚無結果 — 在上方貼上網址後按下<strong>開始擷取</strong>。</p>
     {/if}
 
     {#if groups.length > 0}
@@ -411,7 +411,7 @@
               <button
                 class="toggle"
                 onclick={() => toggleCollapsed(g.url)}
-                aria-label={isCollapsed ? "expand" : "collapse"}
+                aria-label={isCollapsed ? "展開" : "收合"}
                 disabled={!g.result}
               >
                 {isCollapsed ? "▶" : "▼"}
@@ -419,7 +419,7 @@
               <span class="status-dot"></span>
               <strong>
                 {#if g.result}
-                  {g.result.code || "(no code)"}
+                  {g.result.code || "（無番號）"}
                 {:else}
                   #{i + 1}
                 {/if}
@@ -427,56 +427,56 @@
               <span class="muted url">{g.url}</span>
               {#if g.result}
                 <span class="muted">
-                  — {rows.length} / {g.result.magnet_count} magnets
+                  — 顯示 {rows.length} / 共 {g.result.magnet_count} 個磁力
                 </span>
               {/if}
             </header>
 
             {#if g.status === "fetching"}
-              <p class="muted">fetching…</p>
+              <p class="muted">擷取中…</p>
             {:else if g.status === "error"}
-              <p class="error">error: {g.error}</p>
+              <p class="error">錯誤：{g.error}</p>
             {:else if g.result && !isCollapsed}
               {#if g.result.title}
                 <p class="title">{g.result.title}</p>
               {/if}
               {#if g.result.magnets.length === 0}
-                <p class="muted">(no magnets in this group)</p>
+                <p class="muted">（此組沒有磁力）</p>
               {:else if rows.length === 0}
-                <p class="muted">(no rows match the current filter)</p>
+                <p class="muted">（沒有符合篩選條件的磁力）</p>
               {:else}
                 <table>
                   <thead>
                     <tr>
                       <th>
                         <button class="th-sort" onclick={() => toggleSort("name")}>
-                          name{sortIndicator("name")}
+                          番號{sortIndicator("name")}
                         </button>
                       </th>
                       <th>
                         <button class="th-sort" onclick={() => toggleSort("size")}>
-                          size{sortIndicator("size")}
+                          大小{sortIndicator("size")}
                         </button>
                       </th>
                       <th>
                         <button class="th-sort" onclick={() => toggleSort("tags")}>
-                          tags{sortIndicator("tags")}
+                          標籤{sortIndicator("tags")}
                         </button>
                       </th>
                       <th>
                         <button class="th-sort" onclick={() => toggleSort("date")}>
-                          date{sortIndicator("date")}
+                          日期{sortIndicator("date")}
                         </button>
                       </th>
-                      <th>redacted</th>
-                      <th>action</th>
+                      <th>遮蔽磁力</th>
+                      <th>動作</th>
                     </tr>
                   </thead>
                   <tbody>
                     {#each rows as m (m.handle_id)}
                       <tr
                         class="row-copyable"
-                        title="Double-click to copy magnet"
+                        title="雙擊複製磁力連結"
                         ondblclick={() =>
                           copyOne(m.handle_id, m.name || g.result!.code)}
                       >
@@ -489,7 +489,7 @@
                           <button
                             onclick={() => copyOne(m.handle_id, m.name || g.result!.code)}
                           >
-                            copy
+                            複製
                           </button>
                         </td>
                       </tr>
