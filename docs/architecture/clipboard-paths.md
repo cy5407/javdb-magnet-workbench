@@ -1,75 +1,61 @@
 # 剪貼簿（Clipboard）寫入路徑
 
-> Status: M5d 起生效 / 2026-05-11 更新（加入 RD 直連批次複製的 capability）
+> Status: M6 follow-up（2026-05-11）起所有 clipboard 寫入都走 Rust。前端不直接呼叫 `tauri-plugin-clipboard-manager`。
 
 ## TL;DR
 
-App 有 **兩條** 寫剪貼簿的路徑，刻意分開：
-
-| 用途 | 路徑 | 實作位置 | 安全考量 |
+| 用途 | 入口（Tauri command） | 實作位置 | 路徑說明 |
 |---|---|---|---|
-| 複製單一 / 多筆磁力 | 前端 `invoke("copy_magnet")` → Rust → clipboard | `app/src-tauri/src/commands.rs::copy_magnet`、`copy_magnets_bulk` | 完整 magnet 文字只在 sidecar 記憶體；Rust 端透過 `handle_id` 反查取出短暫 String，寫完剪貼簿即 drop。**前端永遠拿不到完整 magnet。** |
-| 複製 RD 直連（unrestrict link） | 前端動態 import `@tauri-apps/plugin-clipboard-manager` 直接 `writeText` | `app/src/App.svelte::copyRdDownloads` | RD 直連是公開可下載 URL（已驗證的 token 才產生），沒有 sidecar boundary 需求；前端持有沒問題。|
+| 複製單一磁力 | `invoke("copy_magnet", { handleId })` | `app/src-tauri/src/commands.rs::copy_magnet` | sidecar resolve full magnet → Rust transient String → clipboard → drop |
+| 複製多筆磁力 | `invoke("copy_magnets_bulk", { handleIds })` | `commands.rs::copy_magnets_bulk` | 同上，但批次 resolve |
+| 複製多筆 RD 直連 | `invoke("copy_rd_links_bulk", { links })` | `commands.rs::copy_rd_links_bulk` | 前端把已知的 download URL 陣列丟給 Rust，Rust filter + join + 寫剪貼簿 |
 
-兩條路徑的安全模型不同 → 不適合（也不該）合併。
+統一規則：**前端永遠不直接 import `@tauri-apps/plugin-clipboard-manager`**。所有 clipboard 寫入經 Rust `app.clipboard().write_text(...)`。
 
-## 為什麼磁力走 Rust、RD 直連走前端？
+## 為什麼磁力的 boundary 是嚴格的？
 
-### 磁力（must Rust）
-M5 安全合約之一：「**完整 magnet 文字不得進前端 state**」。意思是 frontend 永遠只看得到 `handle_id` + redacted magnet。如果讓前端 `writeText(fullMagnet)`，前端就要先持有完整 magnet —— 違反合約。所以磁力複製必須走：
+M5 安全合約之一：「**完整 magnet 文字不得進前端 state**」。Frontend 只看 `handle_id` + redacted magnet。所以磁力複製不能讓前端 `writeText(fullMagnet)` —— 前端那行如果存在，就要先持有完整 magnet，違反合約。流程：
+
 ```
 前端 invoke("copy_magnet", { handleId })
-  → Rust 端用 handle_id 向 sidecar resolve full magnet
+  → Rust 用 handle_id 向 sidecar resolve full magnet
   → Rust 端 clipboard 寫入
   → Rust transient String 立即 drop
 ```
 
-### RD 直連（OK 前端）
-RD 的 unrestrict link 是長這樣的 URL：`https://download.real-debrid.com/d/<id>/<filename>.mp4`。它是 RD API 回傳的公開可下載 URL，**不是 secret、不是 magnet**。送 RD 成功後它本來就會塞進 `RdSendProgress.links[].download` 給 UI 顯示與表格渲染。前端既然已經拿到，再呼叫 `writeText(linksJoinedByNewline)` 沒有額外資訊外洩。
+## RD 直連為什麼也走 Rust（M6 follow-up 收斂）
 
-## 為什麼前端寫剪貼簿需要 capability？
+RD 的 unrestrict link（`https://download.real-debrid.com/d/<id>/<filename>.mp4`）**不是 secret** —— 是 RD API 回傳的公開可下載 URL，送 RD 成功後本來就塞進 `RdSendProgress.links[].download` 讓 UI 顯示。技術上前端 `writeText(...)` 沒有違反任何 secret invariant。
 
-Tauri 2 對前端 JS 操作 plugin 一律走 IPC + capability gate（不像 Rust 端可直呼 plugin API）。`@tauri-apps/plugin-clipboard-manager` 的 `writeText` 對應的 IPC permission 名稱是：
+但「前端不該直接動 plugin」這條架構約束有更廣的好處：
 
-```
-clipboard-manager:allow-write-text
-```
+1. **Capability surface 最小化** —— 不需要在 `capabilities/default.json` 加 `clipboard-manager:allow-write-text`。前端 JS 的 IPC 路徑全部走 `invoke(...)` 與 Rust commands，不直接觸碰 plugin。
+2. **錯誤處理一致** —— Rust 端 `app.clipboard().write_text()` 失敗會丟 String error，frontend `invoke` 接到 Promise reject，跟其他 `copy_*` command 一樣。
+3. **單一入口好維護** —— 將來想加「自動換行」、「URL encode」、「避免重複寫入」之類的剪貼簿側邊邏輯，只改 Rust 一處。
+4. **測試**面變窄 —— 前端 mock invoke 即可，不需要去 mock `@tauri-apps/plugin-clipboard-manager` 的 dynamic import。
 
-必須加進 `app/src-tauri/capabilities/default.json` 的 `permissions` 陣列才會放行。沒加的話前端 `writeText` 會被擋掉、丟 permission denied，而且因為 `App.svelte::copyRdDownloads` 的 catch 把錯誤訊息丟到頁面頂端的 `rdMessage`，使用者按了「複製所有 RD 直連」會以為按鈕沒反應（這是 2026-05-11 修掉的 bug）。
+## Capability 設定
 
 ```jsonc
 // app/src-tauri/capabilities/default.json
 {
   "permissions": [
-    "core:default",
-    "clipboard-manager:allow-write-text"
+    "core:default"
   ]
 }
 ```
 
-`copy_magnet` / `copy_magnets_bulk` 走 Rust 端，**不需要** 這條 permission。
-
-## 未來若想統一（不建議，記在這裡備查）
-
-選項：把 `copyRdDownloads` 也改成 Rust Tauri command（`copy_rd_links_bulk(lines: Vec<String>)`），然後把 capability 移除。
-
-優點：
-- 路徑一致、code style 對稱（兩個複製動作都 invoke）
-
-缺點：
-- Rust 端多一個只是「幫忙轉一下字串」的 command，沒帶來新 invariant
-- IPC 多一次 round-trip 對純字串無意義
-- 前端反正本來就持有 `links[].download`，分割得不明所以
-
-**結論：保持現狀。前端能 own 的東西讓前端 own，安全合約只在「不能 own 的東西」上強制。**
-
-## 相關測試 / Smoke
-
-- 「複製單一磁力」、「複製選取磁力」smoke 在 M4c 加入；對應的安全合約由 `app/src-tauri/src/commands.rs` 的 handle_id resolve 路徑保證。
-- 「複製所有 RD 直連」沒有自動化測試（writeText 在 jsdom 下難以信賴 mock；Tauri capability gate 需要實機驗證）。手動 smoke：送 RD 一批 → 等 N/N 完成 → 按「複製所有 RD 直連 (N)」→ 開記事本貼上 → 應看到 N 行 https URL。
+**不需要** `clipboard-manager:allow-write-text`。Rust 端 `app.clipboard()` 的呼叫不受 IPC permission gate 限制（Rust 對 plugin 是直呼，不走 IPC）。
 
 ## 變更紀錄
 
 | 日期 | 變更 | Commit |
 |---|---|---|
-| 2026-05-11 | 新增 `clipboard-manager:allow-write-text` capability，修復「複製所有 RD 直連」沒反應的 bug | （pending）|
+| 2026-05-11（M5d 階段） | 新增 `clipboard-manager:allow-write-text` capability 解決前端 `writeText` 被擋的 bug（tactical fix） | `a56425c` |
+| 2026-05-11（M6 follow-up） | 改架構：新增 Rust `copy_rd_links_bulk`，前端 `copyRdDownloads` / `retryAllPending` 改 invoke。收回 capability，前端不再直接持有 clipboard plugin 依賴。 | （pending）|
+
+## 測試覆蓋
+
+- Rust：`copy_magnets_bulk` 在 commands.rs 有路徑單元測試（在 sidecar mock 下）。`copy_rd_links_bulk` 邏輯極簡（filter + join + clipboard write），目前未加單元測試 —— 若日後新增 trim / dedupe 規則，再補。
+- 前端：`magnetUtils.test.ts` / `rdSender.test.ts` 不覆蓋 clipboard 路徑。手動 smoke 在 `docs/sessions/m6a-release-smoke.md` 步驟 6。
+- jsdom 環境下 `invoke` 可以 mock，但 `app.clipboard().write_text()` 的真實寫入需要實機驗證。Tauri 沒有 fake clipboard backend。
