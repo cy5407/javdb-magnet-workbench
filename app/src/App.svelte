@@ -227,7 +227,7 @@
       return;
     }
     isRegistering = true;
-    registerStatus = { kind: "info", text: "註冊中…" };
+    registerStatus = { kind: "info", text: "加入中…" };
     try {
       const resp = await invoke<{
         registered: { handle_id: string; magnet_redacted: string; deduped: boolean }[];
@@ -269,11 +269,11 @@
         kind: "ok",
         text:
           skipped > 0
-            ? `已註冊 ${rows.length} 個磁力（忽略 ${skipped} 個無效輸入）。捲動到下方「結果」即可使用送 RD / 複製。`
-            : `已註冊 ${rows.length} 個磁力。捲動到下方「結果」即可使用送 RD / 複製。`,
+            ? `已加入 ${rows.length} 筆到下方結果清單（忽略 ${skipped} 個無效輸入）。`
+            : `已加入 ${rows.length} 筆到下方結果清單。`,
       };
     } catch (e) {
-      registerStatus = { kind: "error", text: `註冊失敗：${e}` };
+      registerStatus = { kind: "error", text: `加入失敗：${e}` };
     } finally {
       isRegistering = false;
     }
@@ -558,7 +558,7 @@
         "copy_rd_links_bulk",
         { links: lines },
       );
-      rdMessage = `已複製 ${result.copied} 個 RD 直連到剪貼簿`;
+      rdMessage = `已複製 ${result.copied} 條 RD 下載連結`;
     } catch (e) {
       rdMessage = `複製失敗：${e}`;
     }
@@ -604,9 +604,9 @@
           "copy_rd_links_bulk",
           { links: completedLinks },
         );
-        rdMessage = `重試完成：${result.copied} 個新連結已複製到剪貼簿`;
+        rdMessage = `重試完成：已複製 ${result.copied} 條 RD 下載連結`;
       } catch (e) {
-        rdMessage = `重試完成 ${completedLinks.length} 個（剪貼簿寫入失敗：${e}）`;
+        rdMessage = `重試完成 ${completedLinks.length} 條（剪貼簿寫入失敗：${e}）`;
       }
     } else {
       rdMessage = `重試完成，目前沒有新完成的連結（剩 ${pendingEntries.length} 個）`;
@@ -723,7 +723,7 @@
           id="rd-token-input"
           type={rdShowToken ? "text" : "password"}
           bind:value={rdTokenInput}
-          placeholder="貼上 Token"
+          placeholder={rdHasToken ? "貼上新 Token 以更換" : "貼上 RD API Token"}
           spellcheck="false"
           autocomplete="off"
         />
@@ -768,17 +768,16 @@
         <button
           onclick={sendVisibleToRd}
           disabled={isScraping || isRdSending || visibleMagnets === 0 || !rdHasToken}
-          title={rdHasToken ? "" : "請先設定 Real-Debrid Token"}
+          title={rdHasToken ? "" : "請先設定 RD Token"}
         >
-          送至 Real-Debrid（{visibleMagnets}）
+          送出目前可見 {visibleMagnets} 筆到 RD
         </button>
         <button onclick={clearResults}>清空結果</button>
       {/if}
     </div>
     {#if groups.length > 0 && !rdHasToken}
       <p class="inline-msg" data-kind="info">
-        ※「送至 Real-Debrid」目前停用：請往上捲動到
-        <strong>Real-Debrid</strong> 區塊貼上 Token 並按「儲存」。
+        ※「送出到 RD」目前停用 — 請先設定 RD Token（往上捲動到 <strong>Real-Debrid</strong> 區塊貼上 Token 並按「儲存」）。
       </p>
     {/if}
 
@@ -849,10 +848,10 @@
   </section>
 
   <section>
-    <h2>直接貼上磁力連結</h2>
+    <h2>直接貼磁力</h2>
     <p class="hint">
-      不想經 JavDB 擷取，直接貼 <code>magnet:?xt=...</code> 也可以送至 Real-Debrid。
-      註冊後會以「直接貼上」群組顯示，套用相同的篩選 / 排序 / 送 RD 流程。
+      已有 <code>magnet:?xt=...</code> 連結時可貼在這裡，系統會加入下方<strong>結果清單</strong>，
+      之後可送至 Real-Debrid 或複製。
     </p>
 
     <textarea
@@ -865,10 +864,10 @@
 
     <div class="row">
       <button onclick={registerPastedMagnets} disabled={isRegistering}>
-        {isRegistering ? "註冊中…" : "註冊磁力"}
+        {isRegistering ? "加入中…" : "加入結果清單"}
       </button>
       <span class="muted small">
-        註冊後可在下方搭配「送至 Real-Debrid」按鈕送出。
+        加入後可用下方「結果」區塊內的篩選 / 送 RD / 複製。
       </span>
     </div>
     {#if registerStatus}
@@ -999,8 +998,9 @@
           onclick={copyRdDownloads}
           disabled={isRdSending || rdDownloadLinkCount === 0}
         >
-          複製所有 RD 直連（{rdDownloadLinkCount}）
+          複製 {rdDownloadLinkCount} 條下載直連
         </button>
+        <span class="muted small">可貼到下載器，每行一個 URL</span>
       </div>
 
       <table>
