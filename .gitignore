@@ -1,5 +1,7 @@
 # 機敏資料
 .env
+.env.*
+!.env.example
 cookies.txt
 *.token
 
