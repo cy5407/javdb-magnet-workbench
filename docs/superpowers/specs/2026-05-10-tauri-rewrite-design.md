@@ -6,6 +6,16 @@ date: 2026-05-10
 status: awaiting reviewer approval
 ---
 
+> ⚠ **Implementation drift note (M6a / 2026-05-11)**: this design spec
+> still describes the **NSIS installer** path (§5 packaging, §9.5 audit,
+> §11 M8). The implementation switched to **MSI** in commit `adc2557`
+> because the NSIS bundler intermittently failed (`os error 5` while
+> extracting NSIS 3.11 under Windows Defender real-time protection).
+> Behavioural promises (bundle audit, externalBin layout, secret-free
+> install image) carry over to MSI — only the installer technology
+> changed. Future doc revisions should retitle §11 M8 from "NSIS
+> installer" to "MSI installer".
+
 # Tauri Rewrite — Production Plan
 
 ## 1. Context & Decisions Locked-In
