@@ -855,6 +855,39 @@ pub fn get_cookies_status(path_manager: State<PathManager>) -> CookiesStatus {
     cookies_status_for(&path_manager.data_dir)
 }
 
+/// Body of the generated cookies.txt scaffold. Inline instructions
+/// only — no real cookies, ever. Stored as a Rust constant so the
+/// audit (and the no-secret-in-source scan) sees it.
+const COOKIES_TEMPLATE: &str = "# JavDBMagnet cookies.txt\n# ================================================\n#\n# 把你的 JavDB 登入 cookie 貼到本檔最後一行，存檔時請選 UTF-8 編碼。\n# 至少要包含這 2 個 cookie:\n#   _jdb_session=...   (登入 session)\n#   cf_clearance=...   (Cloudflare 通行證)\n#\n# === 方法 A: 瀏覽器 DevTools Network 分頁 (推薦) ===\n#   1. 用瀏覽器 (Edge / Chrome / Firefox 都可) 登入 https://javdb.com\n#   2. 按 F12 開啟 DevTools\n#   3. 切換到「Network」(網路) 分頁\n#   4. 按 F5 重新整理頁面\n#   5. 點清單最上面那筆 request (網址通常是 javdb.com/)\n#   6. 右側找到「Request Headers」找到 \"Cookie:\" 那行\n#   7. 複製整行值 (不要包含 \"Cookie: \" 前綴), 貼到本檔最後一行\n#\n# === 方法 B: Application 分頁 (更直觀但要拼接) ===\n#   1. F12 → Application → Storage → Cookies → https://javdb.com\n#   2. 找出 _jdb_session 與 cf_clearance 兩個欄位的 Value\n#   3. 自行拼成: _jdb_session=...; cf_clearance=...; locale=zh\n#\n# === 範例 (請把 XXX 換成你的真實值, 不要直接貼這行) ===\n# _jdb_session=XXX; cf_clearance=XXX; locale=zh\n#\n# === 安全提醒 ===\n#   - cookies.txt 含登入憑證, 請勿分享, 勿同步雲端\n#   - cf_clearance 約幾小時過期 → 重做上面任一方法更新即可\n#   - 失效徵兆: app 內按「開始擷取」看到「Cloudflare 阻擋」訊息\n#\n# === 在下面貼上你的 cookie 整行 ===\n\n";
+
+/// Write a freshly-instructed cookies.txt scaffold into the data dir
+/// so new users have something concrete to edit (instead of having to
+/// know the schema). Refuses to overwrite an existing file — losing a
+/// working cookies.txt would be far worse than failing the create
+/// action. Caller is expected to refresh `get_cookies_status` after.
+///
+/// File is written UTF-8 without BOM so Cloudflare's parser doesn't
+/// trip on a leading BOM byte.
+pub(crate) fn write_cookies_template_to(data_dir: &std::path::Path) -> Result<(), String> {
+    let path = data_dir.join(COOKIES_FILE_NAME);
+    if path.exists() {
+        return Err(
+            "cookies.txt 已存在，建立範本前請先在資料目錄手動移除".to_string(),
+        );
+    }
+    std::fs::create_dir_all(data_dir)
+        .map_err(|e| format!("mkdir {}: {e}", data_dir.display()))?;
+    // Bytes path: no BOM, ASCII+UTF-8 content as-is.
+    std::fs::write(&path, COOKIES_TEMPLATE.as_bytes())
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn create_cookies_template(path_manager: State<PathManager>) -> Result<(), String> {
+    write_cookies_template_to(&path_manager.data_dir)
+}
+
 /// Push the latest persisted settings to the running sidecar so this
 /// session reflects the change without an app restart. Caller is the
 /// frontend's settings editor; the settings have already been validated
@@ -981,5 +1014,45 @@ mod tests_m7b {
             !raw.contains("SECRET_COOKIE_VALUE_DO_NOT_LEAK"),
             "cookies body leaked into status: {raw}"
         );
+    }
+
+    #[test]
+    fn create_cookies_template_writes_utf8_no_bom() {
+        let d = temp_dir();
+        write_cookies_template_to(&d).expect("template write must succeed");
+        let bytes = fs::read(d.join(COOKIES_FILE_NAME)).unwrap();
+        // No UTF-8 BOM (Cloudflare's parser would trip on a leading BOM).
+        assert!(bytes.len() >= 3);
+        assert_ne!(
+            &bytes[..3],
+            &[0xEF, 0xBB, 0xBF],
+            "template must not start with a UTF-8 BOM"
+        );
+        let text = String::from_utf8(bytes).expect("template must be valid UTF-8");
+        // Inline-instructions sanity: the comment headers we promise to
+        // ship must actually appear in the file.
+        assert!(text.contains("JavDBMagnet cookies.txt"));
+        assert!(text.contains("方法 A"));
+        assert!(text.contains("方法 B"));
+        assert!(text.contains("_jdb_session"));
+        assert!(text.contains("cf_clearance"));
+        // No real-looking secret pattern (XXX placeholder is fine).
+        assert!(text.contains("_jdb_session=XXX"));
+    }
+
+    #[test]
+    fn create_cookies_template_refuses_overwrite() {
+        let d = temp_dir();
+        let existing_body = "ORIGINAL_USER_COOKIES_KEEP_INTACT";
+        fs::write(d.join(COOKIES_FILE_NAME), existing_body).unwrap();
+
+        let err = write_cookies_template_to(&d).expect_err("must refuse overwrite");
+        assert!(
+            err.contains("已存在"),
+            "error should explain cookies.txt already exists; got: {err}"
+        );
+        // Original content untouched.
+        let after = fs::read_to_string(d.join(COOKIES_FILE_NAME)).unwrap();
+        assert_eq!(after, existing_body);
     }
 }

@@ -104,6 +104,7 @@
   let cookiesStatus = $state<CookiesStatus | null>(null);
   let cookiesShown = $state(false);
   let cookiesError = $state("");
+  let cookiesMessage = $state<{ kind: "ok" | "info" | "error"; text: string } | null>(null);
 
   // M7c: Settings editor
   let settingsShown = $state(false);
@@ -744,6 +745,21 @@
     }
   }
 
+  async function createCookiesTemplate() {
+    cookiesError = "";
+    cookiesMessage = null;
+    try {
+      await invoke("create_cookies_template");
+      await refreshCookiesStatus();
+      cookiesMessage = {
+        kind: "ok",
+        text: "已建立 cookies.txt 範本，請按「打開資料目錄」編輯並填入 cookie。",
+      };
+    } catch (e) {
+      cookiesMessage = { kind: "error", text: `建立範本失敗：${e}` };
+    }
+  }
+
   function formatBytes(n: number): string {
     if (n < 1024) return `${n} B`;
     if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -1274,10 +1290,16 @@
       {#if cookiesError}
         <p class="inline-msg" data-kind="error">{cookiesError}</p>
       {/if}
+      {#if cookiesMessage}
+        <p class="inline-msg" data-kind={cookiesMessage.kind}>{cookiesMessage.text}</p>
+      {/if}
       <div class="row">
         <button onclick={refreshCookiesStatus}>重新整理</button>
         <button onclick={openDataDir}>打開資料目錄</button>
         <button onclick={openLogsDir}>打開 logs 目錄</button>
+        {#if cookiesStatus && !cookiesStatus.present}
+          <button onclick={createCookiesTemplate}>建立 cookies.txt 範本</button>
+        {/if}
       </div>
     {/if}
   </section>
