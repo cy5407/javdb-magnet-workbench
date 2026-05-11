@@ -89,6 +89,19 @@ export interface LegacyImportPreview {
   warnings: string[];
 }
 
+/**
+ * M7b: JavDB cookies file status. The cookie BODY is never carried in
+ * this shape — Rust reads only `metadata()` (size + mtime) and returns
+ * those + the on-disk path so the UI can show "where it is / is it
+ * there / how fresh".
+ */
+export interface CookiesStatus {
+  present: boolean;
+  path: string;
+  modified_iso: string | null;
+  size_bytes: number;
+}
+
 export interface LegacyImportReport {
   env_imported: boolean;
   rd_token_imported: boolean;

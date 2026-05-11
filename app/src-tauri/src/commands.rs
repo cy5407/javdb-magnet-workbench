@@ -798,3 +798,162 @@ pub async fn apply_legacy_import(
 
     Ok(report)
 }
+
+// ===========================================================================
+// M7b: Cookies status + data/logs dir helpers
+//
+// Cookies are stored plaintext at <data_dir>/cookies.txt. The UI must be
+// able to surface presence / size / mtime so the user knows whether the
+// app has any session at all — but the cookie BODY must never leave Rust
+// (don't read the file contents, don't echo to logs).
+// ===========================================================================
+
+const COOKIES_FILE_NAME: &str = "cookies.txt";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CookiesStatus {
+    pub present: bool,
+    pub path: String,
+    /// ISO-8601 UTC string. `None` if the file is missing or the OS
+    /// doesn't give us mtime (e.g. exotic filesystem).
+    pub modified_iso: Option<String>,
+    pub size_bytes: u64,
+}
+
+/// Pure helper — takes a data dir path and reports the cookies.txt
+/// status without reading the file contents. Used by both the Tauri
+/// command and the unit tests.
+pub(crate) fn cookies_status_for(data_dir: &std::path::Path) -> CookiesStatus {
+    let path = data_dir.join(COOKIES_FILE_NAME);
+    let path_display = path.display().to_string();
+    let meta = match std::fs::metadata(&path) {
+        Ok(m) => m,
+        Err(_) => {
+            return CookiesStatus {
+                present: false,
+                path: path_display,
+                modified_iso: None,
+                size_bytes: 0,
+            };
+        }
+    };
+    let size_bytes = meta.len();
+    let modified_iso = meta
+        .modified()
+        .ok()
+        .map(|st| chrono::DateTime::<chrono::Utc>::from(st).to_rfc3339());
+    CookiesStatus {
+        present: true,
+        path: path_display,
+        modified_iso,
+        size_bytes,
+    }
+}
+
+#[tauri::command]
+pub fn get_cookies_status(path_manager: State<PathManager>) -> CookiesStatus {
+    cookies_status_for(&path_manager.data_dir)
+}
+
+/// Open the configured data directory in the OS file manager. Uses
+/// `explorer.exe` directly so we don't need a new IPC capability for
+/// `tauri-plugin-shell.open` — the call is Rust-side only.
+#[tauri::command]
+pub fn open_data_dir(path_manager: State<PathManager>) -> Result<(), String> {
+    open_in_explorer(&path_manager.data_dir)
+}
+
+#[tauri::command]
+pub fn open_logs_dir(path_manager: State<PathManager>) -> Result<(), String> {
+    open_in_explorer(&path_manager.log_dir)
+}
+
+fn open_in_explorer(p: &std::path::Path) -> Result<(), String> {
+    if !p.exists() {
+        // Best-effort: create the dir so explorer has something to open.
+        std::fs::create_dir_all(p)
+            .map_err(|e| format!("mkdir {}: {e}", p.display()))?;
+    }
+    // `explorer.exe <path>` on Windows. Quoting is handled by the OS;
+    // we pass the path as a single arg.
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg(p.as_os_str())
+            .spawn()
+            .map_err(|e| format!("spawn explorer: {e}"))?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Fallback for dev cross-checks. M7 targets Windows only.
+        Err(format!(
+            "open_in_explorer not implemented for this OS: {}",
+            p.display()
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests_m7b {
+    use super::*;
+    use std::env;
+    use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn temp_dir() -> std::path::PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = env::temp_dir().join(format!(
+            "javdbmagnet-cookies-test-{}-{}",
+            std::process::id(),
+            id
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn cookies_status_missing_file() {
+        let d = temp_dir();
+        let s = cookies_status_for(&d);
+        assert!(!s.present);
+        assert_eq!(s.size_bytes, 0);
+        assert!(s.modified_iso.is_none());
+        // path is still echoed so the UI can show "expected at ..."
+        assert!(s.path.contains("cookies.txt"));
+    }
+
+    #[test]
+    fn cookies_status_present_file() {
+        let d = temp_dir();
+        let path = d.join(COOKIES_FILE_NAME);
+        fs::write(&path, "# domain\tdummy\tplaceholder=1\n").unwrap();
+        let s = cookies_status_for(&d);
+        assert!(s.present);
+        assert!(s.size_bytes > 0);
+        // mtime is best-effort; accept None on exotic filesystems but
+        // assert that an OK Some() looks like an ISO-8601 date.
+        if let Some(iso) = &s.modified_iso {
+            assert!(iso.len() >= 19, "iso too short: {iso}");
+            assert!(iso.contains('T') || iso.contains(' '), "iso shape: {iso}");
+        }
+    }
+
+    #[test]
+    fn cookies_status_does_not_leak_body() {
+        // Defense in depth: serializing the status should never contain
+        // the cookies.txt body, even if a future refactor accidentally
+        // adds it to the struct.
+        let d = temp_dir();
+        let path = d.join(COOKIES_FILE_NAME);
+        fs::write(&path, "SECRET_COOKIE_VALUE_DO_NOT_LEAK\n").unwrap();
+        let s = cookies_status_for(&d);
+        let raw = serde_json::to_string(&s).unwrap();
+        assert!(
+            !raw.contains("SECRET_COOKIE_VALUE_DO_NOT_LEAK"),
+            "cookies body leaked into status: {raw}"
+        );
+    }
+}
