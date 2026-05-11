@@ -147,6 +147,7 @@ pub fn run() {
             commands::get_cookies_status,
             commands::open_data_dir,
             commands::open_logs_dir,
+            commands::update_sidecar_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

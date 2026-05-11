@@ -9,6 +9,12 @@
   } from "./lib/scraper";
   import { processGroupRows } from "./lib/magnetUtils";
   import {
+    FILE_PICK_VALUES,
+    SCALE_PRESETS,
+    THEME_VALUES,
+    validateSettingsDraft,
+  } from "./lib/settingsValidation";
+  import {
     rdErrorMessage,
     retryPending,
     sendBatch,
@@ -98,6 +104,13 @@
   let cookiesStatus = $state<CookiesStatus | null>(null);
   let cookiesShown = $state(false);
   let cookiesError = $state("");
+
+  // M7c: Settings editor
+  let settingsShown = $state(false);
+  let settingsDraft = $state<Settings | null>(null);
+  let settingsSaving = $state(false);
+  let settingsMessage = $state("");
+  let settingsMessageKind = $state<"ok" | "error" | "info">("info");
 
   function applyTheme(t: Theme) {
     document.documentElement.dataset.theme = t;
@@ -710,6 +723,86 @@
     return `${(n / 1024 / 1024).toFixed(1)} MB`;
   }
 
+  // ---- M7c: Settings editor -------------------------------------------
+  let settingsErrors = $derived<Record<string, string>>(
+    settingsDraft ? validateSettingsDraft(settingsDraft) : {},
+  );
+  let settingsValid = $derived(Object.keys(settingsErrors).length === 0);
+
+  function openSettingsEditor() {
+    if (!settings) {
+      settingsMessage = "設定尚未載入";
+      settingsMessageKind = "error";
+      return;
+    }
+    // Deep-ish clone so editing the draft doesn't mutate the loaded
+    // copy until save.
+    settingsDraft = {
+      version: settings.version,
+      ui: { ...settings.ui },
+      rd: { ...settings.rd, api_token: "" },
+    };
+    settingsShown = true;
+    settingsMessage = "";
+  }
+
+  async function saveSettings() {
+    if (!settingsDraft) return;
+    if (!settingsValid) {
+      settingsMessage = "請先修正紅字欄位";
+      settingsMessageKind = "error";
+      return;
+    }
+    settingsSaving = true;
+    settingsMessage = "";
+    try {
+      // Always blank api_token on save — the backend also blanks it
+      // but we don't want the draft to even appear to carry one.
+      const toSave: Settings = {
+        ...settingsDraft,
+        rd: { ...settingsDraft.rd, api_token: "" },
+      };
+      await invoke("write_settings", { settings: toSave });
+      // Push to sidecar so this session reflects new values without
+      // an app restart.
+      try {
+        await invoke("update_sidecar_settings", { settings: toSave });
+      } catch (e) {
+        console.warn("update_sidecar_settings failed:", e);
+        // Non-fatal: the disk copy is saved; next launch will use new
+        // values regardless.
+      }
+      // Refresh canonical settings + dependent UI state.
+      settings = await invoke<Settings>("read_settings");
+      theme = settings.ui.theme as Theme;
+      applyTheme(theme);
+      applyScale(settings.ui.scale);
+      settingsDraft = {
+        version: settings.version,
+        ui: { ...settings.ui },
+        rd: { ...settings.rd, api_token: "" },
+      };
+      settingsMessage = "設定已儲存";
+      settingsMessageKind = "ok";
+    } catch (e) {
+      settingsMessage = `儲存失敗：${e}`;
+      settingsMessageKind = "error";
+    } finally {
+      settingsSaving = false;
+    }
+  }
+
+  function revertSettingsDraft() {
+    if (!settings) return;
+    settingsDraft = {
+      version: settings.version,
+      ui: { ...settings.ui },
+      rd: { ...settings.rd, api_token: "" },
+    };
+    settingsMessage = "已還原為已儲存值";
+    settingsMessageKind = "info";
+  }
+
   async function applyLegacyImportConfirmed() {
     legacyError = "";
     legacyReport = null;
@@ -993,6 +1086,127 @@
           {/if}
           <p class="muted small">舊檔仍保留在來源位置，你可自行刪除。</p>
         </div>
+      {/if}
+    {/if}
+  </section>
+
+  <section>
+    <h2>
+      應用程式設定
+      <button
+        type="button"
+        onclick={() => {
+          if (!settingsShown) openSettingsEditor();
+          else settingsShown = false;
+        }}
+        style="margin-left: 0.5rem; font-size: 0.85rem; padding: 0.15rem 0.5rem;"
+      >{settingsShown ? "▴ 收合" : "▾ 展開"}</button>
+    </h2>
+    {#if settingsShown && settingsDraft}
+      <p class="hint">
+        編輯下列欄位後按「儲存設定」。RD Token 不在這裡管理 — 請到上方 <strong>Real-Debrid</strong> 區塊。
+      </p>
+
+      <fieldset style="border: 1px solid var(--border, #ccc); padding: 0.75rem; margin-bottom: 0.75rem;">
+        <legend>Real-Debrid 行為</legend>
+        <div class="row stack">
+          <label class="grow" for="set-file-pick">
+            檔案選擇策略（file_pick）
+            <select id="set-file-pick" bind:value={settingsDraft.rd.file_pick}>
+              {#each FILE_PICK_VALUES as v}
+                <option value={v}>{v}</option>
+              {/each}
+            </select>
+            {#if settingsErrors["rd.file_pick"]}
+              <span class="err small">{settingsErrors["rd.file_pick"]}</span>
+            {/if}
+          </label>
+        </div>
+        <div class="row stack">
+          <label class="grow" for="set-min-size">
+            最小檔案大小（MB；&lt; 此值的影片視為廣告/雜訊跳過）
+            <input
+              id="set-min-size"
+              type="number"
+              min="0"
+              step="1"
+              bind:value={settingsDraft.rd.min_size_mb}
+            />
+            {#if settingsErrors["rd.min_size_mb"]}
+              <span class="err small">{settingsErrors["rd.min_size_mb"]}</span>
+            {/if}
+          </label>
+        </div>
+        <div class="row stack">
+          <label class="grow" for="set-cache-wait">
+            快取判定等待秒數（cache_wait_seconds；≥ 5）
+            <input
+              id="set-cache-wait"
+              type="number"
+              min="5"
+              step="1"
+              bind:value={settingsDraft.rd.cache_wait_seconds}
+            />
+            {#if settingsErrors["rd.cache_wait_seconds"]}
+              <span class="err small">{settingsErrors["rd.cache_wait_seconds"]}</span>
+            {/if}
+          </label>
+        </div>
+        <div class="row stack">
+          <label class="grow" for="set-wait-timeout">
+            最長等待秒數（wait_timeout_seconds；≥ 30）
+            <input
+              id="set-wait-timeout"
+              type="number"
+              min="30"
+              step="1"
+              bind:value={settingsDraft.rd.wait_timeout_seconds}
+            />
+            {#if settingsErrors["rd.wait_timeout_seconds"]}
+              <span class="err small">{settingsErrors["rd.wait_timeout_seconds"]}</span>
+            {/if}
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset style="border: 1px solid var(--border, #ccc); padding: 0.75rem; margin-bottom: 0.75rem;">
+        <legend>介面</legend>
+        <div class="row stack">
+          <label class="grow" for="set-theme">
+            主題
+            <select id="set-theme" bind:value={settingsDraft.ui.theme}>
+              {#each THEME_VALUES as v}
+                <option value={v}>{v}</option>
+              {/each}
+            </select>
+            {#if settingsErrors["ui.theme"]}
+              <span class="err small">{settingsErrors["ui.theme"]}</span>
+            {/if}
+          </label>
+        </div>
+        <div class="row stack">
+          <label class="grow" for="set-scale">
+            縮放（scale；auto 或 0.5–3.0）
+            <select id="set-scale" bind:value={settingsDraft.ui.scale}>
+              {#each SCALE_PRESETS as v}
+                <option value={v}>{v}</option>
+              {/each}
+            </select>
+            {#if settingsErrors["ui.scale"]}
+              <span class="err small">{settingsErrors["ui.scale"]}</span>
+            {/if}
+          </label>
+        </div>
+      </fieldset>
+
+      <div class="row">
+        <button onclick={saveSettings} disabled={!settingsValid || settingsSaving}>
+          {settingsSaving ? "儲存中…" : "儲存設定"}
+        </button>
+        <button onclick={revertSettingsDraft} disabled={settingsSaving}>還原</button>
+      </div>
+      {#if settingsMessage}
+        <p class="inline-msg" data-kind={settingsMessageKind}>{settingsMessage}</p>
       {/if}
     {/if}
   </section>
