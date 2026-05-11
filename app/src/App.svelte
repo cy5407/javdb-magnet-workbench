@@ -18,6 +18,7 @@
   } from "./lib/rdSender";
   import {
     defaultFilterState,
+    type CookiesStatus,
     type CopyBulkResult,
     type CopyRdLinksBulkResult,
     type FilterState,
@@ -93,6 +94,11 @@
   let legacyError = $state("");
   let legacyShown = $state(false);
 
+  // M7b: Cookies / data-dir status
+  let cookiesStatus = $state<CookiesStatus | null>(null);
+  let cookiesShown = $state(false);
+  let cookiesError = $state("");
+
   function applyTheme(t: Theme) {
     document.documentElement.dataset.theme = t;
   }
@@ -158,6 +164,9 @@
     } catch (e) {
       console.warn("get_legacy_default_dir failed:", e);
     }
+
+    // M7b: cookies status snapshot. Best-effort.
+    await refreshCookiesStatus();
   });
 
   async function toggleTheme() {
@@ -666,6 +675,41 @@
     }
   }
 
+  // ---- M7b: Cookies / data-dir helpers --------------------------------
+  async function refreshCookiesStatus() {
+    cookiesError = "";
+    try {
+      cookiesStatus = await invoke<CookiesStatus>("get_cookies_status");
+    } catch (e) {
+      cookiesError = `讀取 cookies 狀態失敗：${e}`;
+      cookiesStatus = null;
+    }
+  }
+
+  async function openDataDir() {
+    cookiesError = "";
+    try {
+      await invoke("open_data_dir");
+    } catch (e) {
+      cookiesError = `打開資料目錄失敗：${e}`;
+    }
+  }
+
+  async function openLogsDir() {
+    cookiesError = "";
+    try {
+      await invoke("open_logs_dir");
+    } catch (e) {
+      cookiesError = `打開 logs 目錄失敗：${e}`;
+    }
+  }
+
+  function formatBytes(n: number): string {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  }
+
   async function applyLegacyImportConfirmed() {
     legacyError = "";
     legacyReport = null;
@@ -701,6 +745,9 @@
         } catch (e) {
           console.warn("pending_list after import failed:", e);
         }
+      }
+      if (legacyReport.cookies_imported) {
+        await refreshCookiesStatus();
       }
     } catch (e) {
       legacyError = `匯入失敗：${e}`;
@@ -947,6 +994,50 @@
           <p class="muted small">舊檔仍保留在來源位置，你可自行刪除。</p>
         </div>
       {/if}
+    {/if}
+  </section>
+
+  <section>
+    <h2>
+      JavDB Cookies
+      <button
+        type="button"
+        onclick={() => (cookiesShown = !cookiesShown)}
+        style="margin-left: 0.5rem; font-size: 0.85rem; padding: 0.15rem 0.5rem;"
+      >{cookiesShown ? "▴ 收合" : "▾ 展開"}</button>
+    </h2>
+    {#if cookiesShown}
+      <p class="hint">
+        JavDB 抓取需要登入後的 cookies.txt。此區只顯示路徑 / 大小 / 修改時間，
+        <strong>絕不讀取 cookies 內容</strong>。
+      </p>
+      {#if cookiesStatus}
+        <div class="inline-msg" data-kind={cookiesStatus.present ? "info" : "error"}>
+          {#if cookiesStatus.present}
+            <p>
+              <strong>✓ 已找到 cookies.txt</strong>
+              ／ 大小 {formatBytes(cookiesStatus.size_bytes)}
+              {#if cookiesStatus.modified_iso}
+                ／ 修改時間 {cookiesStatus.modified_iso.replace("T", " ").slice(0, 19)}
+              {/if}
+            </p>
+          {:else}
+            <p><strong>✗ 尚未設定 cookies.txt</strong>，JavDB 擷取會被 Cloudflare 擋下。</p>
+          {/if}
+          <p class="muted small">路徑：<code>{cookiesStatus.path}</code></p>
+          <p class="muted small">
+            ⚠ cookies 以純文字儲存，請勿分享 <code>%APPDATA%\JavDBMagnet</code> 或將該目錄同步到雲端。
+          </p>
+        </div>
+      {/if}
+      {#if cookiesError}
+        <p class="inline-msg" data-kind="error">{cookiesError}</p>
+      {/if}
+      <div class="row">
+        <button onclick={refreshCookiesStatus}>重新整理</button>
+        <button onclick={openDataDir}>打開資料目錄</button>
+        <button onclick={openLogsDir}>打開 logs 目錄</button>
+      </div>
     {/if}
   </section>
 

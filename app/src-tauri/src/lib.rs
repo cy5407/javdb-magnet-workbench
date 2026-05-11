@@ -144,6 +144,9 @@ pub fn run() {
             commands::get_legacy_default_dir,
             commands::preview_legacy_import,
             commands::apply_legacy_import,
+            commands::get_cookies_status,
+            commands::open_data_dir,
+            commands::open_logs_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
