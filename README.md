@@ -1,175 +1,303 @@
 # JavDBMagnet
 
-JavDB 磁力連結擷取與 Real-Debrid 直連產生工具。
+JavDB 磁力連結擷取 + Real-Debrid 直連產生工具（Windows 桌面版）。
 
-## 功能
+- 從 JavDB 影片頁面**批次抓取**磁力連結
+- **直接貼上 magnet**：已有連結時跳過 JavDB，直接送 Real-Debrid
+- 篩選 / 排序 / 群組去重，一鍵送 RD
+- **待處理清單**：RD 還在處理的 torrent 不卡住流程，可稍後重試
+- 全部 RD 直連一鍵複製到剪貼簿（貼進 IDM / aria2 / 任何下載器）
+- 設定面板（檔案策略、大小門檻、超時、主題、UI 縮放）
+- 從**舊版 Python GUI** 一鍵匯入 `.env` / `cookies.txt` / `pending_torrents.json`
 
-- 從 JavDB 影片頁面批次抓取磁力連結
-- 篩選器：關鍵字、HD、檔案大小範圍、每組只留指定條件
-- 一鍵批次送 Real-Debrid 取得直連下載連結
-- 智慧檔案選擇（自動跳過廣告檔案、支援多段影片）
-- 待處理清單持久化（RD 還在下載的不會卡住流程，可稍後重試）
-- 內建設定畫面（不用手動編輯 `.env`）
-- HTTP 429 自動重試
-- 完整 logging
+---
+
+## 系統需求
+
+- **Windows 10 1809+ 或 Windows 11**
+- **WebView2 Runtime**（Windows 11 已內建；Windows 10 大多也有，缺則 Tauri 安裝時會自動補裝）
+- **Real-Debrid 帳號**（送 RD 必要；只想抓磁力連結不送 RD 則不必）
+- 磁碟空間 ~40 MB（含 sidecar.exe）
+
+---
+
+## 安裝 / 使用（Portable）
+
+本專案以 **portable zip** 形式發布 —— 不寫 Program Files、不建捷徑、不碰 registry。
+
+1. 從 GitHub Release 下載 `JavDBMagnet_<version>_portable.zip`
+2. 解壓到任意資料夾，例如：
+   ```
+   C:\Tools\JavDBMagnet\
+   ```
+3. 雙擊資料夾內：
+   ```
+   javdbmagnet.exe
+   ```
+4. **不要把 `sidecar.exe` 刪掉或搬走** —— 它是 JavDB / Real-Debrid HTTP sidecar，缺一不可。
+
+### 系統狀態
+
+此版本**不會**：
+
+- 寫入 `Program Files`
+- 建立開始選單 / 桌面捷徑
+- 寫入 Windows installer registry（不會出現在「新增或移除程式」清單）
+
+但仍會在以下位置寫使用者資料（見下方「資料位置」）：
+
+- `%APPDATA%\JavDBMagnet`
+- `%LOCALAPPDATA%\JavDBMagnet`
+- Windows Credential Manager（target name `JavDBMagnet/RD_API_TOKEN`）
+
+### 移除方式
+
+刪除解壓後的 JavDBMagnet 資料夾即可移除程式本體。
+
+要連同個人資料一起清掉：
+
+```powershell
+Remove-Item "$env:APPDATA\JavDBMagnet" -Recurse -Force
+Remove-Item "$env:LOCALAPPDATA\JavDBMagnet" -Recurse -Force
+cmdkey /delete:JavDBMagnet/RD_API_TOKEN
+```
+
+### Windows SmartScreen / Defender 警告
+
+第一次執行可能跳「Windows 已保護你的電腦」藍色警告 —— exe **未做 code signing**（個人專案、無 cert）。先比對 SHA256（每個 release 都附 `SHA256SUMS.txt`），再按：
+
+1. 「**更多資訊**」
+2. 「**仍要執行**」
+
+```powershell
+# 比對 zip 與兩個 exe 的 SHA256
+Get-FileHash -Algorithm SHA256 .\JavDBMagnet_*_portable.zip
+Get-FileHash -Algorithm SHA256 .\JavDBMagnet\javdbmagnet.exe
+Get-FileHash -Algorithm SHA256 .\JavDBMagnet\sidecar.exe
+```
 
 ---
 
 ## 第一次使用
 
-把整個資料夾放到任何位置（例如桌面）。資料夾應該長這樣：
+### 1. 設定 Real-Debrid Token
 
-```
-JavDBMagnet/
-├── JavDBMagnet.exe         ← 主程式
-├── .env.example            ← 設定檔範本
-├── README.md               ← 本文件
-│
-├── .env                    ← 在「設定」視窗按儲存後產生／更新（首次啟動不會自動產生）
-├── cookies.txt             ← 需要使用者手動建立（步驟 2）
-├── logs/                   ← 程式執行時自動產生（debug.log）
-└── pending_torrents.json   ← 送 RD 過程中自動產生的待處理清單
-```
+1. 打開 [real-debrid.com/apitoken](https://real-debrid.com/apitoken)，登入後複製 token
+2. 在 app 內 **Real-Debrid** 區塊，輸入欄填入 token
+3. 按「**測試連線**」確認（會顯示帳號 / 到期日 / 點數）
+4. 按「**儲存**」
 
-### 步驟 1：執行程式並設定 Real-Debrid Token
+Token 會存進 **Windows Credential Manager**（target name `JavDBMagnet/RD_API_TOKEN`），**絕不會寫入 `settings.json` 或任何純文字檔**。下次啟動自動載入。
 
-1. 雙擊 `JavDBMagnet.exe`
-2. 按右側的「**設定**」按鈕
-3. 在「Real-Debrid」區塊：
-   - 點擊「🔗 點此取得 / 重設 Token」會開瀏覽器
-   - 登入你的 RD 帳號後複製 token
-   - 貼回設定視窗的 `API Token` 欄位
-   - 按「**測試連線**」確認 token 正確（會顯示帳號、到期日、點數）
-   - 按「**儲存**」
+### 2. 取得 JavDB cookies
 
-設定畫面也可以調整：
-- **檔案選擇策略**（預設 `smart`）
-- **最小檔案大小** 門檻（預設 500MB）
-- **快取等待秒數**（預設 15 秒）
-- **超時時間**（預設 300 秒）
-- **UI 縮放**（`auto` 依系統 DPI；或手動指定 `1.0`/`1.25`/`1.5`/`2.0` 等倍率，4K 螢幕建議 1.5–2.0）
-- **主題**（`light` 或 `dark`，修改後重新啟動程式生效）
+JavDB 需要登入後的 cookie 才能看到磁力連結。
 
-### 步驟 2：取得 JavDB cookie（讓你能看到磁力連結）
+1. 用瀏覽器登入 [javdb.com](https://javdb.com)
+2. 按 **F12** 開啟開發者工具 → **Network** → 重新整理頁面 → 點任一 request → **Request Headers** → 找到 `Cookie:` 整行
+3. 複製整行內容（應包含 `_jdb_session`、`cf_clearance`、`locale` 等 cookie 名稱）
+4. 在 app 內按「**JavDB Cookies**」展開 → 「打開資料目錄」
+5. 在跳出的資料夾建立新檔 **`cookies.txt`**，貼上剛複製的內容
+6. 回到 app 按「**重新整理**」，看到 `✓ 已找到 cookies.txt` 即可
 
-1. 用瀏覽器登入 https://javdb.com
-2. 按 **F12** 開啟開發者工具 → **應用程式 (Application)** → **Cookies** → 點 javdb 網址
-3. 在程式資料夾建立 `cookies.txt`，把以下三個 cookie 用分號連接貼進去（用 Network 分頁的 Request Headers `Cookie:` 整行直接複製也可以）：
+cookies 路徑會是：`%APPDATA%\JavDBMagnet\cookies.txt`
 
-```
-_jdb_session=xxxxx; cf_clearance=xxxxx; locale=zh
-```
+> ⚠ **`cf_clearance` 約幾小時後過期**，看到 Cloudflare 阻擋時重新取一次即可。詳見 [troubleshooting/cloudflare.md](docs/troubleshooting/cloudflare.md)。
 
-> ⚠️ `cf_clearance` 幾小時會過期，失效時重新取一次即可。
+### 3. 試跑
+
+把任一 JavDB 影片頁面 URL 貼到「**批次擷取**」textarea，按「開始擷取」。看到磁力出現在下方表格 = 整條鏈路（cookies → JavDB → 解析 → handle_id → UI）都通了。
 
 ---
 
-## 使用流程
+## 資料位置
 
-### 1. 抓磁力
+| 內容 | 路徑 |
+|---|---|
+| Settings | `%APPDATA%\JavDBMagnet\settings.json` |
+| Cookies | `%APPDATA%\JavDBMagnet\cookies.txt` |
+| Pending torrents | `%APPDATA%\JavDBMagnet\pending_torrents.json` |
+| Logs（含 sidecar debug.log） | `%LOCALAPPDATA%\JavDBMagnet\logs\` |
+| RD Token | Windows Credential Manager（**非檔案**） |
 
-1. 上方文字框貼入 JavDB 影片頁面網址（每行一個），例如：
-   ```
-   https://javdb.com/v/RkX3Rp
-   https://javdb.com/v/AqnZBM
-   ```
-2. 按「**開始擷取**」
+app 內「JavDB Cookies」區塊有「**打開資料目錄**」與「**打開 logs 目錄**」按鈕，不必手敲路徑。
 
-### 2. 篩選
+### 不要 commit / 分享這些檔案
 
-抓完後可以用篩選列縮小範圍：
+- `.env`、`.env.*`、`cookies.txt`：含登入憑證
+- `pending_torrents.json`：含你曾經送過 RD 的 torrent id（可能透露你下載偏好）
+- `logs/`：含 timestamped diagnostic 資料
 
-| 篩選項 | 說明 |
-|------|------|
-| **關鍵字** | 即時過濾，輸入即生效 |
-| **只顯示高清** | 跳過低品質磁力 |
-| **最小/最大大小 (GB)** | 例如 `2` 只看 2GB 以上 |
-| **每組只留** | 每部影片只保留檔案最大的、最小的、或檔案數最少的 |
-
-### 3. 送 Real-Debrid
-
-按「**送至 Real-Debrid**」，跳出視窗會：
-
-- 自動帶入剛抓到的所有磁力（可手動刪減）
-- 也可切換成「自行貼上磁力連結」模式，貼任何 magnet 連結
-- 選擇檔案策略（預設 `smart`）
-
-按「送出」後開始批次處理：
-
-- 已快取（其他 RD 用戶下載過）→ **立刻取得直連** ✅
-- 未快取（RD 還在下載）→ **跳過，加入待處理清單** ⏳
-- 全部處理完會顯示成功/待處理數量
-
-### 4. 重試待處理
-
-對於 RD 還在下載的磁力，按「**重試待處理**」：
-
-- 自動檢查所有待處理 torrent 的最新狀態
-- 已完成 → 取得連結並從清單移除
-- 還在下載 → 顯示 RD 端進度（%）
-- 找不到（已被刪除/過期） → 從清單移除
-
-### 5. 拿連結
-
-- 雙擊任何一筆下載連結 → 複製到剪貼簿
-- 按「**複製全部下載連結**」 → 一次複製所有
-- 把連結貼到瀏覽器或下載工具（IDM、JDownloader 等）即可下載
+Repo 的 `.gitignore` 已擋下以上路徑，但若你的工作目錄外另有備份 / 雲端同步，請手動排除。
 
 ---
 
-## 檔案選擇策略說明
+## 從舊版 Python GUI 升級
 
-| 策略 | 邏輯 | 適用 |
-|------|------|------|
-| **smart** ⭐ | 先用磁力番號（如 SNOS-192）比對檔名；找不到番號退回 size 門檻 | 預設，最聰明 |
-| **largest** | 只選最大的影片檔 | 一片一檔，不會有多段 |
-| **video** | 所有影片副檔名（不過濾大小） | 想要連花絮一起抓 |
-| **all** | 全部檔案（含 .url 廣告） | 特殊用途 |
+若你有用過舊版 tkinter GUI（M1 時期），app 內「**匯入舊版資料**」區塊可以一鍵搬：
 
-`smart` 邏輯範例：
+1. 展開「匯入舊版資料」
+2. 路徑填舊 GUI 的資料夾（含 `.env` / `cookies.txt` / `pending_torrents.json`）
+3. 按「**預覽**」確認偵測到的檔案
+4. 按「**匯入**」
 
-```
-磁力 dn=[javdb.com]SNOS-192 → 抽出番號 "SNOS-192"
+匯入規則（防止 token / magnet 落地的安全保證）：
 
-torrent 內檔案：
-├─ 4k2.me@snos-192.mp4 (5.90GB)  ✅ 含 snos-192 → 選
-├─ 三上悠亚直播.mp4 (0.02GB)     ❌ 不含番號 → 跳過（廣告）
-└─ 廣告網站.url (0.00GB)         ❌ 不含番號 → 跳過
-```
+- `.env` 內 `RD_API_TOKEN` → Windows Credential Manager（**不**寫入 settings.json）
+- `.env` 其他設定（`RD_FILE_PICK`、`RD_MIN_SIZE_MB`、`RD_WAIT_TIMEOUT`、`RD_CACHE_WAIT`、`UI_SCALE`、`UI_THEME`）→ settings.json
+- `cookies.txt` → 複製到 app 資料目錄
+- `pending_torrents.json` → 匯入並**自動移除 magnet 欄位**，依 torrent_id 去重
 
-對動畫等沒有 JAV 番號的磁力，會自動退回 size 門檻（預設 500MB），仍能正確過濾廣告檔案。
+舊檔案不會被刪除，匯入完你可以手動清掉。
+
+---
+
+## 設定
+
+「**應用程式設定**」展開後可編：
+
+| 欄位 | 預設 | 說明 |
+|---|---|---|
+| `file_pick` | `smart` | RD 端檔案選擇策略：smart / largest / video / all |
+| `min_size_mb` | `500` | 小於此值的影片視為廣告/雜訊跳過 |
+| `cache_wait_seconds` | `15` | 等 RD 判定快取的秒數（最小 5） |
+| `wait_timeout_seconds` | `300` | 整體 RD 處理超時（最小 30） |
+| `theme` | `light` | `light` / `dark` |
+| `scale` | `auto` | UI 縮放：`auto` 或 0.5–3.0；4K 螢幕建議 1.5–2.0 |
+
+按「儲存設定」後立即推到 sidecar，**本次工作階段就生效**，不必重啟 app。
+
+---
+
+## 安全模型
+
+| 規則 | 機制 |
+|---|---|
+| RD token 絕不寫純文字檔 | Windows Credential Manager（keyring crate），`settings.json` 的 `rd.api_token` 永遠空字串 |
+| 完整 magnet 不外洩到 frontend / settings / pending JSON / log | sidecar 用 `handle_id` 引用；只在 Rust transient String（剪貼簿寫入時）與 RD HTTP body 短暫存在 |
+| `pending_torrents.json` 不含 magnet 文字 | 由 Rust `entries_have_no_magnet_field` 單元測試守住 |
+| `debug.log` 不含 BTIH hash | `realdebrid.py::_request` 對 `data["magnet"]` 永遠記 `<redacted>` |
+| Clipboard 寫入集中在 Rust | frontend 不直接 import `tauri-plugin-clipboard-manager` |
+| capability 最小化 | `capabilities/default.json` 只開 `core:default` |
+
+詳細的 release 階段 audit 見 [docs/sessions/m6a-release-smoke.md](docs/sessions/m6a-release-smoke.md)。
 
 ---
 
 ## 疑難排解
 
-| 症狀 | 解法 |
-|------|------|
-| 抓不到磁力 | 確認 `cookies.txt` 是有效登入 cookie，`cf_clearance` 沒過期 |
-| `RD_API_TOKEN 未設定` | 按「設定」→ 貼上 token → 儲存 |
-| HTTP 429 | 程式會自動重試，若仍失敗請隔幾分鐘再試 |
-| 待處理一直不動 | RD 那邊在從 BT 下載，通常 5-15 分鐘，按「重試待處理」檢查 |
-| 程式無法執行 | Windows Defender 可能誤判，加入信任清單 |
+每條 recipe 一頁，列出**症狀** / **常見根因** / **檢查指令** / **修復步驟**。
 
-按「**查看日誌**」按鈕可開啟 log 檔，遇到問題時可貼給作者協助排查。
-
----
-
-## 檔案說明
-
-| 檔案 | 說明 | 是否手動編輯 |
-|------|------|-------------|
-| `JavDBMagnet.exe` | 主程式 | 不要動 |
-| `.env` | RD token 與設定（用「設定」按鈕編輯） | ❌ 不需手動 |
-| `.env.example` | 設定範本 | ❌ 不需動 |
-| `cookies.txt` | JavDB 登入 cookie | ✏️ 必填 |
-| `pending_torrents.json` | 待處理清單（程式自動產生） | ❌ 不需動 |
-| `logs/debug.log` | 執行日誌（程式自動產生） | 出問題時貼給作者 |
+| 症狀 | recipe |
+|---|---|
+| 抓 JavDB 失敗、Cloudflare 阻擋 | [cloudflare.md](docs/troubleshooting/cloudflare.md) |
+| RD token 顯示 invalid / 401 | [rd-token.md](docs/troubleshooting/rd-token.md) |
+| 送 RD 完了沒有任何直連 / 全部 pending | [no-pending-links.md](docs/troubleshooting/no-pending-links.md) |
+| 想確認 `debug.log` 沒洩漏 magnet hash | [log-redaction-verification.md](docs/troubleshooting/log-redaction-verification.md) |
 
 ---
 
-## 安全性提醒
+## 開發 / 自行 build
 
-- `cookies.txt` 含登入憑證，**不要分享**
-- `.env` 含 RD API Token，**不要分享**
-- token 洩漏時可在 RD 後台重新產生，舊的會自動失效
+### 環境
+
+- Windows 10/11
+- Node 20+ / npm
+- Rust stable + MSVC toolchain
+- Python 3.12（sidecar 用 PyInstaller 打包，所以需要 Python 來執行 build script；end-user 的 portable zip 內 `sidecar.exe` 已是 standalone，**執行**不需要 Python）
+
+### 安裝依賴
+
+```powershell
+cd app
+npm install
+```
+
+第一次跑 Rust 依賴會下載 + 編譯 ~5 分鐘。
+
+### Dev 模式（hot reload）
+
+```powershell
+cd app
+npm run tauri:dev
+```
+
+會打包 sidecar → 啟動 Vite → 起 Tauri WebView。前端改檔自動 reload，sidecar / Rust 改要 Ctrl-C 後重跑。
+
+### 出 portable zip（一條命令）
+
+```powershell
+cd app
+npm run release
+```
+
+`scripts/build-release.ps1` 會：
+
+1. PyInstaller 打包 `sidecar.exe`
+2. Vite 前端 build
+3. `cargo build --release` 產 `javdbmagnet.exe`（不走 Tauri bundler、不產 MSI/NSIS）
+4. 在 `release/JavDBMagnet/` 暫存 `javdbmagnet.exe` + `sidecar.exe` + `README.txt`
+5. Staging 白名單稽核（只允許上述 3 個檔；其他任何檔案 → fail）
+6. 兩個 exe 內容掃 secret pattern（BTIH hash、Cloudflare cookie、Bearer token、RD token、magnet URI）→ 命中即 fail
+7. 掃描本次變更的 source/docs 是否含 secret pattern
+8. `Compress-Archive` 產 `release/JavDBMagnet_<version>_portable.zip`（zip root 為 `JavDBMagnet/`）
+9. 算 SHA256（portable.zip / javdbmagnet.exe / sidecar.exe），寫入 `release/SHA256SUMS.txt`
+10. 寫 release manifest 到 `release/release-manifest.json`（`"bundle": "portable-zip"`）
+11. 最後列印所有 artifact 路徑
+
+任何 audit / scan 失敗 → script exit 1。
+
+> Code signing 尚未實作。設 `$env:SIGN="1"` 跑 script 會看到 placeholder 提示；要實際簽章需在 script 內串你的 `signtool.exe` / `osslsigncode`。
+>
+> 想直接用 Tauri bundler 出 MSI 做測試 → `npm run tauri:build`（仍依 `tauri.conf.json` 內 `bundle.targets`）。日常 release 不走這條。
+
+### 測試
+
+```powershell
+cd app
+npm run test           # Vitest（前端）
+npm run check          # svelte-check（型別）
+cargo test --lib       # Rust 單元測試
+# 在 repo root：
+python -m unittest discover -s tests
+```
+
+### Repo 結構
+
+```
+.
+├─ app/                   ← Tauri + Svelte 前端
+│  ├─ src/                ← Svelte component + lib (scraper / rdSender / settingsValidation / ...)
+│  ├─ src-tauri/          ← Rust 後端
+│  │  ├─ src/
+│  │  │  ├─ commands.rs       ← Tauri IPC commands
+│  │  │  ├─ legacy_import.rs  ← M7a 舊資料匯入
+│  │  │  ├─ secret_store.rs   ← keyring wrapper
+│  │  │  ├─ pending.rs        ← pending_torrents.json
+│  │  │  └─ ...
+│  │  ├─ capabilities/
+│  │  └─ tauri.conf.json
+│  └─ package.json
+├─ sidecar/               ← Python sidecar daemon（JavDB 抓取 + RD API）
+│  └─ sidecar.py
+├─ spikes/                ← 早期技術驗證（rust_fetch / rquest / pyinstaller_sidecar / tauri_sidecar_poc）
+├─ scripts/
+│  └─ build-release.ps1   ← 一條命令 release pipeline
+├─ tests/                 ← Python unittest
+└─ docs/
+   ├─ architecture/
+   ├─ sessions/
+   └─ troubleshooting/
+```
+
+---
+
+## License
+
+私人專案，未發布 license。
+
+---
+
+## 提醒
+
+`cookies.txt` 含登入憑證，請勿分享 `%APPDATA%\JavDBMagnet`、不要把該目錄同步到雲端、不要 commit 整顆資料夾。
