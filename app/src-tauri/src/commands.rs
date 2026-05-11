@@ -855,6 +855,32 @@ pub fn get_cookies_status(path_manager: State<PathManager>) -> CookiesStatus {
     cookies_status_for(&path_manager.data_dir)
 }
 
+/// Push the latest persisted settings to the running sidecar so this
+/// session reflects the change without an app restart. Caller is the
+/// frontend's settings editor; the settings have already been validated
+/// + saved via `write_settings`. We always force `rd.api_token` to ""
+/// in the outgoing payload as a belt-and-suspenders rule even though
+/// `write_settings`/`read_settings` already enforce it.
+#[tauri::command]
+pub async fn update_sidecar_settings(
+    sidecar: State<'_, SidecarManager>,
+    settings: Value,
+) -> Result<(), String> {
+    let mut sanitized = settings;
+    if let Some(rd) = sanitized.get_mut("rd").and_then(Value::as_object_mut) {
+        if let Some(t) = rd.get_mut("api_token") {
+            *t = Value::String(String::new());
+        }
+    }
+    let resp = sidecar
+        .request("update_settings", json!({ "settings": sanitized }))
+        .await?;
+    if !resp.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        return Err(_err_code(&resp));
+    }
+    Ok(())
+}
+
 /// Open the configured data directory in the OS file manager. Uses
 /// `explorer.exe` directly so we don't need a new IPC capability for
 /// `tauri-plugin-shell.open` — the call is Rust-side only.
