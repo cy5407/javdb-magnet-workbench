@@ -25,6 +25,11 @@ release/
 *.spec
 *.7z
 
+# Cargo isolated target dir used by the release script and standalone
+# cargo check runs when the default target/ is locked by a running
+# dev server. Never commit these — they can balloon to several GB.
+.cargo-check-target/
+
 # IDE
 .vscode/
 .idea/

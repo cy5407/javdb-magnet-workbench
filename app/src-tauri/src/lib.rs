@@ -145,6 +145,7 @@ pub fn run() {
             commands::preview_legacy_import,
             commands::apply_legacy_import,
             commands::get_cookies_status,
+            commands::create_cookies_template,
             commands::open_data_dir,
             commands::open_logs_dir,
             commands::update_sidecar_settings,
