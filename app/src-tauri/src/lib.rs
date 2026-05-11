@@ -1,6 +1,7 @@
 mod commands;
 mod path_manager;
 mod pending;
+mod legacy_import;
 mod secret_store;
 mod settings;
 mod sidecar_manager;
@@ -140,6 +141,9 @@ pub fn run() {
             commands::pending_list,
             commands::pending_remove,
             commands::pending_clear,
+            commands::get_legacy_default_dir,
+            commands::preview_legacy_import,
+            commands::apply_legacy_import,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

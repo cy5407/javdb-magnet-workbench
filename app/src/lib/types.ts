@@ -67,6 +67,38 @@ export interface CopyRdLinksBulkResult {
   copied: number;
 }
 
+// ---------------------------------------------------------------------------
+// M7a-lite: Manual legacy data import
+//
+// `preview_legacy_import` and `apply_legacy_import` are user-triggered.
+// Neither echoes a token, magnet, or cookie value back to the WebView —
+// these shapes carry only counts, key NAMES, and source paths.
+// ---------------------------------------------------------------------------
+
+export interface LegacyImportPreview {
+  source_dir: string;
+  source_dir_valid: boolean;
+  env_present: boolean;
+  cookies_present: boolean;
+  pending_present: boolean;
+  /** Recognized non-secret keys found in legacy .env (no values). */
+  env_settings_keys: string[];
+  /** True if .env contains a non-empty RD_API_TOKEN. Value is NOT exposed. */
+  has_rd_token: boolean;
+  pending_count: number;
+  warnings: string[];
+}
+
+export interface LegacyImportReport {
+  env_imported: boolean;
+  rd_token_imported: boolean;
+  cookies_imported: boolean;
+  pending_imported: number;
+  pending_skipped: number;
+  sources: string[];
+  warnings: string[];
+}
+
 /**
  * One scraped JavDB page = one group in the results tree.
  * `error` populated when the fetch failed; `result` populated on success.

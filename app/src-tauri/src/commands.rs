@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri_plugin_store::StoreExt;
 
+use crate::legacy_import::{self, LegacyImportPreview, LegacyImportReport};
 use crate::path_manager::PathManager;
 use crate::pending::{self, PendingEntry};
 use crate::secret_store;
@@ -584,4 +586,215 @@ pub async fn pending_remove(
 #[tauri::command]
 pub async fn pending_clear(path_manager: State<'_, PathManager>) -> Result<(), String> {
     pending::clear(&path_manager.data_dir)
+}
+
+// ===========================================================================
+// M7a-lite: Manual legacy data import
+//
+// Both commands require an explicit `source_dir` from the user. There is
+// NO auto-discovery on app launch. The `get_legacy_default_dir` command
+// exists purely so dev/test runs can pre-fill the input via the
+// JAVDB_LEGACY_IMPORT_DIR environment variable; the value is never read
+// without an explicit user action ("preview" / "apply" button).
+// ===========================================================================
+
+/// Returns the value of `JAVDB_LEGACY_IMPORT_DIR` if set, else empty
+/// string. Used by the frontend to pre-fill the legacy-import path
+/// input during dev/test. No file I/O.
+#[tauri::command]
+pub fn get_legacy_default_dir() -> String {
+    std::env::var("JAVDB_LEGACY_IMPORT_DIR").unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn preview_legacy_import(source_dir: String) -> Result<LegacyImportPreview, String> {
+    let trimmed = source_dir.trim();
+    if trimmed.is_empty() {
+        return Err("source_dir is empty".to_string());
+    }
+    Ok(legacy_import::preview(std::path::Path::new(trimmed)))
+}
+
+#[tauri::command]
+pub async fn apply_legacy_import(
+    app: AppHandle,
+    path_manager: State<'_, PathManager>,
+    sidecar: State<'_, SidecarManager>,
+    source_dir: String,
+) -> Result<LegacyImportReport, String> {
+    use std::path::Path;
+
+    let trimmed = source_dir.trim();
+    if trimmed.is_empty() {
+        return Err("source_dir is empty".to_string());
+    }
+    let src = Path::new(trimmed);
+    if !src.is_dir() {
+        return Err(format!(
+            "source_dir is not a directory: {}",
+            src.display()
+        ));
+    }
+    // Refuse to import from our own data dir — would degenerate into a
+    // self-copy and confuse the report.
+    if src
+        .canonicalize()
+        .ok()
+        .and_then(|s| path_manager.data_dir.canonicalize().ok().map(|d| s == d))
+        .unwrap_or(false)
+    {
+        return Err("source_dir must not be the app data directory".to_string());
+    }
+
+    let mut report = LegacyImportReport::default();
+    let preview = legacy_import::preview(src);
+    report.warnings.extend(preview.warnings.clone());
+
+    // ---- .env import ----
+    if preview.env_present {
+        match std::fs::read_to_string(src.join(legacy_import::LEGACY_ENV_FILE)) {
+            Ok(s) => {
+                let parsed = legacy_import::parse_env(&s);
+                report.warnings.extend(
+                    parsed
+                        .warnings
+                        .iter()
+                        .map(|w| format!(".env: {w}")),
+                );
+
+                // RD token → credential store + propagate to sidecar.
+                // NEVER written to settings.json.
+                if let Some(token) = parsed.token.as_deref() {
+                    if let Err(e) = secret_store::set_rd_token(token) {
+                        report.warnings.push(format!("credential store: {e}"));
+                    } else {
+                        let payload = json!({ "token": token });
+                        match sidecar.request("rd_set_token", payload).await {
+                            Ok(resp) => {
+                                if resp
+                                    .get("ok")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(false)
+                                {
+                                    report.rd_token_imported = true;
+                                    report
+                                        .sources
+                                        .push(format!("{}/.env (RD_API_TOKEN)", src.display()));
+                                } else {
+                                    report.warnings.push(format!(
+                                        "sidecar rd_set_token: {}",
+                                        _err_code(&resp)
+                                    ));
+                                }
+                            }
+                            Err(e) => report.warnings.push(format!("sidecar: {e}")),
+                        }
+                    }
+                }
+
+                // Non-secret settings → patch + save via tauri-plugin-store.
+                if !parsed.settings_patch.is_empty() {
+                    let store_path = path_manager.data_dir.join(crate::STORE_FILE);
+                    match app.store(&store_path) {
+                        Ok(store) => {
+                            // Start from current settings JSON (or defaults).
+                            let mut base = store.get("settings").unwrap_or_else(|| {
+                                serde_json::to_value(crate::settings::Settings::default())
+                                    .unwrap_or(Value::Null)
+                            });
+                            legacy_import::apply_settings_patch(&mut base, &parsed.settings_patch);
+                            // Belt + suspenders: confirm api_token blank.
+                            if let Some(rd) =
+                                base.get_mut("rd").and_then(Value::as_object_mut)
+                            {
+                                if let Some(t) = rd.get_mut("api_token") {
+                                    *t = Value::String(String::new());
+                                }
+                            }
+                            store.set("settings", base);
+                            if let Err(e) = store.save() {
+                                report.warnings.push(format!("settings save: {e}"));
+                            } else {
+                                report.env_imported = true;
+                                report
+                                    .sources
+                                    .push(format!("{}/.env (settings)", src.display()));
+                            }
+                        }
+                        Err(e) => report.warnings.push(format!("settings store: {e}")),
+                    }
+                }
+            }
+            Err(e) => report.warnings.push(format!("read .env failed: {e}")),
+        }
+    }
+
+    // ---- cookies.txt import ----
+    if preview.cookies_present {
+        let src_cookies = src.join(legacy_import::LEGACY_COOKIES_FILE);
+        let dst_cookies = path_manager
+            .data_dir
+            .join(legacy_import::LEGACY_COOKIES_FILE);
+        if let Err(e) = std::fs::create_dir_all(&path_manager.data_dir) {
+            report.warnings.push(format!("mkdir data_dir: {e}"));
+        }
+        // Refuse to copy onto itself if the user pointed at data_dir.
+        let same = src_cookies
+            .canonicalize()
+            .ok()
+            .and_then(|s| dst_cookies.canonicalize().ok().map(|d| s == d))
+            .unwrap_or(false);
+        if same {
+            report
+                .warnings
+                .push("cookies.txt: source and destination are the same path".into());
+        } else {
+            match std::fs::copy(&src_cookies, &dst_cookies) {
+                Ok(_) => {
+                    report.cookies_imported = true;
+                    // The running sidecar received its cookies during the
+                    // startup handshake and does not re-read cookies.txt.
+                    // Keep this as an explicit report warning instead of
+                    // silently implying the new JavDB session is live now.
+                    report.warnings.push(
+                        "cookies.txt imported; restart the app before JavDB fetch uses the new cookies"
+                            .into(),
+                    );
+                    report
+                        .sources
+                        .push(format!("{}/cookies.txt", src.display()));
+                }
+                Err(e) => report.warnings.push(format!("cookies copy: {e}")),
+            }
+        }
+    }
+
+    // ---- pending_torrents.json import ----
+    if preview.pending_present {
+        let src_pending = src.join(legacy_import::LEGACY_PENDING_FILE);
+        match std::fs::read_to_string(&src_pending) {
+            Ok(raw) => match pending::load(&path_manager.data_dir) {
+                Ok(existing) => match legacy_import::merge_legacy_pending(&raw, &existing) {
+                    Ok((merged, imported, skipped)) => {
+                        match pending::save(&path_manager.data_dir, &merged) {
+                            Ok(_) => {
+                                report.pending_imported = imported;
+                                report.pending_skipped = skipped;
+                                report.sources.push(format!(
+                                    "{}/pending_torrents.json",
+                                    src.display()
+                                ));
+                            }
+                            Err(e) => report.warnings.push(format!("pending save: {e}")),
+                        }
+                    }
+                    Err(e) => report.warnings.push(format!("pending merge: {e}")),
+                },
+                Err(e) => report.warnings.push(format!("pending load (existing): {e}")),
+            },
+            Err(e) => report.warnings.push(format!("read pending JSON failed: {e}")),
+        }
+    }
+
+    Ok(report)
 }

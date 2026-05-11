@@ -21,6 +21,8 @@
     type CopyBulkResult,
     type CopyRdLinksBulkResult,
     type FilterState,
+    type LegacyImportPreview,
+    type LegacyImportReport,
     type GroupPick,
     type MagnetRow,
     type PathInfo,
@@ -83,6 +85,14 @@
   let isRetryingPending = $state(false);
   let retryAbort: AbortController | null = null;
 
+  // M7a-lite: Manual legacy data import
+  let legacyPath = $state("");
+  let legacyPreview = $state<LegacyImportPreview | null>(null);
+  let legacyReport = $state<LegacyImportReport | null>(null);
+  let legacyBusy = $state(false);
+  let legacyError = $state("");
+  let legacyShown = $state(false);
+
   function applyTheme(t: Theme) {
     document.documentElement.dataset.theme = t;
   }
@@ -135,6 +145,18 @@
       pendingEntries = await invoke<PendingEntry[]>("pending_list");
     } catch (e) {
       console.warn("pending_list failed:", e);
+    }
+
+    // M7a-lite: pre-fill legacy import path from env var if dev/test set it.
+    // The env var itself NEVER triggers an import; only pre-fills the input.
+    try {
+      const def = await invoke<string>("get_legacy_default_dir");
+      if (def && def.trim().length > 0) {
+        legacyPath = def;
+        legacyShown = true;
+      }
+    } catch (e) {
+      console.warn("get_legacy_default_dir failed:", e);
     }
   });
 
@@ -617,6 +639,76 @@
     retryAbort?.abort();
   }
 
+  // ---- M7a-lite: Manual legacy data import ----------------------------
+  // User-triggered only. Preview reads files but never echoes secret
+  // values back to the WebView. Apply writes through Rust commands
+  // (credential store + tauri-plugin-store + pending JSON) and reports
+  // counts only.
+
+  async function previewLegacyImport() {
+    legacyError = "";
+    legacyReport = null;
+    legacyPreview = null;
+    const dir = legacyPath.trim();
+    if (!dir) {
+      legacyError = "請先輸入 legacy 資料夾路徑";
+      return;
+    }
+    legacyBusy = true;
+    try {
+      legacyPreview = await invoke<LegacyImportPreview>("preview_legacy_import", {
+        sourceDir: dir,
+      });
+    } catch (e) {
+      legacyError = `預覽失敗：${e}`;
+    } finally {
+      legacyBusy = false;
+    }
+  }
+
+  async function applyLegacyImportConfirmed() {
+    legacyError = "";
+    legacyReport = null;
+    const dir = legacyPath.trim();
+    if (!dir) {
+      legacyError = "請先輸入 legacy 資料夾路徑";
+      return;
+    }
+    legacyBusy = true;
+    try {
+      legacyReport = await invoke<LegacyImportReport>("apply_legacy_import", {
+        sourceDir: dir,
+      });
+      // Refresh derived UI state that may have changed.
+      if (legacyReport.rd_token_imported) {
+        rdHasToken = true;
+      }
+      if (legacyReport.env_imported) {
+        try {
+          settings = await invoke<Settings>("read_settings");
+          if (settings) {
+            theme = settings.ui.theme as Theme;
+            applyTheme(theme);
+            applyScale(settings.ui.scale);
+          }
+        } catch (e) {
+          console.warn("read_settings after import failed:", e);
+        }
+      }
+      if (legacyReport.pending_imported > 0) {
+        try {
+          pendingEntries = await invoke<PendingEntry[]>("pending_list");
+        } catch (e) {
+          console.warn("pending_list after import failed:", e);
+        }
+      }
+    } catch (e) {
+      legacyError = `匯入失敗：${e}`;
+    } finally {
+      legacyBusy = false;
+    }
+  }
+
   async function removePending(torrent_id: string) {
     try {
       pendingEntries = await invoke<PendingEntry[]>("pending_remove", {
@@ -741,6 +833,120 @@
     </div>
     {#if rdMessage}
       <p class="status">{rdMessage}</p>
+    {/if}
+  </section>
+
+  <section>
+    <h2>
+      匯入舊版資料
+      <button
+        type="button"
+        onclick={() => (legacyShown = !legacyShown)}
+        style="margin-left: 0.5rem; font-size: 0.85rem; padding: 0.15rem 0.5rem;"
+      >{legacyShown ? "▴ 收合" : "▾ 展開"}</button>
+    </h2>
+    {#if legacyShown}
+      <p class="hint">
+        從舊版 Python GUI 目錄匯入 <code>.env</code> / <code>cookies.txt</code> /
+        <code>pending_torrents.json</code>。RD token 會放進系統憑證管理員、不寫入 settings.json；
+        pending 匯入時會自動移除舊的 magnet 欄位。**舊檔不會被刪除**，匯入完成後你可自行刪除。
+      </p>
+      <div class="row">
+        <input
+          type="text"
+          class="grow"
+          bind:value={legacyPath}
+          placeholder="例如：C:\Users\you\Desktop\程式語言\爬蟲"
+          spellcheck="false"
+          disabled={legacyBusy}
+        />
+        <button onclick={previewLegacyImport} disabled={legacyBusy || !legacyPath.trim()}>
+          {legacyBusy ? "處理中…" : "預覽"}
+        </button>
+        <button
+          onclick={applyLegacyImportConfirmed}
+          disabled={legacyBusy || !legacyPreview || !legacyPreview.source_dir_valid}
+        >
+          匯入
+        </button>
+      </div>
+      {#if legacyError}
+        <p class="inline-msg" data-kind="error">{legacyError}</p>
+      {/if}
+      {#if legacyPreview}
+        <div class="inline-msg" data-kind={legacyPreview.source_dir_valid ? "info" : "error"}>
+          <strong>預覽：{legacyPreview.source_dir}</strong>
+          {#if !legacyPreview.source_dir_valid}
+            <p>路徑不存在或不是資料夾。</p>
+          {:else}
+            <ul>
+              <li>
+                .env：{legacyPreview.env_present ? "存在" : "（無）"}
+                {#if legacyPreview.env_present}
+                  ／RD_API_TOKEN：{legacyPreview.has_rd_token ? "✓（會移入憑證管理員）" : "（無）"}
+                  ／可匯入設定鍵：{legacyPreview.env_settings_keys.length > 0
+                    ? legacyPreview.env_settings_keys.join(", ")
+                    : "（無）"}
+                {/if}
+              </li>
+              <li>cookies.txt：{legacyPreview.cookies_present ? "存在（會複製到 app 資料目錄）" : "（無）"}</li>
+              <li>
+                pending_torrents.json：
+                {legacyPreview.pending_present
+                  ? `存在（${legacyPreview.pending_count} 筆；magnet 欄位會被移除）`
+                  : "（無）"}
+              </li>
+            </ul>
+            {#if legacyPreview.warnings.length > 0}
+              <details>
+                <summary>⚠ {legacyPreview.warnings.length} 條警告</summary>
+                <ul>
+                  {#each legacyPreview.warnings as w}
+                    <li>{w}</li>
+                  {/each}
+                </ul>
+              </details>
+            {/if}
+          {/if}
+        </div>
+      {/if}
+      {#if legacyReport}
+        <div class="inline-msg" data-kind="ok">
+          <strong>匯入完成</strong>
+          <ul>
+            <li>RD Token：{legacyReport.rd_token_imported ? "✓ 已存入憑證管理員" : "（未匯入）"}</li>
+            <li>.env 設定：{legacyReport.env_imported ? "✓ 已套用" : "（未匯入）"}</li>
+            <li>cookies.txt：{legacyReport.cookies_imported ? "✓ 已複製" : "（未匯入）"}</li>
+            <li>
+              pending：匯入 {legacyReport.pending_imported} 筆
+              {#if legacyReport.pending_skipped > 0}
+                （略過 {legacyReport.pending_skipped} 筆已存在或無效）
+              {/if}
+            </li>
+          </ul>
+          {#if legacyReport.sources.length > 0}
+            <details>
+              <summary>來源檔（{legacyReport.sources.length}）</summary>
+              <ul>
+                {#each legacyReport.sources as s}
+                  <li><code>{s}</code></li>
+                {/each}
+              </ul>
+            </details>
+          {/if}
+          {#if legacyReport.warnings.length > 0}
+            <details>
+              <summary>⚠ {legacyReport.warnings.length} 條警告</summary>
+              <ul>
+                {#each legacyReport.warnings as w}
+                  <li>{w}</li>
+                {/each}
+              </ul>
+            </details>
+          {/if}
+          <p class="muted small">舊檔仍保留在來源位置，你可自行刪除。</p>
+        </div>
+      {/if}
     {/if}
   </section>
 
