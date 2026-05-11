@@ -88,7 +88,13 @@ class DaemonState:
         self.rd_token: str = ""
         self.settings: dict[str, Any] = {}
         self.paths: dict[str, str] = {}
+        # Forward table: handle_id -> full magnet URI.
         self.magnets: dict[str, str] = {}
+        # Reverse table: full magnet URI -> handle_id. Lets every code path
+        # that ingests a magnet (fetch_javdb, register_magnets) reuse an
+        # existing handle instead of allocating a new one, so the same
+        # magnet text never produces two handles -> two RD sends.
+        self.magnet_to_handle: dict[str, str] = {}
         self.start_time = time.time()
 
 
@@ -143,6 +149,21 @@ def cmd_ping(state: DaemonState, req: dict) -> dict:
     return _ok(req, {"uptime_seconds": int(time.time() - state.start_time)})
 
 
+def _intern_magnet(state: DaemonState, full: str) -> tuple[str, bool]:
+    """Look up `full` in the reverse table; reuse the existing handle_id
+    if found, otherwise allocate a new one. Returns `(handle_id, deduped)`.
+    Updates BOTH the forward (`state.magnets`) and reverse
+    (`state.magnet_to_handle`) maps so every caller sees the same identity.
+    """
+    existing = state.magnet_to_handle.get(full)
+    if existing is not None:
+        return existing, True
+    handle_id = f"h-{uuid.uuid4()}"
+    state.magnets[handle_id] = full
+    state.magnet_to_handle[full] = handle_id
+    return handle_id, False
+
+
 def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
     if not state.handshake_done:
         return _err(req, "bad_request", "handshake required before fetch_javdb")
@@ -168,8 +189,10 @@ def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
     magnets_out = []
     for m in magnets_in:
         full = m.get("magnet", "")
-        handle_id = f"h-{uuid.uuid4()}"
-        state.magnets[handle_id] = full
+        # Intern via the reverse table so a magnet that already has a
+        # handle (e.g. re-fetch of the same JavDB page, or previously
+        # registered by the paste path) keeps its existing handle_id.
+        handle_id, _deduped = _intern_magnet(state, full)
         magnets_out.append({
             "handle_id": handle_id,
             "name": m.get("name", ""),
@@ -223,6 +246,10 @@ def cmd_resolve_magnets(state: DaemonState, req: dict) -> dict:
 def cmd_forget_magnets(state: DaemonState, req: dict) -> dict:
     n = len(state.magnets)
     state.magnets.clear()
+    # Reverse table must clear with the forward table — otherwise a
+    # later register would falsely "dedupe" against a stale entry
+    # whose handle no longer exists.
+    state.magnet_to_handle.clear()
     return _ok(req, {"forgot": n})
 
 
@@ -231,8 +258,12 @@ def cmd_register_magnets(state: DaemonState, req: dict) -> dict:
     a JavDB fetch. Used by the "paste magnet → send to RD" UI path.
 
     Each input must start with `magnet:`; non-magnets are returned in
-    `invalid` so the frontend can flag them. Duplicate magnet URIs in the
-    input are deduped (one handle_id per unique URI).
+    `invalid` so the frontend can flag them. Deduplication is performed
+    via the reverse table (`state.magnet_to_handle`) so a magnet that
+    already has a handle — whether from a previous register call OR a
+    previous fetch_javdb — keeps that handle and is flagged
+    `deduped: true`. This is what prevents the "send N to RD" path
+    from double-billing the same magnet across groups.
     """
     magnets_in = req.get("magnets")
     if not isinstance(magnets_in, list):
@@ -240,7 +271,6 @@ def cmd_register_magnets(state: DaemonState, req: dict) -> dict:
 
     registered: list[dict] = []
     invalid: list[str] = []
-    seen_to_handle: dict[str, str] = {}
 
     for raw in magnets_in:
         if not isinstance(raw, str):
@@ -251,23 +281,11 @@ def cmd_register_magnets(state: DaemonState, req: dict) -> dict:
             invalid.append(s)
             continue
 
-        # Dedupe within this request: identical magnet text → single handle.
-        if s in seen_to_handle:
-            existing = seen_to_handle[s]
-            registered.append({
-                "handle_id": existing,
-                "magnet_redacted": redact_magnet(s),
-                "deduped": True,
-            })
-            continue
-
-        handle_id = f"h-{uuid.uuid4()}"
-        state.magnets[handle_id] = s
-        seen_to_handle[s] = handle_id
+        handle_id, deduped = _intern_magnet(state, s)
         registered.append({
             "handle_id": handle_id,
             "magnet_redacted": redact_magnet(s),
-            "deduped": False,
+            "deduped": deduped,
         })
 
     return _ok(req, {"registered": registered, "invalid": invalid})
