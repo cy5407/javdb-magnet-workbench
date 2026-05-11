@@ -278,43 +278,70 @@
         invalid: string[];
       }>("register_magnets", { magnets });
 
-      const rows: MagnetRow[] = resp.registered.map((r) => ({
-        handle_id: r.handle_id,
-        name: "",
-        size: "",
-        tags: [],
-        date: "",
-        magnet_redacted: r.magnet_redacted,
-      }));
+      // Build the set of handle_ids already shown in any existing group
+      // so we can skip rows whose sidecar handle is reused from a prior
+      // scrape / paste — they'd otherwise appear twice in the UI and
+      // double-bill RD on send.
+      const existingHandleIds = new Set<string>();
+      for (const g of groups) {
+        if (g.result) {
+          for (const m of g.result.magnets) existingHandleIds.add(m.handle_id);
+        }
+      }
 
-      // Synthetic group: unique URL key uses a timestamp so multiple paste
-      // batches don't collide. UI shows "(直接貼上)" instead of a JavDB URL.
-      const syntheticUrl = `manual://${Date.now()}`;
-      groups = [
-        ...groups,
-        {
-          url: syntheticUrl,
-          status: "ok" as const,
-          finished_at: new Date().toISOString(),
-          error: null,
-          result: {
-            engine: "manual",
+      const newRows: MagnetRow[] = [];
+      let skippedExisting = 0;
+      for (const r of resp.registered) {
+        if (r.deduped && existingHandleIds.has(r.handle_id)) {
+          skippedExisting += 1;
+          continue;
+        }
+        newRows.push({
+          handle_id: r.handle_id,
+          name: "",
+          size: "",
+          tags: [],
+          date: "",
+          magnet_redacted: r.magnet_redacted,
+        });
+      }
+
+      if (newRows.length > 0) {
+        // Synthetic group: unique URL key uses a timestamp so multiple
+        // paste batches don't collide. UI shows "(直接貼上)" instead of
+        // a JavDB URL.
+        const syntheticUrl = `manual://${Date.now()}`;
+        groups = [
+          ...groups,
+          {
             url: syntheticUrl,
-            code: `(直接貼上 ${rows.length})`,
-            title: "",
-            magnet_count: rows.length,
-            magnets: rows,
+            status: "ok" as const,
+            finished_at: new Date().toISOString(),
+            error: null,
+            result: {
+              engine: "manual",
+              url: syntheticUrl,
+              code: `(直接貼上 ${newRows.length})`,
+              title: "",
+              magnet_count: newRows.length,
+              magnets: newRows,
+            },
           },
-        },
-      ];
+        ];
+      }
+
       magnetBatch = "";
-      const skipped = resp.invalid.length;
+      const invalidCount = resp.invalid.length;
+      const fragments: string[] = [];
+      if (newRows.length > 0) fragments.push(`已加入 ${newRows.length} 筆到下方結果清單`);
+      if (skippedExisting > 0)
+        fragments.push(`已跳過 ${skippedExisting} 筆已存在於現有群組的磁力`);
+      if (invalidCount > 0) fragments.push(`忽略 ${invalidCount} 個無效輸入`);
       registerStatus = {
-        kind: "ok",
-        text:
-          skipped > 0
-            ? `已加入 ${rows.length} 筆到下方結果清單（忽略 ${skipped} 個無效輸入）。`
-            : `已加入 ${rows.length} 筆到下方結果清單。`,
+        kind: newRows.length > 0 ? "ok" : "info",
+        text: fragments.length > 0
+          ? fragments.join("；") + "。"
+          : "沒有可加入的磁力連結。",
       };
     } catch (e) {
       registerStatus = { kind: "error", text: `加入失敗：${e}` };

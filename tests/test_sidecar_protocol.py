@@ -730,6 +730,86 @@ class RegisterMagnets(unittest.TestCase):
     def test_dispatch_registered(self):
         self.assertIn("register_magnets", sd.DISPATCH)
 
+    def test_same_magnet_across_requests_reuses_handle(self):
+        """Magnet registered in request A, then again in request B → same
+        handle, B's row flagged deduped. Prevents the bug where the same
+        btih ended up with two handles → two RD sends."""
+        state = sd.DaemonState()
+        m = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Cross"
+        resp_a = _call(state, {
+            "cmd": "register_magnets", "request_id": "a", "magnets": [m],
+        })
+        self.assertTrue(resp_a["ok"])
+        h_a = resp_a["registered"][0]["handle_id"]
+        self.assertFalse(resp_a["registered"][0]["deduped"])
+
+        resp_b = _call(state, {
+            "cmd": "register_magnets", "request_id": "b", "magnets": [m],
+        })
+        self.assertTrue(resp_b["ok"])
+        h_b = resp_b["registered"][0]["handle_id"]
+        self.assertEqual(h_a, h_b)
+        self.assertTrue(resp_b["registered"][0]["deduped"])
+        # Only ONE entry in the forward table even though we called twice.
+        self.assertEqual(len(state.magnets), 1)
+
+    def test_mixed_batch_existing_plus_new(self):
+        """Batch containing one already-registered magnet plus one new
+        magnet: existing returns its prior handle with deduped=True; new
+        gets a fresh handle with deduped=False."""
+        state = sd.DaemonState()
+        m_old = "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&dn=Old"
+        m_new = "magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&dn=New"
+        first = _call(state, {
+            "cmd": "register_magnets", "request_id": "1", "magnets": [m_old],
+        })
+        h_old = first["registered"][0]["handle_id"]
+
+        mixed = _call(state, {
+            "cmd": "register_magnets", "request_id": "2",
+            "magnets": [m_old, m_new],
+        })
+        self.assertTrue(mixed["ok"])
+        self.assertEqual(len(mixed["registered"]), 2)
+        rows = {r["handle_id"]: r for r in mixed["registered"]}
+        # Old re-appears with same handle + deduped=True
+        self.assertIn(h_old, rows)
+        self.assertTrue(rows[h_old]["deduped"])
+        # New got a fresh handle + deduped=False
+        other_ids = [hid for hid in rows if hid != h_old]
+        self.assertEqual(len(other_ids), 1)
+        self.assertFalse(rows[other_ids[0]]["deduped"])
+        # Forward table has both entries; reverse table is consistent.
+        self.assertEqual(len(state.magnets), 2)
+        self.assertEqual(len(state.magnet_to_handle), 2)
+
+    def test_forget_then_re_register_yields_fresh_handle(self):
+        """After forget_magnets clears both tables, registering the same
+        magnet text should allocate a new handle (deduped=False), not
+        falsely match against a stale reverse-table entry."""
+        state = sd.DaemonState()
+        m = "magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccccccccccc&dn=Recycle"
+        first = _call(state, {
+            "cmd": "register_magnets", "request_id": "1", "magnets": [m],
+        })
+        h_first = first["registered"][0]["handle_id"]
+        self.assertFalse(first["registered"][0]["deduped"])
+
+        forgot = _call(state, {
+            "cmd": "forget_magnets", "request_id": "f",
+        })
+        self.assertTrue(forgot["ok"])
+        self.assertEqual(state.magnets, {})
+        self.assertEqual(state.magnet_to_handle, {})
+
+        second = _call(state, {
+            "cmd": "register_magnets", "request_id": "2", "magnets": [m],
+        })
+        h_second = second["registered"][0]["handle_id"]
+        self.assertFalse(second["registered"][0]["deduped"])
+        # New handle, distinct from the forgotten one.
+        self.assertNotEqual(h_first, h_second)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
