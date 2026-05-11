@@ -6,18 +6,21 @@
 #
 # Pipeline:
 #   1. Build sidecar.exe         (npm run sidecar:build → app/src-tauri/binaries/...)
-#   2. Build frontend            (cd app && npm run build → app/dist)
-#   3. Build Rust release exe    (cd app/src-tauri && cargo build --release)
-#   4. Stage release/JavDBMagnet/ (javdbmagnet.exe + sidecar.exe + README.txt)
-#   5. Audit staging dir         (whitelist: exe + exe + README.txt; nothing else)
-#   6. Binary content scan       (tokens / magnets / Cloudflare cookies must NOT
+#   2. Build frontend + Rust exe (npx tauri build --no-bundle from app/)
+#                                 — single CLI call enables the
+#                                 `tauri/custom-protocol` feature so the
+#                                 release binary embeds dist/ instead of
+#                                 reaching for the dev server
+#   3. Stage release/JavDBMagnet/ (javdbmagnet.exe + sidecar.exe + README.txt)
+#   4. Audit staging dir         (whitelist: exe + exe + README.txt; nothing else)
+#   5. Binary content scan       (tokens / magnets / Cloudflare cookies must NOT
 #                                 appear in either exe)
-#   7. Source diff secret scan   (same patterns over `git diff origin/dev..HEAD`
+#   6. Source diff secret scan   (same patterns over `git diff origin/dev..HEAD`
 #                                 + working-tree diff)
-#   8. Compress-Archive → release/JavDBMagnet_<version>_portable.zip
-#   9. SHA256 for zip + 2 exes  → release/SHA256SUMS.txt
-#  10. Write release/release-manifest.json
-#  11. Print final paths
+#   7. Compress-Archive → release/JavDBMagnet_<version>_portable.zip
+#   8. SHA256 for zip + 2 exes  → release/SHA256SUMS.txt
+#   9. Write release/release-manifest.json
+#  10. Print final paths
 #
 # Any audit / scan failure → exit 1. Half-baked staging stays for inspection.
 #
@@ -115,27 +118,22 @@ if (-not (Test-Path $SidecarSource)) {
 Ok ("sidecar.exe at " + $SidecarSource)
 
 # ---------------------------------------------------------------------------
-# Step 2: Build frontend (Vite). Tauri's build.rs embeds app/dist/.
+# Step 2 + 3: Build frontend + Rust release exe via Tauri CLI.
+#
+# Plain `cargo build --release` doesn't pass the `tauri/custom-protocol`
+# feature flag, so the resulting binary still tries to load from
+# devUrl (http://localhost:1420) instead of the embedded dist/. Going
+# through `tauri build --no-bundle` handles three things in one call:
+#   - runs beforeBuildCommand (= `npm run build`) for fresh dist/
+#   - enables tauri/custom-protocol so the release binary loads from
+#     embedded assets
+#   - skips MSI / NSIS bundling so no installer artifacts leak in
 # ---------------------------------------------------------------------------
-Step "Building frontend (npm run build)"
+Step "Building Rust release binary (npx tauri build --no-bundle)"
 Push-Location $AppDir
 try {
-    & npm run build
-    if ($LASTEXITCODE -ne 0) { FailExit "npm run build exited with code $LASTEXITCODE" }
-} finally {
-    Pop-Location
-}
-Ok "Vite production build complete"
-
-# ---------------------------------------------------------------------------
-# Step 3: Build Rust release exe. We use cargo directly (not `tauri build`)
-# because we don't want any bundle artifacts (MSI / NSIS) at all.
-# ---------------------------------------------------------------------------
-Step "Building Rust release binary (cargo build --release)"
-Push-Location $TauriSrcDir
-try {
-    & cargo build --release
-    if ($LASTEXITCODE -ne 0) { FailExit "cargo build --release exited with code $LASTEXITCODE" }
+    & npx tauri build --no-bundle
+    if ($LASTEXITCODE -ne 0) { FailExit "tauri build exited with code $LASTEXITCODE" }
 } finally {
     Pop-Location
 }
