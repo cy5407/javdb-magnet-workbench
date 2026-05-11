@@ -19,6 +19,7 @@
   import {
     defaultFilterState,
     type CopyBulkResult,
+    type CopyRdLinksBulkResult,
     type FilterState,
     type GroupPick,
     type MagnetRow,
@@ -553,9 +554,11 @@
       return;
     }
     try {
-      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
-      await writeText(lines.join("\n"));
-      rdMessage = `已複製 ${lines.length} 個 RD 直連到剪貼簿`;
+      const result = await invoke<CopyRdLinksBulkResult>(
+        "copy_rd_links_bulk",
+        { links: lines },
+      );
+      rdMessage = `已複製 ${result.copied} 個 RD 直連到剪貼簿`;
     } catch (e) {
       rdMessage = `複製失敗：${e}`;
     }
@@ -597,11 +600,13 @@
 
     if (completedLinks.length > 0) {
       try {
-        const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
-        await writeText(completedLinks.join("\n"));
-        rdMessage = `重試完成：${completedLinks.length} 個新連結已複製到剪貼簿`;
+        const result = await invoke<CopyRdLinksBulkResult>(
+          "copy_rd_links_bulk",
+          { links: completedLinks },
+        );
+        rdMessage = `重試完成：${result.copied} 個新連結已複製到剪貼簿`;
       } catch (e) {
-        rdMessage = `重試完成 ${completedLinks.length} 個（剪貼簿寫入失敗）`;
+        rdMessage = `重試完成 ${completedLinks.length} 個（剪貼簿寫入失敗：${e}）`;
       }
     } else {
       rdMessage = `重試完成，目前沒有新完成的連結（剩 ${pendingEntries.length} 個）`;

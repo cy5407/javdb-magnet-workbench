@@ -62,6 +62,11 @@ export interface CopyBulkResult {
   unknown: number;
 }
 
+/** Result of `copy_rd_links_bulk` — see Rust side for invariants. */
+export interface CopyRdLinksBulkResult {
+  copied: number;
+}
+
 /**
  * One scraped JavDB page = one group in the results tree.
  * `error` populated when the fetch failed; `result` populated on success.

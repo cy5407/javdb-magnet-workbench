@@ -7,6 +7,11 @@
 //!     sidecar, write to OS clipboard, and drop the local string before
 //!     returning
 //!   - The frontend receives only counts / status, never the magnet text
+//!
+//! Clipboard policy (M6 follow-up): all clipboard writes funnel through
+//! Rust commands. The frontend never invokes `tauri-plugin-clipboard-manager`
+//! directly. RD direct links (non-secret, but routed through Rust for
+//! consistency with magnets) go through `copy_rd_links_bulk`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -186,6 +191,45 @@ pub async fn copy_magnets_bulk(
     // `lines` and `joined` drop here; never returned, never logged.
 
     Ok(CopyBulkResult { copied, unknown })
+}
+
+/// Result of `copy_rd_links_bulk`. Only `copied` is exposed — Rust filters
+/// out empty/whitespace-only entries silently so callers see the post-filter
+/// count, which is what the UI status message wants.
+#[derive(Serialize)]
+pub struct CopyRdLinksBulkResult {
+    pub copied: usize,
+}
+
+/// Write a batch of Real-Debrid direct-download URLs to the OS clipboard,
+/// one per line. Mirrors `copy_magnets_bulk` so the frontend never needs
+/// to import `tauri-plugin-clipboard-manager` directly. RD direct links
+/// are not secrets (the frontend already holds them in `RdSendProgress`),
+/// but routing through Rust keeps the capability surface minimal and the
+/// "frontend doesn't touch clipboard plugins" invariant intact.
+///
+/// Empty input is a no-op: returns `copied = 0` without error so the UI
+/// can present a "nothing to copy" message uniformly. Links are NOT logged.
+#[tauri::command]
+pub async fn copy_rd_links_bulk(
+    app: AppHandle,
+    links: Vec<String>,
+) -> Result<CopyRdLinksBulkResult, String> {
+    let filtered: Vec<String> = links
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let copied = filtered.len();
+    if copied == 0 {
+        return Ok(CopyRdLinksBulkResult { copied: 0 });
+    }
+    let joined = filtered.join("\n");
+    app.clipboard()
+        .write_text(joined)
+        .map_err(|e| e.to_string())?;
+    // `filtered` and `joined` drop here.
+    Ok(CopyRdLinksBulkResult { copied })
 }
 
 // ===========================================================================

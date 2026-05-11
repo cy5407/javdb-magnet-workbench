@@ -127,6 +127,7 @@ pub fn run() {
             commands::fetch_javdb,
             commands::copy_magnet,
             commands::copy_magnets_bulk,
+            commands::copy_rd_links_bulk,
             commands::forget_magnets,
             commands::register_magnets,
             commands::rd_has_token,
