@@ -234,16 +234,19 @@ npm run release
 `scripts/build-release.ps1` 會：
 
 1. PyInstaller 打包 `sidecar.exe`
-2. Vite 前端 build
-3. `cargo build --release` 產 `javdbmagnet.exe`（不走 Tauri bundler、不產 MSI/NSIS）
-4. 在 `release/JavDBMagnet/` 暫存 `javdbmagnet.exe` + `sidecar.exe` + `README.txt`
-5. Staging 白名單稽核（只允許上述 3 個檔；其他任何檔案 → fail）
-6. 兩個 exe 內容掃 secret pattern（BTIH hash、Cloudflare cookie、Bearer token、RD token、magnet URI）→ 命中即 fail
-7. 掃描本次變更的 source/docs 是否含 secret pattern
-8. `Compress-Archive` 產 `release/JavDBMagnet_<version>_portable.zip`（zip root 為 `JavDBMagnet/`）
-9. 算 SHA256（portable.zip / javdbmagnet.exe / sidecar.exe），寫入 `release/SHA256SUMS.txt`
-10. 寫 release manifest 到 `release/release-manifest.json`（`"bundle": "portable-zip"`）
-11. 最後列印所有 artifact 路徑
+2. `npx tauri build --no-bundle`（包含 Vite 前端 build + cargo release build；
+   `--no-bundle` 跳過 MSI/NSIS。走 Tauri CLI 是必要的，因為它會帶上
+   `tauri/custom-protocol` feature 把 `dist/` 嵌進 binary；
+   純 `cargo build --release` 不會帶這個 feature，產出的 exe 啟動時會
+   試圖連 `localhost:1420`）
+3. 在 `release/JavDBMagnet/` 暫存 `javdbmagnet.exe` + `sidecar.exe` + `README.txt`
+4. Staging 白名單稽核（只允許上述 3 個檔；其他任何檔案 → fail）
+5. 兩個 exe 內容掃 secret pattern（BTIH hash、Cloudflare cookie、Bearer token、RD token、magnet URI）→ 命中即 fail
+6. 掃描本次變更的 source/docs 是否含 secret pattern
+7. `Compress-Archive` 產 `release/JavDBMagnet_<version>_portable.zip`（zip root 為 `JavDBMagnet/`）
+8. 算 SHA256（portable.zip / javdbmagnet.exe / sidecar.exe），寫入 `release/SHA256SUMS.txt`
+9. 寫 release manifest 到 `release/release-manifest.json`（`"bundle": "portable-zip"`）
+10. 最後列印所有 artifact 路徑
 
 任何 audit / scan 失敗 → script exit 1。
 
