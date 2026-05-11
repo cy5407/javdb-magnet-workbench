@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyGroupPick,
+  dedupeByHandleId,
   filterRows,
   isHd,
   matchesKeyword,
@@ -220,5 +221,44 @@ describe("processGroupRows", () => {
   it("filter rules out everything → empty", () => {
     const f = { ...defaultFilterState(), min_size_gb: 999 };
     expect(processGroupRows(group, f, null, "asc")).toEqual([]);
+  });
+});
+
+describe("dedupeByHandleId", () => {
+  it("returns input unchanged when all handle_ids are unique", () => {
+    const rows = [
+      { handle_id: "h1", code: "A" },
+      { handle_id: "h2", code: "B" },
+      { handle_id: "h3", code: "C" },
+    ];
+    expect(dedupeByHandleId(rows)).toEqual(rows);
+  });
+
+  it("drops later rows with a repeated handle_id (keeps first occurrence)", () => {
+    const rows = [
+      { handle_id: "h1", code: "first-A" },
+      { handle_id: "h2", code: "B" },
+      { handle_id: "h1", code: "second-A" },
+      { handle_id: "h2", code: "second-B" },
+    ];
+    expect(dedupeByHandleId(rows)).toEqual([
+      { handle_id: "h1", code: "first-A" },
+      { handle_id: "h2", code: "B" },
+    ]);
+  });
+
+  it("empty input → empty output", () => {
+    expect(dedupeByHandleId([])).toEqual([]);
+  });
+
+  it("preserves original order of first occurrences", () => {
+    const rows = [
+      { handle_id: "c", n: 1 },
+      { handle_id: "a", n: 2 },
+      { handle_id: "b", n: 3 },
+      { handle_id: "a", n: 4 },
+      { handle_id: "c", n: 5 },
+    ];
+    expect(dedupeByHandleId(rows).map((r) => r.handle_id)).toEqual(["c", "a", "b"]);
   });
 });

@@ -7,7 +7,7 @@
     scrapeBatch,
     type ScrapeProgressEvent,
   } from "./lib/scraper";
-  import { processGroupRows } from "./lib/magnetUtils";
+  import { dedupeByHandleId, processGroupRows } from "./lib/magnetUtils";
   import {
     FILE_PICK_VALUES,
     SCALE_PRESETS,
@@ -362,9 +362,17 @@
 
   async function copyVisible() {
     // Collect handle_ids from VISIBLE rows (after filter + group pick + sort).
+    // Dedupe across groups in case the UI happens to render the same
+    // handle in two cards — clipboard should never contain duplicate
+    // magnet URIs even if the sidecar would silently coalesce them.
+    const seen = new Set<string>();
     const ids: string[] = [];
     for (const g of groups) {
-      for (const m of processedRows(g)) ids.push(m.handle_id);
+      for (const m of processedRows(g)) {
+        if (seen.has(m.handle_id)) continue;
+        seen.add(m.handle_id);
+        ids.push(m.handle_id);
+      }
     }
     if (ids.length === 0) return;
     try {
@@ -462,9 +470,17 @@
   let totalRawMagnets = $derived(
     groups.reduce((acc, g) => acc + (g.result?.magnet_count ?? 0), 0),
   );
-  let visibleMagnets = $derived(
-    groups.reduce((acc, g) => acc + processedRows(g).length, 0),
-  );
+  // Counts unique handle_ids across all visible (filtered/sorted/grouped)
+  // rows, so the action-row button labels match what
+  // `buildVisibleSendItems` / `copyVisible` will actually do after
+  // their handle_id dedupe.
+  let visibleMagnets = $derived.by(() => {
+    const seen = new Set<string>();
+    for (const g of groups) {
+      for (const m of processedRows(g)) seen.add(m.handle_id);
+    }
+    return seen.size;
+  });
 
   // ---- M5: Real-Debrid handlers --------------------------------------
   async function rdTestToken() {
@@ -535,21 +551,24 @@
   }
 
   /** Build the send-to-RD batch from the currently visible (filtered+sorted+
-   * group-picked) rows. */
+   * group-picked) rows. Dedupes by `handle_id` so a magnet that
+   * happens to be rendered in two groups (e.g. JavDB re-fetch landing
+   * on the same sidecar handle) is sent to RD exactly once. The
+   * `code` of the first occurrence wins. */
   function buildVisibleSendItems(): RdSendItem[] {
-    const out: RdSendItem[] = [];
+    const raw: RdSendItem[] = [];
     for (const g of groups) {
       const rows = processedRows(g);
       const code = g.result?.code ?? "";
       for (const m of rows) {
-        out.push({
+        raw.push({
           handle_id: m.handle_id,
           code: code || m.name || "(unknown)",
           size_label: m.size,
         });
       }
     }
-    return out;
+    return dedupeByHandleId(raw);
   }
 
   async function sendVisibleToRd() {

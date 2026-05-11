@@ -155,3 +155,24 @@ export function processGroupRows(
   const picked = applyGroupPick(filtered, filter.group_pick);
   return sortRows(picked, sortColumn, sortDirection);
 }
+
+/**
+ * Order-preserving dedupe by `handle_id`. Used as a second line of
+ * defense before sending magnets to RD or writing to the clipboard:
+ * the sidecar's BTIH-keyed handle table already prevents a magnet from
+ * having two handles, but if the UI somehow renders the same handle in
+ * two groups (e.g. user re-fetched the same JavDB URL), we still don't
+ * want to invoke RD twice or paste duplicates into the clipboard.
+ *
+ * Keeps the first occurrence's metadata (code / size / etc).
+ */
+export function dedupeByHandleId<T extends { handle_id: string }>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const r of rows) {
+    if (seen.has(r.handle_id)) continue;
+    seen.add(r.handle_id);
+    out.push(r);
+  }
+  return out;
+}
