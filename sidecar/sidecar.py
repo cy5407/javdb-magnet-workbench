@@ -88,12 +88,16 @@ class DaemonState:
         self.rd_token: str = ""
         self.settings: dict[str, Any] = {}
         self.paths: dict[str, str] = {}
-        # Forward table: handle_id -> full magnet URI.
+        # Forward table: handle_id -> full magnet URI (original text, used
+        # for clipboard write and RD HTTP body).
         self.magnets: dict[str, str] = {}
-        # Reverse table: full magnet URI -> handle_id. Lets every code path
-        # that ingests a magnet (fetch_javdb, register_magnets) reuse an
-        # existing handle instead of allocating a new one, so the same
-        # magnet text never produces two handles -> two RD sends.
+        # Reverse table: dedupe_key -> handle_id. The dedupe key is
+        # `btih:<lowercase-hash>` when the magnet has a parseable
+        # urn:btih:<hex>, otherwise the trimmed full string. This makes
+        # two magnets with the same BTIH but different `dn=`, parameter
+        # order, or hash case map to the SAME handle — without it, the
+        # "send to RD" path could still double-bill for cosmetically
+        # different but semantically identical magnets.
         self.magnet_to_handle: dict[str, str] = {}
         self.start_time = time.time()
 
@@ -149,18 +153,49 @@ def cmd_ping(state: DaemonState, req: dict) -> dict:
     return _ok(req, {"uptime_seconds": int(time.time() - state.start_time)})
 
 
-def _intern_magnet(state: DaemonState, full: str) -> tuple[str, bool]:
-    """Look up `full` in the reverse table; reuse the existing handle_id
-    if found, otherwise allocate a new one. Returns `(handle_id, deduped)`.
-    Updates BOTH the forward (`state.magnets`) and reverse
-    (`state.magnet_to_handle`) maps so every caller sees the same identity.
+_BTIH_RX = re.compile(r"xt=urn:btih:([a-fA-F0-9]+)", re.IGNORECASE)
+
+
+def _magnet_dedupe_key(full: str) -> str:
+    """Identity key for magnet dedupe.
+
+    Two magnet URIs that point at the same BitTorrent v1 content should
+    hash to the same key even if they differ in:
+      - `dn=` (display name) — JavDB sometimes serves different `dn`s
+        for the same hash
+      - parameter order — `magnet:?dn=...&xt=urn:btih:HASH` vs
+        `magnet:?xt=urn:btih:HASH&dn=...`
+      - tracker (`tr=`) list — different mirrors of the same content
+      - hash case — some sources emit uppercase hex
+
+    Strategy: pull the BTIH hash via regex (scheme-agnostic search;
+    any parameter position is fine), lowercase it, and return
+    `btih:<hex>`. If no BTIH can be parsed (e.g. v2 `urn:btmh:` or a
+    malformed string that somehow slipped past upstream validation),
+    fall back to the trimmed full string so dedupe still works
+    conservatively.
     """
-    existing = state.magnet_to_handle.get(full)
+    m = _BTIH_RX.search(full)
+    if m:
+        return "btih:" + m.group(1).lower()
+    return full.strip()
+
+
+def _intern_magnet(state: DaemonState, full: str) -> tuple[str, bool]:
+    """Look up `full` in the reverse table (keyed by the normalized
+    dedupe key, not the raw string); reuse the existing handle_id if
+    found, otherwise allocate a new one. Returns `(handle_id, deduped)`.
+    Updates BOTH the forward (`state.magnets`) and reverse
+    (`state.magnet_to_handle`) maps so every caller sees the same
+    identity.
+    """
+    key = _magnet_dedupe_key(full)
+    existing = state.magnet_to_handle.get(key)
     if existing is not None:
         return existing, True
     handle_id = f"h-{uuid.uuid4()}"
     state.magnets[handle_id] = full
-    state.magnet_to_handle[full] = handle_id
+    state.magnet_to_handle[key] = handle_id
     return handle_id, False
 
 

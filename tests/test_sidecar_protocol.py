@@ -783,6 +783,88 @@ class RegisterMagnets(unittest.TestCase):
         self.assertEqual(len(state.magnets), 2)
         self.assertEqual(len(state.magnet_to_handle), 2)
 
+    def test_same_btih_different_dn_dedupes_to_same_handle(self):
+        """Same BTIH but different display names → same handle. JavDB
+        sometimes emits different `dn=` for the same hash; before the
+        BTIH-keyed dedupe these would have become two handles and
+        double-billed RD."""
+        state = sd.DaemonState()
+        hash40 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        m_a = f"magnet:?xt=urn:btih:{hash40}&dn=Title-A"
+        m_b = f"magnet:?xt=urn:btih:{hash40}&dn=Title-B"
+        resp = _call(state, {
+            "cmd": "register_magnets", "request_id": "r",
+            "magnets": [m_a, m_b],
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(len(resp["registered"]), 2)
+        # Same handle for both rows; second is deduped.
+        self.assertEqual(
+            resp["registered"][0]["handle_id"],
+            resp["registered"][1]["handle_id"],
+        )
+        self.assertFalse(resp["registered"][0]["deduped"])
+        self.assertTrue(resp["registered"][1]["deduped"])
+        # Forward table holds ONE entry — only the first-seen original
+        # text is retained; that's fine since both point at the same
+        # torrent content.
+        self.assertEqual(len(state.magnets), 1)
+
+    def test_same_btih_different_hash_case_dedupes(self):
+        """Hex hash case differences (uppercase vs lowercase) must not
+        split into two handles."""
+        state = sd.DaemonState()
+        lower = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        upper = lower.upper()
+        m_lo = f"magnet:?xt=urn:btih:{lower}&dn=lo"
+        m_up = f"magnet:?xt=urn:btih:{upper}&dn=up"
+        resp = _call(state, {
+            "cmd": "register_magnets", "request_id": "r",
+            "magnets": [m_lo, m_up],
+        })
+        self.assertEqual(
+            resp["registered"][0]["handle_id"],
+            resp["registered"][1]["handle_id"],
+        )
+        self.assertTrue(resp["registered"][1]["deduped"])
+        self.assertEqual(len(state.magnets), 1)
+
+    def test_same_btih_different_parameter_order_dedupes(self):
+        """Parameter order in the URI must not affect dedupe — `xt`
+        before or after `dn` should still match."""
+        state = sd.DaemonState()
+        h = "cccccccccccccccccccccccccccccccccccccccc"
+        first = _call(state, {
+            "cmd": "register_magnets", "request_id": "1",
+            "magnets": [f"magnet:?xt=urn:btih:{h}&dn=N&tr=udp://t1"],
+        })
+        second = _call(state, {
+            "cmd": "register_magnets", "request_id": "2",
+            "magnets": [f"magnet:?dn=N&tr=udp://t1&xt=urn:btih:{h}"],
+        })
+        self.assertEqual(
+            first["registered"][0]["handle_id"],
+            second["registered"][0]["handle_id"],
+        )
+        self.assertTrue(second["registered"][0]["deduped"])
+
+    def test_dedupe_key_falls_back_when_no_btih(self):
+        """No parseable BTIH → fall back to the trimmed full string so
+        dedupe still works conservatively. Caller may legitimately
+        register an unusual magnet:?xt=urn:sha1:... etc."""
+        # Direct unit test of the pure helper (no state involved).
+        self.assertEqual(
+            sd._magnet_dedupe_key("magnet:?xt=urn:btih:DEADBEEF&dn=A"),
+            "btih:deadbeef",
+        )
+        # No btih → fallback
+        self.assertEqual(
+            sd._magnet_dedupe_key("  magnet:?xt=urn:sha1:abc  "),
+            "magnet:?xt=urn:sha1:abc",
+        )
+        # Empty fallback
+        self.assertEqual(sd._magnet_dedupe_key("   "), "")
+
     def test_forget_then_re_register_yields_fresh_handle(self):
         """After forget_magnets clears both tables, registering the same
         magnet text should allocate a new handle (deduped=False), not
