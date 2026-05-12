@@ -279,7 +279,7 @@
     registerStatus = { kind: "info", text: "加入中…" };
     try {
       const resp = await invoke<{
-        registered: { handle_id: string; magnet_redacted: string; deduped: boolean }[];
+        registered: { handle_id: string; magnet_redacted: string; name: string; deduped: boolean }[];
         invalid: string[];
       }>("register_magnets", { magnets });
 
@@ -303,7 +303,11 @@
         }
         newRows.push({
           handle_id: r.handle_id,
-          name: "",
+          // Use the `dn=` extract returned by sidecar so this row
+          // can display its own JAV code (e.g. "SNOS-192") in the
+          // result table and the 送 RD 進度 番號 column. Empty when
+          // the magnet had no dn parameter.
+          name: r.name,
           size: "",
           tags: [],
           date: "",
@@ -558,16 +562,31 @@
    * group-picked) rows. Dedupes by `handle_id` so a magnet that
    * happens to be rendered in two groups (e.g. JavDB re-fetch landing
    * on the same sidecar handle) is sent to RD exactly once. The
-   * `code` of the first occurrence wins. */
+   * `code` of the first occurrence wins.
+   *
+   * Code-resolution priority:
+   *   - For paste-magnet "synthetic" groups (url starts with
+   *     `manual://`), prefer the row's own `name` (sidecar's `dn=`
+   *     extract, e.g. "SNOS-192") so the 番號 column shows a real
+   *     code per row instead of the synthetic group code
+   *     "(直接貼上 N)". Falls back to group code if `dn=` was empty.
+   *   - For JavDB-fetched groups, the group code (e.g. "SNOS-166")
+   *     is the right level — all rows under that page share the
+   *     same JAV code, while their `name` is the magnet filename.
+   */
   function buildVisibleSendItems(): RdSendItem[] {
     const raw: RdSendItem[] = [];
     for (const g of groups) {
       const rows = processedRows(g);
-      const code = g.result?.code ?? "";
+      const groupCode = g.result?.code ?? "";
+      const isPasteGroup = g.url.startsWith("manual://");
       for (const m of rows) {
+        const code = isPasteGroup
+          ? (m.name || groupCode || "(unknown)")
+          : (groupCode || m.name || "(unknown)");
         raw.push({
           handle_id: m.handle_id,
-          code: code || m.name || "(unknown)",
+          code,
           size_label: m.size,
         });
       }
