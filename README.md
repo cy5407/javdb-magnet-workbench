@@ -91,18 +91,20 @@ Token 會存進 **Windows Credential Manager**（target name `JavDBMagnet/RD_API
 
 ### 2. 取得 JavDB cookies
 
-JavDB 需要登入後的 cookie 才能看到磁力連結。
+JavDB 需要登入後的 cookie 才能看到磁力連結。app 內有「**建立 cookies.txt 範本**」按鈕可以幫你生一份**附完整教學的範本檔**，不必自己摸索檔案格式 / 編碼 / 必填欄位。
 
-1. 用瀏覽器登入 [javdb.com](https://javdb.com)
-2. 按 **F12** 開啟開發者工具 → **Network** → 重新整理頁面 → 點任一 request → **Request Headers** → 找到 `Cookie:` 整行
-3. 複製整行內容（應包含 `_jdb_session`、`cf_clearance`、`locale` 等 cookie 名稱）
-4. 在 app 內按「**JavDB Cookies**」展開 → 「打開資料目錄」
-5. 在跳出的資料夾建立新檔 **`cookies.txt`**，貼上剛複製的內容
-6. 回到 app 按「**重新整理**」，看到 `✓ 已找到 cookies.txt` 即可
+1. 展開「**JavDB Cookies**」區塊
+2. 若顯示「✗ 尚未設定 cookies.txt」→ 按「**建立 cookies.txt 範本**」（此按鈕僅在 cookies.txt 不存在時出現）
+3. 按「**打開資料目錄**」會跳出 `%APPDATA%\JavDBMagnet\`，用記事本打開剛建立的 `cookies.txt`
+4. 範本內已寫好兩種取得方式的步驟（F12 → Network → Request Headers 那條最直接），照做複製
+5. 把整行 cookie 內容貼到範本檔最後一行（**存檔時記得選 UTF-8**），覆蓋掉 `_jdb_session=XXX; cf_clearance=XXX; locale=zh` 那行
+6. 回到 app 按「**重新整理**」→ 看到 `✓ 已找到 cookies.txt` 即可
 
 cookies 路徑會是：`%APPDATA%\JavDBMagnet\cookies.txt`
 
 > ⚠ **`cf_clearance` 約幾小時後過期**，看到 Cloudflare 阻擋時重新取一次即可。詳見 [troubleshooting/cloudflare.md](docs/troubleshooting/cloudflare.md)。
+>
+> 範本檔以 UTF-8（**不含 BOM**）寫入，避免 Cloudflare 的 cookie parser 因 BOM 失敗。
 
 ### 3. 試跑
 
@@ -179,6 +181,7 @@ Repo 的 `.gitignore` 已擋下以上路徑，但若你的工作目錄外另有�
 | `debug.log` 不含 BTIH hash | `realdebrid.py::_request` 對 `data["magnet"]` 永遠記 `<redacted>` |
 | Clipboard 寫入集中在 Rust | frontend 不直接 import `tauri-plugin-clipboard-manager` |
 | capability 最小化 | `capabilities/default.json` 只開 `core:default` |
+| 同一 magnet 不重複送 RD（防雙扣額度） | **兩道防線**：sidecar 維護 normalized BTIH（`btih:<lowercase-hex>`）→ handle 反查表，同 hash 不同 `dn`/大小寫/參數順序皆共用 handle；frontend 送 RD 前再依 `handle_id` 去重（`dedupeByHandleId` helper） |
 
 詳細的 release 階段 audit 見 [docs/sessions/m6a-release-smoke.md](docs/sessions/m6a-release-smoke.md)。
 
