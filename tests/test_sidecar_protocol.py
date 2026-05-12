@@ -50,6 +50,44 @@ class RedactMagnet(unittest.TestCase):
         self.assertEqual(sd.redact_magnet("https://example.com"), "<not-a-magnet>")
 
 
+class ExtractMagnetDn(unittest.TestCase):
+    def test_extracts_plain_dn(self):
+        self.assertEqual(
+            sd.extract_magnet_dn("magnet:?xt=urn:btih:abc&dn=SNOS-192"),
+            "SNOS-192",
+        )
+
+    def test_extracts_dn_with_javdb_prefix(self):
+        self.assertEqual(
+            sd.extract_magnet_dn("magnet:?xt=urn:btih:abc&dn=%5Bjavdb.com%5DSNOS-192"),
+            "[javdb.com]SNOS-192",
+        )
+
+    def test_extracts_dn_with_plus_as_space(self):
+        # JavDB sometimes emits `+` for spaces (form-encoded). unquote_plus
+        # decodes those to literal spaces; raw `%20` would too.
+        self.assertEqual(
+            sd.extract_magnet_dn("magnet:?xt=urn:btih:abc&dn=Hello+World"),
+            "Hello World",
+        )
+
+    def test_dn_position_independent(self):
+        # `dn` can appear before `xt` in the param list.
+        self.assertEqual(
+            sd.extract_magnet_dn("magnet:?dn=ABCD-123&xt=urn:btih:abc&tr=udp://t"),
+            "ABCD-123",
+        )
+
+    def test_no_dn_returns_empty(self):
+        self.assertEqual(
+            sd.extract_magnet_dn("magnet:?xt=urn:btih:abc&tr=udp://t"),
+            "",
+        )
+
+    def test_empty_input_returns_empty(self):
+        self.assertEqual(sd.extract_magnet_dn(""), "")
+
+
 class ParseCookieString(unittest.TestCase):
     def test_basic(self):
         self.assertEqual(
@@ -729,6 +767,25 @@ class RegisterMagnets(unittest.TestCase):
 
     def test_dispatch_registered(self):
         self.assertIn("register_magnets", sd.DISPATCH)
+
+    def test_register_returns_dn_as_name(self):
+        """`register_magnets` should expose each input's `dn=` value as
+        `name` so the frontend can use it for per-row display in the
+        paste-magnet flow."""
+        state = sd.DaemonState()
+        resp = _call(state, {
+            "cmd": "register_magnets", "request_id": "r",
+            "magnets": [
+                "magnet:?xt=urn:btih:0000000000000000000000000000000000000001&dn=ABC-123",
+                "magnet:?xt=urn:btih:0000000000000000000000000000000000000002&dn=%5Bjavdb.com%5DDEF-456",
+                "magnet:?xt=urn:btih:0000000000000000000000000000000000000003",  # no dn
+            ],
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(len(resp["registered"]), 3)
+        self.assertEqual(resp["registered"][0]["name"], "ABC-123")
+        self.assertEqual(resp["registered"][1]["name"], "[javdb.com]DEF-456")
+        self.assertEqual(resp["registered"][2]["name"], "")
 
     def test_same_magnet_across_requests_reuses_handle(self):
         """Magnet registered in request A, then again in request B → same

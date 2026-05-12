@@ -89,6 +89,13 @@ pub struct CopyBulkResult {
 pub struct RegisteredMagnet {
     pub handle_id: String,
     pub magnet_redacted: String,
+    /// Display name extracted from the magnet's `dn=` parameter
+    /// (e.g. "[javdb.com]SNOS-192"). Empty when the magnet had no
+    /// `dn=`. Used by the frontend to populate `MagnetRow.name` so
+    /// the paste-magnet flow can show per-row JAV codes instead of
+    /// falling back to the synthetic group code "(直接貼上 N)".
+    #[serde(default)]
+    pub name: String,
     #[serde(default)]
     pub deduped: bool,
 }

@@ -56,6 +56,33 @@ def redact_magnet(uri: str) -> str:
     return "magnet:..." if uri.startswith("magnet:") else "<not-a-magnet>"
 
 
+_DN_RX = re.compile(r"[?&]dn=([^&]+)", re.IGNORECASE)
+
+
+def extract_magnet_dn(uri: str) -> str:
+    """Extract and URL-decode the `dn=` parameter from a magnet URI.
+
+    Magnet links typically include a display name (e.g.
+    `dn=[javdb.com]SNOS-192`) which is the closest thing each magnet
+    has to a per-row identifier. The frontend uses this as the row's
+    `name` field so the "paste-magnet" path can render JAV codes in
+    the result table and the "送至 RD 進度" 番號 column — without it,
+    rows fall back to the synthetic group code "(直接貼上 N)".
+
+    Returns `""` if no `dn=` is present. The value is URL-decoded
+    (`+` -> space, `%XX` -> char) so multi-byte / spaced names display
+    correctly. Not a secret: dn is the publicly-advertised name of the
+    torrent, included in the magnet by the publisher.
+    """
+    if not uri:
+        return ""
+    import urllib.parse
+    m = _DN_RX.search(uri)
+    if not m:
+        return ""
+    return urllib.parse.unquote_plus(m.group(1))
+
+
 def parse_cookie_string(s: str) -> dict[str, str]:
     """Parse `k=v; k=v` cookie header into dict. Empty/whitespace returns {}."""
     if not s or not s.strip():
@@ -320,6 +347,7 @@ def cmd_register_magnets(state: DaemonState, req: dict) -> dict:
         registered.append({
             "handle_id": handle_id,
             "magnet_redacted": redact_magnet(s),
+            "name": extract_magnet_dn(s),
             "deduped": deduped,
         })
 
