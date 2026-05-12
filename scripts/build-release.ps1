@@ -290,15 +290,28 @@ $sourceFiles = $sourceFiles |
     Where-Object { $_ -and (Test-Path (Join-Path $RepoRoot $_) -PathType Leaf) } |
     Sort-Object -Unique
 $skipExt = @('.exe', '.msi', '.zip', '.7z', '.png', '.ico', '.icns', '.dll')
-# legacy_import.rs deliberately ships test fixtures (e.g. ABCDEF_super_secret),
-# and build-release.ps1 contains the patterns themselves. Skip them.
+# Files / paths whose job is to CONTAIN the patterns we're scanning for:
+#   - legacy_import.rs has secret-bearing test fixtures inline
+#   - build-release.ps1 has the regex literals themselves
+#   - tests/        Python unittest fixtures (BTIH hex sentinels, etc.)
+#   - *.test.ts     Vitest fixtures (redacted magnet samples)
+# Skipping by exact path for the two one-offs and by prefix/suffix for
+# the test directories keeps the rule resilient to new test files.
 $skipFiles = @(
     'app/src-tauri/src/legacy_import.rs',
     'scripts/build-release.ps1'
 )
+$skipPrefixes = @('tests/')
+$skipSuffixes = @('.test.ts', '.test.js', '.test.tsx', '.spec.ts')
 $SourceHits = @()
 foreach ($rel in $sourceFiles) {
     if ($skipFiles -contains $rel) { continue }
+    $relForward = $rel.Replace('\', '/')
+    $skipThis = $false
+    foreach ($p in $skipPrefixes) { if ($relForward.StartsWith($p)) { $skipThis = $true; break } }
+    if ($skipThis) { continue }
+    foreach ($s in $skipSuffixes) { if ($relForward.EndsWith($s)) { $skipThis = $true; break } }
+    if ($skipThis) { continue }
     $full = Join-Path $RepoRoot $rel
     if ($skipExt -contains ([System.IO.Path]::GetExtension($full).ToLowerInvariant())) { continue }
     $text = Get-Content -LiteralPath $full -Raw -ErrorAction SilentlyContinue
