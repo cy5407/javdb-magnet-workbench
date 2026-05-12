@@ -105,6 +105,7 @@ export async function sendBatch(
           status: "completed",
           links: outcome.links,
           error_code: null,
+          torrent_id: outcome.torrent_id,
         };
       } else {
         next = {
@@ -112,6 +113,9 @@ export async function sendBatch(
           status: "in_pending",
           links: [],
           error_code: null,
+          // Capture torrent_id so a later pending-retry can reconcile
+          // this row when it transitions to completed / missing.
+          torrent_id: outcome.torrent_id,
         };
       }
     } catch (e) {

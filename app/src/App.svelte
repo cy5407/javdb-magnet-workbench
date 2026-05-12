@@ -699,10 +699,40 @@
             for (const l of ev.result.links) {
               if (l.download) completedLinks.push(l.download);
             }
+            // Reconcile the corresponding "送至 Real-Debrid 進度" row:
+            // its status is "in_pending" with empty links; flip to
+            // "completed" + attach the freshly-fetched links so the
+            // 直連 N counter and the row label both update without
+            // requiring a manual refresh / re-send.
+            for (let i = 0; i < rdSendProgress.length; i++) {
+              if (rdSendProgress[i].torrent_id === ev.torrent_id) {
+                rdSendProgress[i] = {
+                  ...rdSendProgress[i],
+                  status: "completed",
+                  links: ev.result.links,
+                  error_code: null,
+                };
+                break;
+              }
+            }
           } else if (ev.result.kind === "pending") {
             stillPendingCount += 1;
           } else if (ev.result.kind === "missing") {
             missingCount += 1;
+            // Same reconciliation: mark the originating row as error
+            // with a clear code so users don't think it's still
+            // queued forever.
+            for (let i = 0; i < rdSendProgress.length; i++) {
+              if (rdSendProgress[i].torrent_id === ev.torrent_id) {
+                rdSendProgress[i] = {
+                  ...rdSendProgress[i],
+                  status: "error",
+                  links: [],
+                  error_code: "rd_torrent_missing",
+                };
+                break;
+              }
+            }
           } else {
             errorCount += 1;
             errorCodes.push(ev.result.error_code);
