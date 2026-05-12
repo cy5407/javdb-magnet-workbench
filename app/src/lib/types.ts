@@ -231,4 +231,12 @@ export interface RdSendProgress {
   status: "pending" | "sending" | "completed" | "in_pending" | "error";
   links: RdLink[];
   error_code: string | null;
+  /**
+   * RD-side torrent identifier captured when the send-magnet outcome
+   * was `completed` or `pending`. Lets the pending-retry path find
+   * the originating row by torrent_id and update its status/links
+   * (otherwise the progress panel forever shows "RD 處理中" even
+   * after retry succeeds).
+   */
+  torrent_id?: string;
 }
