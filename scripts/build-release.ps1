@@ -130,12 +130,36 @@ Ok ("sidecar.exe at " + $SidecarSource)
 #   - skips MSI / NSIS bundling so no installer artifacts leak in
 # ---------------------------------------------------------------------------
 Step "Building Rust release binary (npx tauri build --no-bundle)"
+# Scrub the build-host user path out of the binary. Rust's `file!()`
+# macro and panic strings bake the absolute path of every compiled
+# source file into the output, so without remapping the user's
+# Windows username + .cargo / project layout would be visible to
+# anyone strings(1)-ing the exe. `--remap-path-prefix` rewrites
+# those embedded paths at compile time. Three remaps cover the
+# usual suspects:
+#   - %USERPROFILE%\.cargo  → ~/.cargo            (dependency crates)
+#   - %USERPROFILE%\.rustup → ~/.rustup           (stdlib sources)
+#   - <repo root>           → <project>           (this project's own files)
+# Note: changing RUSTFLAGS invalidates the entire build cache, so
+# the first run after toggling this is a full cold compile
+# (~3-5 min on a warm dependency tree).
+$remapFlags = @(
+    "--remap-path-prefix=$($env:USERPROFILE)\.cargo=~/.cargo",
+    "--remap-path-prefix=$($env:USERPROFILE)\.rustup=~/.rustup",
+    "--remap-path-prefix=$RepoRoot=<project>"
+) -join ' '
+Ok ("RUSTFLAGS scrub: " + $remapFlags)
+$prevRustflags = $env:RUSTFLAGS
+$env:RUSTFLAGS = if ($prevRustflags) { "$prevRustflags $remapFlags" } else { $remapFlags }
 Push-Location $AppDir
 try {
     & npx tauri build --no-bundle
     if ($LASTEXITCODE -ne 0) { FailExit "tauri build exited with code $LASTEXITCODE" }
 } finally {
     Pop-Location
+    # Restore prior RUSTFLAGS so subsequent processes (other cargo
+    # invocations in this shell session) aren't sticky-configured.
+    $env:RUSTFLAGS = $prevRustflags
 }
 $MainExeSource = Join-Path $CargoOutDir "javdbmagnet.exe"
 if (-not (Test-Path $MainExeSource)) { FailExit "javdbmagnet.exe missing: $MainExeSource" }
