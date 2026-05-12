@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { open as openExternal } from "@tauri-apps/plugin-shell";
   import {
     parseMagnetBatch,
     parseUrlBatch,
@@ -1118,10 +1119,20 @@
     <div class="row stack">
       <label class="grow" for="rd-token-input">
         {rdHasToken ? "更換 Token" : "設定 Token"}（取得：
+        <!-- `target="_blank"` alone does nothing in a Tauri WebView; we
+             also intercept the click and hand the URL to tauri-plugin-shell's
+             `open()` so it actually opens in the user's default browser.
+             The capability is scoped to specific JavDB / RD domains in
+             `capabilities/default.json`. -->
         <a
           href="https://real-debrid.com/apitoken"
-          target="_blank"
-          rel="noreferrer">real-debrid.com/apitoken</a>）
+          onclick={(e) => {
+            e.preventDefault();
+            openExternal("https://real-debrid.com/apitoken").catch((err) =>
+              console.warn("openExternal failed:", err),
+            );
+          }}
+        >real-debrid.com/apitoken</a>）
       </label>
       <div class="row">
         <input
