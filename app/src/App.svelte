@@ -91,6 +91,10 @@
   let pendingEntries = $state<PendingEntry[]>([]);
   let isRetryingPending = $state(false);
   let retryAbort: AbortController | null = null;
+  // Inline status for the pending section, rendered right under the
+  // section header so feedback is visible without scrolling back up
+  // to the Real-Debrid block (where rdMessage lives).
+  let pendingMessage = $state<{ kind: "ok" | "info" | "error"; text: string } | null>(null);
 
   // M7a-lite: Manual legacy data import
   let legacyPath = $state("");
@@ -655,11 +659,20 @@
     }
   }
 
+  /** Re-read pending_torrents.json from disk. NOTE: this does NOT
+   * query RD — it just refreshes the local snapshot. The visible
+   * effect is usually nil unless another app instance / external
+   * editor modified the file. We surface this as an explicit
+   * `pendingMessage` so the button is no longer "silent". */
   async function refreshPending() {
     try {
       pendingEntries = await invoke<PendingEntry[]>("pending_list");
+      pendingMessage = {
+        kind: "info",
+        text: `已重新載入本機紀錄（${pendingEntries.length} 筆）。需要查 RD 端最新狀態請按「全部重試」。`,
+      };
     } catch (e) {
-      rdMessage = `讀取待處理清單失敗：${e}`;
+      pendingMessage = { kind: "error", text: `讀取待處理清單失敗：${e}` };
     }
   }
 
@@ -668,26 +681,62 @@
     if (pendingEntries.length === 0) return;
     isRetryingPending = true;
     retryAbort = new AbortController();
+    pendingMessage = { kind: "info", text: `重試中 0/${pendingEntries.length}…` };
+
     const completedLinks: string[] = [];
-    rdMessage = "";
+    let completedCount = 0;
+    let stillPendingCount = 0;
+    let missingCount = 0;
+    let errorCount = 0;
+    const errorCodes: string[] = [];
 
     try {
       await retryPending(
         pendingEntries,
         (ev: RdRetryEvent) => {
           if (ev.result.kind === "completed") {
+            completedCount += 1;
             for (const l of ev.result.links) {
               if (l.download) completedLinks.push(l.download);
             }
+          } else if (ev.result.kind === "pending") {
+            stillPendingCount += 1;
+          } else if (ev.result.kind === "missing") {
+            missingCount += 1;
+          } else {
+            errorCount += 1;
+            errorCodes.push(ev.result.error_code);
           }
+          pendingMessage = {
+            kind: "info",
+            text: `重試中 ${ev.index}/${ev.total}…`,
+          };
         },
         { signal: retryAbort.signal },
       );
     } finally {
       isRetryingPending = false;
       retryAbort = null;
-      await refreshPending();
+      // Re-read disk so the table reflects sidecar-side mutations
+      // (entries removed on completed/missing; status/progress
+      // updated for still-pending entries). We DON'T call the
+      // refresh helper because that would overwrite pendingMessage
+      // with a generic "已重新載入" line — we want the retry summary.
+      try {
+        pendingEntries = await invoke<PendingEntry[]>("pending_list");
+      } catch (e) {
+        console.warn("pending_list after retry failed:", e);
+      }
     }
+
+    // Build the summary fragments.
+    const parts: string[] = [];
+    if (completedCount > 0) parts.push(`${completedCount} 個完成`);
+    if (stillPendingCount > 0) parts.push(`${stillPendingCount} 個仍在 RD 處理中`);
+    if (missingCount > 0) parts.push(`${missingCount} 個已從 RD 消失（已移除）`);
+    if (errorCount > 0) parts.push(`${errorCount} 個查詢失敗`);
+
+    let summary = parts.length > 0 ? `重試完成：${parts.join("、")}` : "重試完成";
 
     if (completedLinks.length > 0) {
       try {
@@ -695,13 +744,22 @@
           "copy_rd_links_bulk",
           { links: completedLinks },
         );
-        rdMessage = `重試完成：已複製 ${result.copied} 條 RD 下載連結`;
+        summary += `；已複製 ${result.copied} 條 RD 下載連結到剪貼簿`;
       } catch (e) {
-        rdMessage = `重試完成 ${completedLinks.length} 條（剪貼簿寫入失敗：${e}）`;
+        summary += `；剪貼簿寫入失敗：${e}`;
       }
-    } else {
-      rdMessage = `重試完成，目前沒有新完成的連結（剩 ${pendingEntries.length} 個）`;
     }
+
+    if (errorCount > 0 && errorCodes.length > 0) {
+      // Surface the first error code so the user can act on it
+      // (e.g. rd_token_invalid -> re-paste token).
+      summary += `\n第一個失敗原因：${rdErrorMessage(errorCodes[0])}（code: ${errorCodes[0]}）`;
+    }
+
+    pendingMessage = {
+      kind: errorCount > 0 ? "error" : (completedCount > 0 ? "ok" : "info"),
+      text: summary,
+    };
   }
 
   function cancelRetry() {
@@ -916,8 +974,12 @@
       pendingEntries = await invoke<PendingEntry[]>("pending_remove", {
         torrentId: torrent_id,
       });
+      pendingMessage = {
+        kind: "ok",
+        text: `已移除 1 筆，剩 ${pendingEntries.length} 筆`,
+      };
     } catch (e) {
-      rdMessage = `移除失敗：${e}`;
+      pendingMessage = { kind: "error", text: `移除失敗：${e}` };
     }
   }
 
@@ -925,9 +987,9 @@
     try {
       await invoke("pending_clear");
       pendingEntries = [];
-      rdMessage = "待處理清單已清空";
+      pendingMessage = { kind: "ok", text: "待處理清單已清空" };
     } catch (e) {
-      rdMessage = `清空失敗：${e}`;
+      pendingMessage = { kind: "error", text: `清空失敗：${e}` };
     }
   }
 
@@ -1639,20 +1701,26 @@
       <h2>待處理（Real-Debrid）</h2>
       <p class="hint">
         這些 torrent RD 尚未完成下載。重試時不需要原始磁力（不存在 sidecar 之外）。
+        「全部重試」會逐筆查 RD 最新狀態；「重讀本機紀錄」只重讀 pending_torrents.json，
+        不查 RD。
       </p>
+
+      {#if pendingMessage}
+        <p class="inline-msg" data-kind={pendingMessage.kind} style="white-space: pre-line;">{pendingMessage.text}</p>
+      {/if}
 
       <div class="row">
         <button
           onclick={retryAllPending}
           disabled={isRetryingPending || pendingEntries.length === 0}
         >
-          {isRetryingPending ? "重試中…" : "全部重試"}
+          {isRetryingPending ? "重試中…" : "全部重試（查 RD）"}
         </button>
         {#if isRetryingPending}
           <button onclick={cancelRetry}>取消</button>
         {/if}
         <button onclick={refreshPending} disabled={isRetryingPending}>
-          重新載入
+          重讀本機紀錄
         </button>
         <button onclick={clearAllPending} disabled={isRetryingPending}>
           全部清空
