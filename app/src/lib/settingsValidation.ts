@@ -39,11 +39,20 @@ export function validateMinSizeMb(value: number): string | null {
   return null;
 }
 
-/** cache_wait_seconds: integer, at least 5. */
+/** cache_wait_seconds: integer in [5, 300].
+ *
+ * The 300s ceiling mirrors `MAX_RD_CACHE_WAIT_SECS` in Rust
+ * `sidecar_manager.rs`: the per-request sidecar timeout for
+ * `rd_send_magnet` is `cache_wait + 90s` (slack), and we cap the budget
+ * so a single hung magnet can't lock the manager for an arbitrary
+ * duration. Settings the user can pick must agree with what the Rust
+ * side will actually accept.
+ */
 export function validateCacheWaitSeconds(value: number): string | null {
   if (!Number.isFinite(value)) return "必須是數字";
   if (!Number.isInteger(value)) return "必須是整數";
   if (value < 5) return "最小為 5 秒（避免 RD 端尚未判定快取就放棄）";
+  if (value > 300) return "最大為 300 秒（避免單一磁力長時間鎖住 sidecar）";
   return null;
 }
 
