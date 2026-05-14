@@ -4,12 +4,17 @@
 //! request/response API: each public method writes one JSON line to the
 //! daemon's stdin and awaits the next JSON line on stdout.
 //!
-//! Concurrency model: a single `tokio::sync::Mutex` serializes all requests.
-//! The daemon itself is single-threaded synchronous (M3 contract), so this
-//! matches its dispatch loop. Multiple concurrent Tauri commands queue
-//! behind the lock — fine for the M3 fetch/copy workload.
+//! Concurrency: a single `tokio::sync::Mutex` serializes all requests; the
+//! daemon's dispatch loop is itself single-threaded synchronous (M3 contract).
+//!
+//! Liveness (M9 Phase 8-A1): each `request()` is bounded by `REQUEST_TIMEOUT_SECS`.
+//! On timeout, EOF, or any protocol-corruption error (parse failure, request_id
+//! mismatch) the manager transitions to a permanent dead state via `mark_dead`;
+//! every subsequent call fails fast and the user must restart the app. No
+//! auto-respawn, no cancel-bypass.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tauri::{async_runtime::Mutex, AppHandle};
@@ -18,15 +23,39 @@ use tauri_plugin_shell::ShellExt;
 use tokio::sync::mpsc;
 
 const PROTOCOL_VERSION: u32 = 1;
+const REQUEST_TIMEOUT_SECS: u64 = 60;
 
 pub struct SidecarManager {
     inner: Arc<Mutex<SidecarInner>>,
 }
 
 struct SidecarInner {
-    child: CommandChild,
+    child: Option<CommandChild>,
     line_rx: mpsc::UnboundedReceiver<String>,
     request_counter: u64,
+    dead: Option<String>,
+}
+
+impl SidecarInner {
+    /// Best-effort kill child + persist failure reason. Returns `reason` so
+    /// callers can write `return Err(inner.mark_dead(...))` in one line.
+    fn mark_dead(&mut self, reason: String) -> String {
+        if let Some(child) = self.child.take() {
+            let _ = child.kill();
+        }
+        self.dead = Some(reason.clone());
+        reason
+    }
+}
+
+impl Drop for SidecarInner {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.take() { let _ = child.kill(); }
+    }
+}
+
+fn timeout_error(cmd: &str) -> String {
+    format!("sidecar request '{cmd}' timed out after {REQUEST_TIMEOUT_SECS}s; restart the app to recover")
 }
 
 impl SidecarManager {
@@ -81,9 +110,10 @@ impl SidecarManager {
 
         let manager = Self {
             inner: Arc::new(Mutex::new(SidecarInner {
-                child,
+                child: Some(child),
                 line_rx,
                 request_counter: 0,
+                dead: None,
             })),
         };
 
@@ -115,18 +145,16 @@ impl SidecarManager {
     /// Send one JSON-line request, await one JSON-line response.
     pub async fn request(&self, cmd: &str, body: Value) -> Result<Value, String> {
         let mut inner = self.inner.lock().await;
+        if let Some(reason) = &inner.dead {
+            return Err(format!("sidecar is dead: {reason}"));
+        }
         inner.request_counter += 1;
         let req_id = format!("r-{}", inner.request_counter);
 
         let mut obj = match body {
             Value::Object(map) => map,
             Value::Null => Default::default(),
-            other => {
-                return Err(format!(
-                    "request body must be a JSON object or null, got {}",
-                    other
-                ));
-            }
+            other => return Err(format!("request body must be a JSON object or null, got {other}")),
         };
         obj.insert("cmd".to_string(), Value::String(cmd.to_string()));
         obj.insert("request_id".to_string(), Value::String(req_id.clone()));
@@ -136,28 +164,39 @@ impl SidecarManager {
         let mut bytes = line.into_bytes();
         bytes.push(b'\n');
 
-        inner
-            .child
-            .write(&bytes)
-            .map_err(|e| format!("stdin write failed: {e}"))?;
+        let write_result = match inner.child.as_mut() {
+            Some(child) => child.write(&bytes),
+            None => return Err(inner.mark_dead("child handle missing".to_string())),
+        };
+        if let Err(e) = write_result {
+            return Err(inner.mark_dead(format!("stdin write failed: {e}")));
+        }
 
-        let response_line = inner
-            .line_rx
-            .recv()
-            .await
-            .ok_or_else(|| "sidecar closed before response".to_string())?;
+        let recv = tokio::time::timeout(
+            Duration::from_secs(REQUEST_TIMEOUT_SECS),
+            inner.line_rx.recv(),
+        )
+        .await;
 
-        let resp: Value = serde_json::from_str(&response_line)
-            .map_err(|e| format!("response parse failed: {e}"))?;
+        // Any terminal failure here is treated as protocol-corruption: kill
+        // the child and stay dead so subsequent calls fail fast (vs. queueing
+        // behind a mutex held by a hung await, or desync'ing the line stream).
+        let response_line = match recv {
+            Err(_elapsed) => return Err(inner.mark_dead(timeout_error(cmd))),
+            Ok(None) => return Err(inner.mark_dead("sidecar closed before response".to_string())),
+            Ok(Some(line)) => line,
+        };
 
-        // Verify request_id correlation. Since we serialize all requests
-        // behind the mutex, mismatches indicate a protocol bug.
+        let resp: Value = match serde_json::from_str(&response_line) {
+            Ok(v) => v,
+            Err(e) => return Err(inner.mark_dead(format!("response parse failed: {e}"))),
+        };
+
         let resp_id = resp.get("request_id").and_then(|v| v.as_str());
         if resp_id != Some(req_id.as_str()) {
-            return Err(format!(
-                "request_id mismatch: expected {}, got {:?}",
-                req_id, resp_id
-            ));
+            return Err(inner.mark_dead(format!(
+                "request_id mismatch: expected {req_id}, got {resp_id:?}"
+            )));
         }
 
         Ok(resp)
@@ -168,4 +207,34 @@ fn error_message(resp: &Value) -> Option<&str> {
     resp.get("error")
         .and_then(|e| e.get("message"))
         .and_then(|m| m.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mark_dead_records_reason_and_is_idempotent() {
+        let (_tx, line_rx) = mpsc::unbounded_channel::<String>();
+        let mut inner = SidecarInner {
+            child: None, // can't construct a real CommandChild in unit test
+            line_rx,
+            request_counter: 0,
+            dead: None,
+        };
+        let returned = inner.mark_dead("boom".to_string());
+        assert_eq!(returned, "boom");
+        assert_eq!(inner.dead.as_deref(), Some("boom"));
+        // Idempotency: second call overwrites with new reason.
+        let returned2 = inner.mark_dead("again".to_string());
+        assert_eq!(returned2, "again");
+        assert_eq!(inner.dead.as_deref(), Some("again"));
+    }
+
+    #[test]
+    fn timeout_error_names_the_command() {
+        let msg = timeout_error("rd_send_magnet");
+        assert!(msg.contains("rd_send_magnet"), "got: {msg}");
+        assert!(msg.contains("restart the app"), "got: {msg}");
+    }
 }

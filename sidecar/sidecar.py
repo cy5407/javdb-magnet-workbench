@@ -36,7 +36,14 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from javdb_magnet_gui import create_session, fetch_magnets  # noqa: E402
+# Daemon-boundary responsibility: ensure stdout speaks UTF-8 even when the
+# inheriting console (Windows cmd / PowerShell) defaults to a code page
+# that would mangle JavDB titles or magnet `dn=` values. Keep this OUT of
+# javdb_scraper.py — that's a pure library and should not touch stdio.
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+from javdb_scraper import create_session, fetch_magnets  # noqa: E402
 
 PROTOCOL_VERSION = 1
 SIDECAR_VERSION = "0.1.0"

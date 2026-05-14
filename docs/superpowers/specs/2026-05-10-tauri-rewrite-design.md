@@ -3,7 +3,7 @@ name: Tauri rewrite production plan
 description: Production plan to migrate the JavDB magnet workbench from a single-process tkinter app to a Tauri (Svelte+Rust) UI driven by a long-running PyInstaller Python sidecar daemon. Covers blocker fixes, sidecar protocol, storage layout, UI feature parity, testing, packaging, and 8-milestone roadmap.
 type: design
 date: 2026-05-10
-status: awaiting reviewer approval
+status: implemented (M1-M9); preserved as design history
 ---
 
 > ⚠ **Implementation drift note (M6a / 2026-05-11)**: this design spec
@@ -15,6 +15,67 @@ status: awaiting reviewer approval
 > install image) carry over to MSI — only the installer technology
 > changed. Future doc revisions should retitle §11 M8 from "NSIS
 > installer" to "MSI installer".
+
+> ⚠ **Implementation drift note (M9 / 2026-05-15)**: this spec is now
+> implementation history, not the source of truth for current contracts.
+> M1-M9 shipped substantial code/docs that diverge from the path names,
+> module layouts, and protocol shapes described below. The body text is
+> preserved verbatim as design context (spike rationale, threat model,
+> milestone reasoning); when changing live code, consult the architecture
+> contracts instead of the prose below.
+>
+> **Current authoritative runtime contracts**:
+> - [`docs/architecture/function-contracts.md`](../../architecture/function-contracts.md)
+>   — index + cross-layer call graph + bucket inventory.
+> - [`docs/architecture/contracts/sidecar-runtime.md`](../../architecture/contracts/sidecar-runtime.md)
+>   — live JSONL daemon protocol (the actual contract `sidecar.exe` speaks).
+> - [`docs/architecture/contracts/sidecar.md`](../../architecture/contracts/sidecar.md)
+>   — current PyInstaller build pipeline.
+>
+> **Sidecar entry**:
+> - Old (this spec): `spikes/python_sidecar_protocol/sidecar.py`, argv-style
+>   commands (`<exe> fetch-javdb <url>`) plus an optional `--handshake-stdin`
+>   one-line JSON pre-loop read.
+> - **Current**: `sidecar/sidecar.py` (M3 promotion). Protocol is a
+>   long-running **JSONL daemon** — one JSON object per line on stdin,
+>   one JSON response per line on stdout, with `cmd_handshake` /
+>   `cmd_fetch_javdb` / `cmd_rd_*` etc. The argv / `--handshake-stdin`
+>   surface no longer exists.
+>
+> **JavDB scraping core**:
+> - Old (this spec): root `javdb_magnet_gui.py` providing `create_session`
+>   and `fetch_magnets` (alongside the Tk app).
+> - **Current**: [`javdb_scraper.py`](../../../javdb_scraper.py) (M9 Phase 5-A).
+>   Pure HTTP+parse module with no `tkinter` / `app_logging` / `realdebrid`
+>   imports — sidecar imports from here, not from the Tk file.
+> - Retired Tk source kept for reference at
+>   [`legacy/javdb_magnet_gui.py`](../../../legacy/javdb_magnet_gui.py)
+>   (M9 Phase 5-B); not bundled into `sidecar.exe`.
+>
+> **Removed in M9** (still mentioned in body text below):
+> - `javdb_magnet.py` — orphan CLI; deleted in Phase 2.
+> - `build.py` — legacy Tk PyInstaller script; deleted in Phase 2.
+> - `spikes/rust_fetch_javdb/`, `spikes/rquest_fetch_javdb/` —
+>   closed-as-not-viable native Rust spikes; deleted in Phase 2.
+> - `spikes/python_sidecar_protocol/sidecar.py` and `…/driver_rust/` —
+>   pre-M3 spike; deleted in Phase 4 (the protocol that replaced it lives
+>   in `sidecar/sidecar.py`). The directory's `NOTES.md` remains as a
+>   RETIRED historical marker.
+> - `spikes/pyinstaller_sidecar/driver_rust/` — pre-M3 argv harness;
+>   deleted in Phase 8-C because it spoke the obsolete argv contract and
+>   could not validate the live JSONL daemon.
+>
+> **Sidecar build path**:
+> - Still [`spikes/pyinstaller_sidecar/build_sidecar.py`](../../../spikes/pyinstaller_sidecar/build_sidecar.py)
+>   (PyInstaller `--onefile`). M9 Phase 8-B replaced the old
+>   `ensure_pyinstaller()` / implicit `pip install` flow with
+>   `ensure_pinned_deps()`, which fails fast against the exact versions
+>   pinned in [`requirements-sidecar.txt`](../../../requirements-sidecar.txt)
+>   and never mutates the host Python environment.
+>
+> Future doc revisions of *this* spec are not planned — the body is design
+> history. Architecture contracts under `docs/architecture/` are the live,
+> maintained reference.
 
 # Tauri Rewrite — Production Plan
 
