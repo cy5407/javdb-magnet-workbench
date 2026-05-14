@@ -24,7 +24,11 @@ pyinstaller_sidecar/
 
 ## 打包
 
+先安裝 pinned 依賴（M9 Phase 8-B 起 build script 不再自動 `pip install`，
+版本不符會 fail-fast）：
+
 ```
+pip install -r requirements-sidecar.txt
 python spikes/pyinstaller_sidecar/build_sidecar.py
 ```
 

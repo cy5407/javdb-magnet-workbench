@@ -15,6 +15,8 @@
   舊 spike 已 retired (見 spikes/python_sidecar_protocol/NOTES.md)
 """
 
+import importlib.metadata
+import re
 import shutil
 import subprocess
 import sys
@@ -32,17 +34,54 @@ DIST = REPO_ROOT / "app" / "src-tauri" / "binaries"
 BUILD = SPIKE_DIR / "build"
 APP_NAME = "sidecar-x86_64-pc-windows-msvc"
 SPEC = SPIKE_DIR / f"{APP_NAME}.spec"
+REQUIREMENTS = REPO_ROOT / "requirements-sidecar.txt"
 
 
-def ensure_pyinstaller():
-    """檢查 PyInstaller，沒裝就安裝。回傳採用的策略字串供 NOTES 使用。"""
-    try:
-        import PyInstaller  # noqa: F401
-        return "already-installed"
-    except ImportError:
-        print("PyInstaller 未安裝，使用 pip 安裝...", file=sys.stderr)
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
-        return "installed-via-pip"
+def _pinned_versions() -> dict[str, str]:
+    """Parse requirements-sidecar.txt into `{lowercase_name: pinned_version}`.
+
+    Strict: only `name==version` lines (plus comments / blank lines) are
+    accepted. Any other syntax (>=, ~=, extras, markers, URLs, …) fails the
+    build — this file's whole point is exact reproducibility.
+    """
+    rel = REQUIREMENTS.relative_to(REPO_ROOT)
+    if not REQUIREMENTS.exists():
+        sys.exit(f"missing {rel}; cannot verify build deps")
+    rx = re.compile(r"^\s*([A-Za-z0-9_.\-]+)\s*==\s*(\S+)\s*$")
+    pinned: dict[str, str] = {}
+    for n, raw in enumerate(REQUIREMENTS.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = rx.match(raw)
+        if not m:
+            sys.exit(f"{rel}:{n}: only `name==version` pins are allowed, got: {raw!r}")
+        pinned[m.group(1).lower()] = m.group(2)
+    if not pinned:
+        sys.exit(f"{rel}: no pins found")
+    return pinned
+
+
+def ensure_pinned_deps() -> dict[str, str]:
+    """Verify every package in requirements-sidecar.txt is installed at the
+    exact pinned version. Fail fast on missing / mismatch. Returns the pin
+    map so the caller can print a one-line summary.
+
+    Does NOT touch the host Python environment (no auto pip install).
+    """
+    rel = REQUIREMENTS.relative_to(REPO_ROOT)
+    pinned = _pinned_versions()
+    fix = f"pip install -r {rel}"
+    for name, want in pinned.items():
+        try:
+            installed = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            sys.exit(f"{name}: not installed (pinned=={want})\n  {fix}")
+        if installed != want:
+            sys.exit(
+                f"{name}: version mismatch (installed={installed}, pinned={want})\n  {fix}"
+            )
+    return pinned
 
 
 def clean():
@@ -108,8 +147,9 @@ def post_build():
 
 
 if __name__ == "__main__":
-    strategy = ensure_pyinstaller()
-    print(f"PyInstaller: {strategy}", file=sys.stderr)
+    pinned = ensure_pinned_deps()
+    summary = ", ".join(f"{n}=={v}" for n, v in pinned.items())
+    print(f"Pinned deps: {summary}", file=sys.stderr)
     clean()
     build()
     post_build()
