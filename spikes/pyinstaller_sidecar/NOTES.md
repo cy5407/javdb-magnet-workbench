@@ -1,10 +1,14 @@
 # PyInstaller sidecar packaging spike
 
 ## 目的
-驗證 [`spikes/python_sidecar_protocol/sidecar.py`](../python_sidecar_protocol/sidecar.py)
-能被 PyInstaller 打成單一 `sidecar.exe`，且 Rust driver 呼叫 exe 仍能取得同樣 JSON。
-這是 [sidecar protocol spike](../python_sidecar_protocol/NOTES.md) 的下一步：
-從「python script」→「可發布的 binary」。
+驗證 sidecar Python script 能被 PyInstaller 打成單一 `sidecar.exe`，
+且 Rust driver 呼叫 exe 仍能取得同樣 JSON。從「python script」→「可發布的 binary」。
+
+## 來源 entry 變更（M3）
+- 本 spike 撰寫時打的是 `spikes/python_sidecar_protocol/sidecar.py`（已 retired）。
+- M3 把 entry promoted 到 [`sidecar/sidecar.py`](../../sidecar/sidecar.py)（live JSONL daemon）。
+- 現行 `build_sidecar.py` 打的是 promoted 後的 entry；本 NOTES 為 historical reference。
+- 舊 spike 的歷史紀錄保留於 [`../python_sidecar_protocol/NOTES.md`](../python_sidecar_protocol/NOTES.md)。
 
 ## 結構
 

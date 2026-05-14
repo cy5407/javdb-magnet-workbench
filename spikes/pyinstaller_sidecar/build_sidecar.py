@@ -1,15 +1,18 @@
-"""把 spikes/python_sidecar_protocol/sidecar.py 打包成 sidecar.exe
+"""把 sidecar/sidecar.py 打包成 sidecar.exe
 
 用法（從 repo root 執行）：
     python spikes/pyinstaller_sidecar/build_sidecar.py
+    # 或：cd app && npm run sidecar:build
 
 產出：
-    spikes/pyinstaller_sidecar/dist/sidecar.exe
+    app/src-tauri/binaries/sidecar-x86_64-pc-windows-msvc.exe
+    （Tauri 2 externalBin 路徑，會被 javdbmagnet.exe 直接 spawn）
 
 注意：
 - 不會打包 .env / cookies.txt 進 exe
 - PyInstaller 中間檔放在 spikes/pyinstaller_sidecar/build/、.spec 也放在同層
-- 主程式既有的 build.py 是打 GUI；本檔只處理 sidecar
+- M3 起 entry 已從 spikes/python_sidecar_protocol/sidecar.py 改為 sidecar/sidecar.py；
+  舊 spike 已 retired (見 spikes/python_sidecar_protocol/NOTES.md)
 """
 
 import shutil

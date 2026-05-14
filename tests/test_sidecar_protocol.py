@@ -17,8 +17,12 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Load sidecar/sidecar.py under a unique module name so it doesn't collide
-# with the legacy spike's sidecar.py that test_sidecar_cli.py imports as `sidecar`.
+# Load sidecar/sidecar.py under a unique module name. Historical note: a
+# retired spike (spikes/python_sidecar_protocol/sidecar.py) used to live in
+# the import path under the bare name `sidecar`; both that spike and its
+# test (test_sidecar_cli.py) were removed in the M9 simplify pass. The
+# explicit-path load is kept to avoid name shadowing if a future spike
+# reintroduces a top-level `sidecar` module.
 _DAEMON_PATH = ROOT / "sidecar" / "sidecar.py"
 _spec = importlib.util.spec_from_file_location("sidecar_daemon_m3", _DAEMON_PATH)
 sd = importlib.util.module_from_spec(_spec)
@@ -97,6 +101,18 @@ class ParseCookieString(unittest.TestCase):
 
     def test_empty(self):
         self.assertEqual(sd.parse_cookie_string(""), {})
+
+    def test_whitespace_only(self):
+        self.assertEqual(sd.parse_cookie_string("   "), {})
+
+    def test_skips_pairs_without_equals(self):
+        self.assertEqual(
+            sd.parse_cookie_string("foo; bar=baz; quux"),
+            {"bar": "baz"},
+        )
+
+    def test_value_may_contain_equals(self):
+        self.assertEqual(sd.parse_cookie_string("key=a=b=c"), {"key": "a=b=c"})
 
 
 # ---------------------------------------------------------------------------

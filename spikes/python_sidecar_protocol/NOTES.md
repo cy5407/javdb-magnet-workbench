@@ -1,25 +1,36 @@
-# Python sidecar protocol spike
+# Python sidecar protocol spike — RETIRED
 
-## 目的
+> ⚠️ **此 spike 已退役，僅作歷史紀錄。**
+>
+> - **Live runtime 已 promoted** 到 [`sidecar/sidecar.py`](../../sidecar/sidecar.py)（M3 JSONL daemon）。
+> - 本目錄原本的 `sidecar.py`、`driver_rust/`、`.gitignore`、`__pycache__/` 已於 M9 simplify pass 中刪除。
+> - 對應的死測試 `tests/test_sidecar_cli.py` 也一併刪除；現行測試在 [`tests/test_sidecar_protocol.py`](../../tests/test_sidecar_protocol.py)。
+> - 本檔以下章節描述的是**舊 argv-style CLI 介面**（`python sidecar.py fetch-javdb <url>`），它**不再存在於 repo**，也不再是 production protocol。Production daemon 的契約見 [`docs/architecture/contracts/sidecar-runtime.md`](../../docs/architecture/contracts/sidecar-runtime.md)。
+>
+> 保留此檔的目的是讓未來讀者理解 M1→M3 的選型脈絡（與 [reqwest spike](../rust_fetch_javdb/NOTES.md) 失敗 / [rquest spike](../rquest_fetch_javdb/NOTES.md) 棄置的關聯），不是當作 build / runtime 指南。
+
+---
+
+## 目的（歷史）
 證明「Tauri/Rust backend 可以用穩定 JSON protocol 呼叫 Python 抓 JavDB，並取得結構化結果」，
 **不開完整 UI、不重寫主程式**。這是 [reqwest spike 失敗](../rust_fetch_javdb/NOTES.md) 與
 [rquest spike 因 Windows build chain 棄置](../rquest_fetch_javdb/NOTES.md) 後的選定路線可行性驗證。
 
-## 結構
+## 結構（歷史；目錄已刪除）
 
 ```
 python_sidecar_protocol/
-├── .gitignore         # 擋 target/、*.pdb、__pycache__/
-├── NOTES.md           # 本文件
-├── sidecar.py         # CLI 入口；重用主程式既有函式
-└── driver_rust/       # 模擬 Tauri backend
+├── .gitignore         # [已刪] 擋 target/、*.pdb、__pycache__/
+├── NOTES.md           # 本文件（保留）
+├── sidecar.py         # [已刪] argv-style CLI 入口；被 sidecar/sidecar.py 取代
+└── driver_rust/       # [已刪] 模擬 Tauri backend
     ├── Cargo.toml
     └── src/main.rs
 ```
 
-## Protocol 設計
+## Protocol 設計（歷史；不再有效）
 
-### Sidecar 介面
+### Sidecar 介面（舊 argv 介面，已退役）
 
 ```
 python sidecar.py fetch-javdb <url>
