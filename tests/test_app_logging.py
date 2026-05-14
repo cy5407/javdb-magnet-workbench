@@ -4,7 +4,7 @@ Protects M1's A-blocker fix:
 - Importing app_logging must NOT mkdir or open log files.
 - setup_logging() respects JAVDB_LOG_DIR env override.
 - Fallback chain: JAVDB_LOG_DIR > %LOCALAPPDATA%/JavDBMagnet/logs > console-only.
-- Importing javdb_magnet_gui must NOT auto-initialize logging.
+- Importing legacy.javdb_magnet_gui must NOT auto-initialize logging.
 
 All tests that call setup_logging set JAVDB_LOG_DIR to a tempdir to avoid
 polluting the developer's real %LOCALAPPDATA%/JavDBMagnet/logs.
@@ -188,7 +188,14 @@ class FallbackChain(unittest.TestCase):
 
 
 class JavdbGuiImportSideEffects(unittest.TestCase):
-    """Importing javdb_magnet_gui must NOT auto-initialize logging."""
+    """Importing legacy.javdb_magnet_gui must NOT auto-initialize logging.
+
+    Originally a regression guard for the M1 fix that made setup_logging
+    lazy (the Tk GUI's module-load was triggering mkdir + FileHandler).
+    The GUI moved to legacy/ in M9 but the lazy-logging contract still
+    matters: any module that does `from app_logging import get_logger`
+    at import time must not cause setup_logging() to fire.
+    """
 
     def setUp(self):
         self._tmp = tempfile.mkdtemp()
@@ -202,15 +209,15 @@ class JavdbGuiImportSideEffects(unittest.TestCase):
 
     def test_import_does_not_initialize_logging(self):
         # Force fresh imports
-        for mod in ("app_logging", "javdb_magnet_gui"):
+        for mod in ("app_logging", "legacy.javdb_magnet_gui"):
             sys.modules.pop(mod, None)
 
         _force_reimport("app_logging")
-        _force_reimport("javdb_magnet_gui")
+        _force_reimport("legacy.javdb_magnet_gui")
 
         self.assertEqual(
             list(Path(self._tmp).iterdir()), [],
-            "javdb_magnet_gui import unexpectedly initialized logging",
+            "legacy.javdb_magnet_gui import unexpectedly initialized logging",
         )
 
         import app_logging
