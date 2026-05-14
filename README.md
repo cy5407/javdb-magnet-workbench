@@ -162,7 +162,7 @@ Repo 的 `.gitignore` 已擋下以上路徑，但若你的工作目錄外另有�
 |---|---|---|
 | `file_pick` | `smart` | RD 端檔案選擇策略：smart / largest / video / all |
 | `min_size_mb` | `500` | 小於此值的影片視為廣告/雜訊跳過 |
-| `cache_wait_seconds` | `15` | 等 RD 判定快取的秒數（最小 5） |
+| `cache_wait_seconds` | `15` | 等 RD 判定快取的秒數（最小 5、最大 300） |
 | `wait_timeout_seconds` | `300` | 整體 RD 處理超時（最小 30） |
 | `theme` | `light` | `light` / `dark` |
 | `scale` | `auto` | UI 縮放：`auto` 或 0.5–3.0；4K 螢幕建議 1.5–2.0 |
@@ -211,12 +211,18 @@ Repo 的 `.gitignore` 已擋下以上路徑，但若你的工作目錄外另有�
 
 ### 安裝依賴
 
+從 repo root 安裝 Python sidecar 的 pinned deps（PyInstaller / curl_cffi / requests / bs4 / 5 個 transitive），然後進 `app/` 安裝 npm deps：
+
 ```powershell
+# repo root
+pip install -r requirements-sidecar.txt
+
+# 進 app 目錄
 cd app
 npm install
 ```
 
-第一次跑 Rust 依賴會下載 + 編譯 ~5 分鐘。
+`requirements-sidecar.txt` 是 sidecar build 的 exact pin；`build_sidecar.py` 會在 build 前用 `importlib.metadata` 驗版本，**不符就 fail-fast**（不再隱式 `pip install`）。第一次跑 Rust 依賴會下載 + 編譯 ~5 分鐘。
 
 ### Dev 模式（hot reload）
 
@@ -286,7 +292,7 @@ python -m unittest discover -s tests
 │  └─ package.json
 ├─ sidecar/               ← Python sidecar daemon（JavDB 抓取 + RD API）
 │  └─ sidecar.py
-├─ spikes/                ← 早期技術驗證（rust_fetch / rquest / pyinstaller_sidecar / tauri_sidecar_poc）
+├─ spikes/                ← 保留的歷史 spike notes + sidecar build pipeline（pyinstaller_sidecar / python_sidecar_protocol）
 ├─ scripts/
 │  └─ build-release.ps1   ← 一條命令 release pipeline
 ├─ tests/                 ← Python unittest
