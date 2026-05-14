@@ -51,6 +51,12 @@ describe("validateCacheWaitSeconds", () => {
   it("accepts 30", () => {
     expect(validateCacheWaitSeconds(30)).toBeNull();
   });
+  it("accepts 300 (ceiling)", () => {
+    expect(validateCacheWaitSeconds(300)).toBeNull();
+  });
+  it("rejects 301 (above ceiling)", () => {
+    expect(validateCacheWaitSeconds(301)).toMatch(/300/);
+  });
   it("rejects non-integer", () => {
     expect(validateCacheWaitSeconds(15.5)).toMatch(/整數/);
   });

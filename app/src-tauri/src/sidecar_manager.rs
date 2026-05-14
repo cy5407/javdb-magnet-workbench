@@ -7,11 +7,20 @@
 //! Concurrency: a single `tokio::sync::Mutex` serializes all requests; the
 //! daemon's dispatch loop is itself single-threaded synchronous (M3 contract).
 //!
-//! Liveness (M9 Phase 8-A1): each `request()` is bounded by `REQUEST_TIMEOUT_SECS`.
-//! On timeout, EOF, or any protocol-corruption error (parse failure, request_id
-//! mismatch) the manager transitions to a permanent dead state via `mark_dead`;
-//! every subsequent call fails fast and the user must restart the app. No
-//! auto-respawn, no cancel-bypass.
+//! Liveness (M9 Phase 8-A1, refined post-merge hotfix):
+//! each `request()` is bounded by a per-command timeout. Most commands use
+//! `DEFAULT_REQUEST_TIMEOUT_SECS`. `rd_send_magnet` is special: Real-Debrid
+//! `addMagnet` + cache-wait can legitimately exceed 60s without anything
+//! being wrong, and a premature kill can leave RD-side state without the
+//! caller ever learning the torrent_id, so we extend its budget to
+//! `cache_wait + RD_SEND_TIMEOUT_SLACK_SECS` (with `cache_wait` validated
+//! on the Rust side before ever touching the sidecar — out-of-range
+//! values are rejected, not clamped).
+//!
+//! On timeout, EOF, or any protocol-corruption error (parse failure,
+//! request_id mismatch) the manager transitions to a permanent dead state
+//! via `mark_dead`; every subsequent call fails fast and the user must
+//! restart the app. No auto-respawn, no cancel-bypass.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,7 +32,29 @@ use tauri_plugin_shell::ShellExt;
 use tokio::sync::mpsc;
 
 const PROTOCOL_VERSION: u32 = 1;
-const REQUEST_TIMEOUT_SECS: u64 = 60;
+
+/// Default budget for sidecar requests with no command-specific override.
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
+
+/// Padding added on top of `cache_wait` for `rd_send_magnet`. Covers RD
+/// `addMagnet` round-trip, file-selection, post-select status poll, and
+/// network jitter — anything past this is treated as a true hang.
+const RD_SEND_TIMEOUT_SLACK_SECS: u64 = 90;
+
+/// Hard ceiling on `cache_wait` accepted from the frontend. Keeps the
+/// per-request budget bounded (300 + 90 = 390s max). Mirrors the
+/// frontend `validateCacheWaitSeconds` ceiling.
+const MAX_RD_CACHE_WAIT_SECS: u64 = 300;
+
+/// Floor on `cache_wait`. Mirrors the frontend `validateCacheWaitSeconds`
+/// floor — anything lower is almost certainly a frontend bug, not user
+/// intent, and we'd rather refuse than start an RD round-trip we'll
+/// likely abandon.
+const MIN_RD_CACHE_WAIT_SECS: u64 = 5;
+
+/// Default `cache_wait` when the frontend omits the field (matches the
+/// frontend default in `app/src/App.svelte` settings init).
+const DEFAULT_RD_CACHE_WAIT_SECS: u64 = 15;
 
 pub struct SidecarManager {
     inner: Arc<Mutex<SidecarInner>>,
@@ -54,8 +85,48 @@ impl Drop for SidecarInner {
     }
 }
 
-fn timeout_error(cmd: &str) -> String {
-    format!("sidecar request '{cmd}' timed out after {REQUEST_TIMEOUT_SECS}s; restart the app to recover")
+fn timeout_error(cmd: &str, secs: u64) -> String {
+    format!("sidecar request '{cmd}' timed out after {secs}s; restart the app to recover")
+}
+
+/// Per-command request timeout. `rd_send_magnet` is extended because RD
+/// `addMagnet` + cache-wait can legitimately take cache_wait + a few
+/// network round-trips. All other commands stay at the default budget.
+///
+/// Returns `Ok(timeout_secs)` on success or `Err(reason)` if the body
+/// fails validation (only relevant for `rd_send_magnet`'s `cache_wait`).
+/// On `Err`, the caller MUST NOT send the request to the sidecar — RD
+/// side effects are real and we don't want to start one we can't bound.
+fn timeout_for(cmd: &str, body: &Value) -> Result<u64, String> {
+    if cmd != "rd_send_magnet" {
+        return Ok(DEFAULT_REQUEST_TIMEOUT_SECS);
+    }
+    let cache_wait = match body.get("cache_wait") {
+        None | Some(Value::Null) => DEFAULT_RD_CACHE_WAIT_SECS,
+        Some(Value::Number(n)) => {
+            // u64 conversion only succeeds for non-negative integers.
+            // Floats (`5.5`), negatives, and >u64::MAX all fall through.
+            n.as_u64().ok_or_else(|| {
+                format!("rd_send_magnet: cache_wait must be a non-negative integer, got {n}")
+            })?
+        }
+        Some(other) => {
+            return Err(format!(
+                "rd_send_magnet: cache_wait must be a non-negative integer, got {other}"
+            ));
+        }
+    };
+    if cache_wait < MIN_RD_CACHE_WAIT_SECS {
+        return Err(format!(
+            "rd_send_magnet: cache_wait={cache_wait} below floor {MIN_RD_CACHE_WAIT_SECS}s"
+        ));
+    }
+    if cache_wait > MAX_RD_CACHE_WAIT_SECS {
+        return Err(format!(
+            "rd_send_magnet: cache_wait={cache_wait} above ceiling {MAX_RD_CACHE_WAIT_SECS}s"
+        ));
+    }
+    Ok(cache_wait + RD_SEND_TIMEOUT_SLACK_SECS)
 }
 
 impl SidecarManager {
@@ -144,6 +215,12 @@ impl SidecarManager {
 
     /// Send one JSON-line request, await one JSON-line response.
     pub async fn request(&self, cmd: &str, body: Value) -> Result<Value, String> {
+        // Compute the per-command timeout BEFORE acquiring the lock or
+        // sending anything to the sidecar. If validation fails we must
+        // not send the request — RD side effects are real (a torrent
+        // could be added without the caller getting back the id).
+        let timeout_secs = timeout_for(cmd, &body)?;
+
         let mut inner = self.inner.lock().await;
         if let Some(reason) = &inner.dead {
             return Err(format!("sidecar is dead: {reason}"));
@@ -173,7 +250,7 @@ impl SidecarManager {
         }
 
         let recv = tokio::time::timeout(
-            Duration::from_secs(REQUEST_TIMEOUT_SECS),
+            Duration::from_secs(timeout_secs),
             inner.line_rx.recv(),
         )
         .await;
@@ -182,7 +259,7 @@ impl SidecarManager {
         // the child and stay dead so subsequent calls fail fast (vs. queueing
         // behind a mutex held by a hung await, or desync'ing the line stream).
         let response_line = match recv {
-            Err(_elapsed) => return Err(inner.mark_dead(timeout_error(cmd))),
+            Err(_elapsed) => return Err(inner.mark_dead(timeout_error(cmd, timeout_secs))),
             Ok(None) => return Err(inner.mark_dead("sidecar closed before response".to_string())),
             Ok(Some(line)) => line,
         };
@@ -232,9 +309,70 @@ mod tests {
     }
 
     #[test]
-    fn timeout_error_names_the_command() {
-        let msg = timeout_error("rd_send_magnet");
+    fn timeout_error_names_the_command_and_actual_secs() {
+        let msg = timeout_error("rd_send_magnet", 105);
         assert!(msg.contains("rd_send_magnet"), "got: {msg}");
+        assert!(msg.contains("105s"), "got: {msg}");
         assert!(msg.contains("restart the app"), "got: {msg}");
+    }
+
+    #[test]
+    fn timeout_for_normal_command_uses_default() {
+        for cmd in ["hello", "handshake", "fetch_javdb", "rd_user", "rd_check_pending"] {
+            assert_eq!(timeout_for(cmd, &Value::Null).unwrap(), 60, "cmd={cmd}");
+            assert_eq!(timeout_for(cmd, &json!({})).unwrap(), 60, "cmd={cmd}");
+            // body fields on non-rd_send_magnet commands are ignored
+            assert_eq!(
+                timeout_for(cmd, &json!({"cache_wait": 200})).unwrap(),
+                60,
+                "cmd={cmd}",
+            );
+        }
+    }
+
+    #[test]
+    fn timeout_for_rd_send_magnet_missing_cache_wait_uses_default_15() {
+        // 15 (default) + 90 (slack) = 105
+        assert_eq!(timeout_for("rd_send_magnet", &Value::Null).unwrap(), 105);
+        assert_eq!(timeout_for("rd_send_magnet", &json!({})).unwrap(), 105);
+        assert_eq!(
+            timeout_for("rd_send_magnet", &json!({"cache_wait": null})).unwrap(),
+            105,
+        );
+    }
+
+    #[test]
+    fn timeout_for_rd_send_magnet_at_ceiling() {
+        // 300 (ceiling) + 90 (slack) = 390
+        assert_eq!(
+            timeout_for("rd_send_magnet", &json!({"cache_wait": 300})).unwrap(),
+            390,
+        );
+    }
+
+    #[test]
+    fn timeout_for_rd_send_magnet_above_ceiling_errors() {
+        let err = timeout_for("rd_send_magnet", &json!({"cache_wait": 301})).unwrap_err();
+        assert!(err.contains("301"), "got: {err}");
+        assert!(err.contains("ceiling"), "got: {err}");
+    }
+
+    #[test]
+    fn timeout_for_rd_send_magnet_non_integer_errors() {
+        for bad in [json!(15.5), json!("15"), json!(true), json!([15]), json!(-1)] {
+            let err = timeout_for("rd_send_magnet", &json!({"cache_wait": bad}))
+                .unwrap_err();
+            assert!(
+                err.contains("non-negative integer"),
+                "for {bad}: got: {err}",
+            );
+        }
+    }
+
+    #[test]
+    fn timeout_for_rd_send_magnet_below_floor_errors() {
+        let err = timeout_for("rd_send_magnet", &json!({"cache_wait": 4})).unwrap_err();
+        assert!(err.contains("4"), "got: {err}");
+        assert!(err.contains("floor"), "got: {err}");
     }
 }
