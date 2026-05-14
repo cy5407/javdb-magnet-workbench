@@ -22,7 +22,7 @@ This document is the **entry point** to a per-layer reference set. Each layer fi
 | 2 | Svelte/TS frontend lib | [`contracts/frontend-lib.md`](contracts/frontend-lib.md) | every export + internal helper across `magnetUtils.ts`, `rdSender.ts`, `scraper.ts`, `settingsValidation.ts`, `types.ts`, `main.ts` |
 | 3 | `App.svelte` UI monolith | [`contracts/app-svelte.md`](contracts/app-svelte.md) | ~35 functions, ~50 `$state` vars, 10 `$derived`, 24 distinct `invoke()` call sites |
 | 4 | Sidecar runtime daemon | [`contracts/sidecar-runtime.md`](contracts/sidecar-runtime.md) | live `sidecar/sidecar.py` JSONL daemon, all helpers + command handlers |
-| 5 | Sidecar build + dev driver | [`contracts/sidecar.md`](contracts/sidecar.md) | `build_sidecar.py` + the historical `driver_rust/src/main.rs` spike harness |
+| 5 | Sidecar build pipeline | [`contracts/sidecar.md`](contracts/sidecar.md) | `build_sidecar.py` (PyInstaller packaging). The argv-style `driver_rust` spike harness was removed in M9 Phase 8-C. |
 | 6 | Python live + retired legacy | [`contracts/python-legacy.md`](contracts/python-legacy.md) | `app_logging.py`, `realdebrid.py`, `javdb_scraper.py` (live in sidecar) + retired-overview for `legacy/javdb_magnet_gui.py` |
 
 **Coverage**: production runtime + build-time support + retired legacy references, split across the layer documents above. (Per-file source/doc line counts are not pinned here — they drift on every refactor; check the actual files when an exact number is needed.)
@@ -77,7 +77,7 @@ Exploratory code from earlier milestones. Useful for understanding how decisions
 
 | Path | Status | Notes |
 |---|---|---|
-| `spikes/pyinstaller_sidecar/driver_rust/` | Reference-only spike driver | Demonstrates the M3 `argv` sidecar mode. **Does NOT speak the current JSONL daemon protocol** — that's owned by `sidecar/sidecar.py` (see [`sidecar-runtime.md`](contracts/sidecar-runtime.md)). |
+| `spikes/pyinstaller_sidecar/driver_rust/` | **Removed in M9 (Phase 8-C)** | Argv-style spike harness from the M3 era (`<exe> fetch-javdb <url>`). Incompatible with the live JSONL daemon protocol and could not smoke-test the M9 sidecar; deleted to stop misleading future debugging. The live protocol contract is in [`sidecar-runtime.md`](contracts/sidecar-runtime.md). |
 | `spikes/python_sidecar_protocol/` | **Retired in M9 (Phase 4)** | The original spike `sidecar.py` + `driver_rust/` were deleted; only `NOTES.md` remains as historical record (marked RETIRED). The live runtime is now `sidecar/sidecar.py`. |
 | `spikes/rust_fetch_javdb/`, `spikes/rquest_fetch_javdb/` | **Removed in M9 (Phase 2)** | Native Rust JavDB-fetch experiments that were closed as not-viable (reqwest TLS fingerprint blocked by Cloudflare; rquest Windows build chain issue). Both spike directories were deleted; design decisions remain documented in `docs/superpowers/specs/2026-05-10-tauri-rewrite-design.md`. |
 
@@ -338,7 +338,7 @@ Each agent surfaced refactor-relevant oddities. Consolidated here.
 
 ### Sidecar build/driver (`sidecar.md`)
 
-- **Stale constants in `driver_rust`** — `SIDECAR_NAME = "sidecar.exe"` and the path walker probes `dist/<SIDECAR_NAME>`, but `build_sidecar.py` (post-M3) writes `sidecar-x86_64-pc-windows-msvc.exe` to `app/src-tauri/binaries/`. Auto-discovery is therefore broken in-tree; the driver only works via `SIDECAR_EXE` env var or a manual rename. Drift not flagged anywhere.
+- ~~**Stale constants in `driver_rust`** — `SIDECAR_NAME = "sidecar.exe"` and the path walker probes `dist/<SIDECAR_NAME>`, but `build_sidecar.py` (post-M3) writes `sidecar-x86_64-pc-windows-msvc.exe` to `app/src-tauri/binaries/`. Auto-discovery is therefore broken in-tree; the driver only works via `SIDECAR_EXE` env var or a manual rename. Drift not flagged anywhere.~~ **RESOLVED M9 Phase 8-C**: entire `driver_rust/` deleted; not replaced (CI smoke-testing of `sidecar.exe` is a separate future workitem).
 - **`clean()` is broader than its name suggests** — it wipes the entire `app/src-tauri/binaries/` directory, not just the sidecar artifact. Safe today; latent footgun.
 
 ### Python legacy (`python-legacy.md`)

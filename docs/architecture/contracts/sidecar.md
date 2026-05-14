@@ -1,12 +1,11 @@
-# Sidecar — Build Pipeline & (Historical) Spike Driver
+# Sidecar — PyInstaller Build Pipeline
 
-> Source files documented:
+> Source file documented:
 > - [`spikes/pyinstaller_sidecar/build_sidecar.py`](../../../spikes/pyinstaller_sidecar/build_sidecar.py)
-> - [`spikes/pyinstaller_sidecar/driver_rust/src/main.rs`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs) — **historical spike harness**, see §3
 >
 > Intent context comes from [`spikes/pyinstaller_sidecar/NOTES.md`](../../../spikes/pyinstaller_sidecar/NOTES.md) — that document is not duplicated here.
 >
-> ⚠️ **Not the live protocol contract.** This file documents (a) the build pipeline and (b) an older argv-based spike driver. The live JSONL daemon protocol that the Tauri Rust backend actually speaks to `sidecar.exe` is owned by [`sidecar-runtime.md`](sidecar-runtime.md) — use that when changing runtime behavior.
+> ⚠️ **Not the live protocol contract.** This file documents only the build pipeline. The live JSONL daemon protocol that the Tauri Rust backend speaks to `sidecar.exe` is owned by [`sidecar-runtime.md`](sidecar-runtime.md) — use that when changing runtime behavior.
 
 ---
 
@@ -14,29 +13,18 @@
 
 The **sidecar** is a PyInstaller-bundled, single-file Windows executable that wraps the project's Python scraping/Real-Debrid stack (`sidecar/sidecar.py`, plus `javdb_scraper`, `realdebrid`, `app_logging`). It ships as `sidecar-x86_64-pc-windows-msvc.exe` and is placed inside the Tauri app's `externalBin` folder so Tauri 2's sidecar resolver can discover it by target-triple naming convention.
 
-This document covers the **build pipeline** and an **older spike driver**. The live daemon protocol is documented in [`sidecar-runtime.md`](sidecar-runtime.md).
-
-In the spike driver contract (M3 era), the sidecar:
-
-- Received a subcommand + arguments (`fetch-javdb <url>`) as **argv** from the spike `driver_rust`.
-- Performed HTTP scraping via `curl_cffi`, optionally hitting Real-Debrid.
-- Wrote a single line of JSON to **stdout** containing the result; warnings/log lines to **stderr**.
-- Exited with code `0` on success, non-zero otherwise.
-
-⚠️ **M9 update**: the live runtime is no longer argv-driven. `sidecar/sidecar.py` was promoted to a JSONL daemon (handshake + per-command request/response over stdin/stdout). The §3 description below documents the spike's argv interface for historical reference only.
-
-The Tauri wiring itself (how `tauri::api::process::Command::new_sidecar()` is invoked, command handlers, IPC types) lives elsewhere; this document only covers the **build pipeline** and the **historical driver-side contract** as expressed in the spike code.
+This document covers the **build pipeline** only. The runtime protocol (handshake + per-command JSONL request/response over stdin/stdout) lives in [`sidecar-runtime.md`](sidecar-runtime.md). M9 Phase 8-C removed the previous `driver_rust` argv-style spike harness — it pre-dated M3 and only spoke the obsolete `<exe> fetch-javdb <url>` argv contract, which made it actively misleading once production switched to JSONL. The Tauri-side wiring (`tauri-plugin-shell` `sidecar(...)` API, command handlers, IPC types) lives in `app/src-tauri/src/sidecar_manager.rs` and `app/src-tauri/src/commands.rs`.
 
 Two facts to keep in mind while reading:
 
-1. The `driver_rust` crate is a **dev-time test harness** that simulated what the production Tauri backend would do **in the M3 argv era**. It is explicitly not the production path — see the module-level comment in [`driver_rust/src/main.rs:1-11`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L1-L11). M9 production uses JSONL daemon mode; the driver does **not** speak that protocol.
-2. The PyInstaller `--onefile` artifact is written **directly** into the Tauri layout at `app/src-tauri/binaries/sidecar-x86_64-pc-windows-msvc.exe`. There is no separate copy step.
+1. The PyInstaller `--onefile` artifact is written **directly** into the Tauri layout at `app/src-tauri/binaries/sidecar-x86_64-pc-windows-msvc.exe`. There is no separate copy step.
+2. M9 Phase 8-B added [`requirements-sidecar.txt`](../../../requirements-sidecar.txt) as the exact dependency contract. `build_sidecar.py` verifies every pinned package via `importlib.metadata` and fails fast on missing/mismatched versions; it no longer auto-installs anything.
 
 ---
 
 ## 2. `build_sidecar.py`
 
-Top-level constants ([`build_sidecar.py:22-31`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L22-L31)):
+Top-level constants ([`build_sidecar.py:25-37`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L25-L37)):
 
 | Constant | Value | Role |
 |----------|-------|------|
@@ -47,20 +35,38 @@ Top-level constants ([`build_sidecar.py:22-31`](../../../spikes/pyinstaller_side
 | `BUILD` | `<repo>/spikes/pyinstaller_sidecar/build/` | PyInstaller intermediates. |
 | `APP_NAME` | `sidecar-x86_64-pc-windows-msvc` | Tauri 2 target-triple naming. |
 | `SPEC` | `<SPIKE_DIR>/sidecar-x86_64-pc-windows-msvc.spec` | Generated `.spec` location. |
+| `REQUIREMENTS` | `<repo>/requirements-sidecar.txt` | Pinned-deps contract verified before every build. |
 
-### `ensure_pyinstaller()` ([`build_sidecar.py:34-42`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L34-L42))
+### `_pinned_versions() -> dict[str, str]` ([`build_sidecar.py:40-62`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L40-L62))
 
-**Purpose**: Make sure PyInstaller is importable; install via pip into the current interpreter if not.
+**Purpose**: Parse `requirements-sidecar.txt` into `{lowercase_name: pinned_version}`. Strict: only `name==version` lines (plus blank lines / `#` comments) are accepted.
 
 **Contract**:
 - Params: none.
-- Returns: `str` — either `"already-installed"` (import succeeded) or `"installed-via-pip"` (had to install).
-- Side effects: may run `pip install pyinstaller` against the active Python interpreter; prints status to stderr.
-- Errors: `subprocess.CalledProcessError` propagates if `pip install` fails (no catch).
+- Returns: ordered `dict[str, str]` keyed by lowercased package name; insertion order matches the file (preserves the order the `Pinned deps: …` line is printed in).
+- Side effects: reads `REQUIREMENTS` text once.
+- Errors (all via `sys.exit`, no exception):
+  - File missing → `missing requirements-sidecar.txt; cannot verify build deps`
+  - Any non-comment, non-blank line that doesn't match `^name==version$` (extras, markers, `>=`, URLs, …) → `requirements-sidecar.txt:N: only \`name==version\` pins are allowed, got: '<raw>'`
+  - File has no pins → `requirements-sidecar.txt: no pins found`
 
-**Calls**: `import PyInstaller`, `subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])`.
+**Calls**: `Path.exists()`, `Path.read_text(encoding="utf-8")`, `re.compile(r"^\s*([A-Za-z0-9_.\-]+)\s*==\s*(\S+)\s*$").match`, `str.lower()`, `sys.exit`.
 
-### `clean()` ([`build_sidecar.py:45-52`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L45-L52))
+### `ensure_pinned_deps() -> dict[str, str]` ([`build_sidecar.py:65-84`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L65-L84))
+
+**Purpose**: Verify every package in `requirements-sidecar.txt` is installed at the exact pinned version. Fail fast otherwise. Returns the pin map so `__main__` can echo a one-line summary.
+
+**Contract**:
+- Params: none.
+- Returns: the same dict produced by `_pinned_versions()` once verification passes.
+- Side effects: reads installed-package metadata via `importlib.metadata.version(name)` for each pin. **Does NOT touch the host Python environment — no `pip install`, no `subprocess` call, no auto-recovery.**
+- Errors (all via `sys.exit`):
+  - Package missing → `<name>: not installed (pinned==<want>)\n  pip install -r requirements-sidecar.txt`
+  - Version mismatch → `<name>: version mismatch (installed=<got>, pinned=<want>)\n  pip install -r requirements-sidecar.txt`
+
+**Calls**: `_pinned_versions()`, `importlib.metadata.version(name)` (catches `PackageNotFoundError`), `sys.exit`.
+
+### `clean()` ([`build_sidecar.py:87-94`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L87-L94))
 
 **Purpose**: Remove previous build artifacts so each run starts from a clean state.
 
@@ -74,7 +80,7 @@ Top-level constants ([`build_sidecar.py:22-31`](../../../spikes/pyinstaller_side
 
 **Note**: `clean()` removes the **entire** `app/src-tauri/binaries/` directory, not just the sidecar exe. If other binaries land there later, this becomes destructive — `(unverified; appears to be acceptable today because the directory only holds the sidecar)`.
 
-### `build()` ([`build_sidecar.py:55-82`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L55-L82))
+### `build()` ([`build_sidecar.py:97-126`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L97-L126))
 
 **Purpose**: Invoke PyInstaller to package `sidecar/sidecar.py` into a single-file Windows console exe.
 
@@ -87,7 +93,7 @@ Top-level constants ([`build_sidecar.py:22-31`](../../../spikes/pyinstaller_side
 
 **Calls**: `Path.exists()`, `subprocess.check_call(cmd, cwd=REPO_ROOT)`.
 
-PyInstaller command ([`build_sidecar.py:61-81`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L61-L81)):
+PyInstaller command ([`build_sidecar.py:103-124`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L103-L124)):
 
 ```
 <python> -m PyInstaller
@@ -110,7 +116,7 @@ PyInstaller command ([`build_sidecar.py:61-81`](../../../spikes/pyinstaller_side
 
 `cwd=REPO_ROOT` is set so relative imports resolve from the repo root.
 
-### `post_build()` ([`build_sidecar.py:85-102`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L85-L102))
+### `post_build()` ([`build_sidecar.py:129-146`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L129-L146))
 
 **Purpose**: Verify the exe was produced; print size, usage hint, and log-dir hint to stderr.
 
@@ -123,11 +129,11 @@ PyInstaller command ([`build_sidecar.py:61-81`](../../../spikes/pyinstaller_side
 
 **Calls**: `Path.exists()`, `Path.stat()`, `print(..., file=sys.stderr)`.
 
-### Entry point: `if __name__ == "__main__":` ([`build_sidecar.py:105-110`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L105-L110))
+### Entry point: `if __name__ == "__main__":` ([`build_sidecar.py:149-155`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L149-L155))
 
 Sequence:
-1. `ensure_pyinstaller()` — install if missing.
-2. Print PyInstaller strategy to stderr.
+1. `pinned = ensure_pinned_deps()` — fail fast on missing / mismatched packages.
+2. Print `Pinned deps: <name>==<ver>, …` (joined from the returned dict) to stderr.
 3. `clean()` — wipe previous outputs.
 4. `build()` — run PyInstaller.
 5. `post_build()` — verify + print usage hints.
@@ -141,142 +147,16 @@ Sequence:
 - `spikes/pyinstaller_sidecar/build/` — PyInstaller intermediates.
 - `spikes/pyinstaller_sidecar/sidecar-x86_64-pc-windows-msvc.spec` — generated spec file.
 
-**Files explicitly NOT bundled**: `.env`, `cookies.txt` (no `--add-data` flags). Confirmed by absence in [`build_sidecar.py:61-81`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L61-L81).
+**Files explicitly NOT bundled**: `.env`, `cookies.txt` (no `--add-data` flags). Confirmed by absence in [`build_sidecar.py:103-124`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L103-L124).
 
 ---
 
-## 3. `driver_rust/src/main.rs`
-
-This crate is a **dev-time harness** that simulates the Tauri backend's invocation of the sidecar. The module-level doc-comment ([`main.rs:1-11`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L1-L11)) is explicit: production must use `tauri::api::process::Command::new_sidecar()` instead of the path-walking discovery this driver performs.
-
-### Constants
-
-- [`SIDECAR_NAME`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L20-L23) — `"sidecar.exe"` on Windows, `"sidecar"` elsewhere. Platform-gated via `#[cfg(windows)]`.
-- [`SIDECAR_EXE_ENV`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L26) — `"SIDECAR_EXE"`, env var name for explicit path override.
-
-> **Note**: the constants encode `"sidecar.exe"`, but `build_sidecar.py` actually produces `sidecar-x86_64-pc-windows-msvc.exe`. The path-walking code below will only succeed when run against a manually renamed exe **or** via the `SIDECAR_EXE` env var. `(unverified; appears to be a known spike-vs-M3 drift — the build script was updated to Tauri-target-triple naming after the driver was written.)`
-
-### Structs
-
-#### `SidecarResponse` ([`main.rs:28-35`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L28-L35))
-
-Deserialize-only. Models the JSON the sidecar writes to stdout.
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `ok` | `bool` | Sidecar's self-reported success flag. |
-| `magnet_count` | `usize` | Number of magnets parsed. |
-| `magnets` | `Vec<SidecarMagnet>` | Per-magnet entries (only `magnet_redacted` is captured). |
-| `error` | `Option<String>` | `#[serde(default)]` — defaults to `None` if absent. |
-
-Fields the sidecar emits but the driver **ignores**: `command`, `engine`, `code`, plus per-magnet `name`, `size`, `tags` (visible in [`NOTES.md` §測試結果](../../../spikes/pyinstaller_sidecar/NOTES.md)).
-
-#### `SidecarMagnet` ([`main.rs:37-40`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L37-L40))
-
-Deserialize-only. Single field captured:
-- `magnet_redacted: String` — the truncated/elided magnet link.
-
-#### `DriverSummary` ([`main.rs:42-51`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L42-L51))
-
-Serialize-only. The driver's own report, printed to stdout on completion.
-
-| Field | Type | Meaning |
-|-------|------|---------|
-| `ok` | `bool` | `resp.ok && exit_code == 0`. |
-| `sidecar_exit` | `i32` | Exit code of the sidecar (or `-1` if it never started). |
-| `parsed_json` | `bool` | Whether the driver could decode stdout as `SidecarResponse`. |
-| `magnet_count` | `usize` | Echoed from `resp.magnet_count`. |
-| `first_magnet_redacted_present` | `bool` | Whether the first magnet's redacted form passes a shape check (see `run()` below). |
-| `stderr_nonempty` | `bool` | Whether the sidecar emitted any stderr. |
-| `error` | `Option<String>` | Either the sidecar's reported error, a launch error, or a JSON-parse error. |
-
-### Functions
-
-#### `locate_sidecar_exe() -> Result<PathBuf, String>` ([`main.rs:62-104`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L62-L104))
-
-**Purpose**: Find the sidecar binary on disk.
-
-**Contract**:
-- Params: none.
-- Returns: `Ok(PathBuf)` for the first existing candidate, else `Err(String)` describing how many locations were tried.
-- Side effects: reads `SIDECAR_EXE` and `CARGO_MANIFEST_DIR` env vars; calls `current_exe()`.
-- Errors: never panics; everything is funnelled into the `Err` string.
-
-**Lookup priority**:
-1. `$SIDECAR_EXE` if set — for CI / tests / containers.
-2. `$CARGO_MANIFEST_DIR/../dist/<SIDECAR_NAME>` — `cargo run` from source tree.
-3. Walk up from `current_exe()` up to 6 levels, probing `dist/<SIDECAR_NAME>` and `spikes/pyinstaller_sidecar/dist/<SIDECAR_NAME>` at each level.
-
-**Calls**: `env::var`, `PathBuf::from`, `Path::pop`, `Path::push`, `Path::exists`, `env::current_exe`.
-
-**Note**: This walker looks under `dist/`, but `build_sidecar.py` no longer writes to `dist/`. See the constants note above.
-
-#### `run(url: &str) -> DriverSummary` ([`main.rs:106-183`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L106-L183))
-
-**Purpose**: Locate the sidecar, spawn it with `fetch-javdb <url>`, decode its stdout JSON, and produce a `DriverSummary`.
-
-**Contract**:
-- Params: `url: &str` — the JavDB URL to scrape. Already validated by the caller as `http(s)`-prefixed.
-- Returns: `DriverSummary` (never panics; failure modes all map to fields).
-- Side effects:
-  - Spawns the sidecar with `stdin = null`, `stdout = piped`, `stderr = piped`.
-  - Reads all of stdout/stderr into memory (no streaming).
-- Errors handled internally:
-  - `locate_sidecar_exe()` failure → `sidecar_exit = -1`, `ok = false`, `error = Some(<lookup error>)`.
-  - Spawn failure → `sidecar_exit = -1`, `error = Some("無法啟動 ...")`.
-  - JSON parse failure → `parsed_json = false`, `error = Some("無法解析 sidecar JSON: ...")`, `sidecar_exit` still reflects the real exit code.
-
-**Calls**: `locate_sidecar_exe()`, `Command::new(...).arg("fetch-javdb").arg(url).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).output()`, `serde_json::from_str`.
-
-**Subprocess invocation** ([`main.rs:122-129`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L122-L129)):
-
-```text
-<sidecar.exe> fetch-javdb <url>
-```
-
-No timeout. The comment at [`main.rs:122`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L122) explicitly flags this as a spike-only omission.
-
-**Redacted-magnet shape check** ([`main.rs:153-161`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L153-L161)): the first magnet's `magnet_redacted` field is considered well-formed iff:
-- starts with `magnet:?xt=urn:btih:`,
-- contains the literal `...` (elision marker),
-- is shorter than 64 chars.
-
-This is the driver's assertion that the sidecar is in fact redacting magnets, not leaking them.
-
-#### `main() -> ExitCode` ([`main.rs:185-208`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L185-L208))
-
-**Purpose**: Parse argv, call `run()`, print the summary as pretty JSON.
-
-**Contract**:
-- argv: requires exactly one positional argument — the URL. URL must start with `http`.
-- stdout: pretty-printed JSON of `DriverSummary`.
-- stderr: usage message on missing/invalid argv; serialization-failure message if `serde_json::to_string_pretty` fails.
-- Exit codes:
-  - `2` — missing argv or URL doesn't start with `http`.
-  - `0` — `summary.ok == true`.
-  - `1` — `summary.ok == false`.
-
-**Calls**: `env::args`, `serde_json::to_string_pretty`, `run`.
-
-### Driver-side contract summary
-
-- **Argv it sends to the sidecar**: `["fetch-javdb", <url>]`. No flags, no environment forwarding, no stdin payload.
-- **What it reads from the sidecar**: a single JSON document on stdout (whole-buffer parse, no line framing — `serde_json::from_str(stdout.trim())` at [`main.rs:149`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L149)).
-- **What it expects in that JSON**: at minimum `ok: bool`, `magnet_count: usize`, `magnets: [{ magnet_redacted: String }, ...]`; optionally `error: String`.
-- **What it does with stderr**: only inspects whether it's non-empty (`stderr_nonempty` flag). Never echoes content.
-- **What it does with the exit code**: records it; does not re-derive success from it (the `ok` field in `DriverSummary` requires **both** `resp.ok == true` and `exit_code == 0`).
-
----
-
-## 4. Build pipeline summary
+## 3. Build pipeline summary
 
 End-to-end, from invocation to artifact:
 
-1. **Invocation** — `npm run sidecar:build` (or equivalent). `(unverified; the npm script wiring is not in the files read, but the user's brief says this is the entry point.)` In practice the script body runs:
-   ```
-   python spikes/pyinstaller_sidecar/build_sidecar.py
-   ```
-2. **PyInstaller bootstrap** — `ensure_pyinstaller()` imports `PyInstaller`; if absent, runs `pip install pyinstaller` against the active interpreter.
+1. **Invocation** — `npm run sidecar:build` (or `python spikes/pyinstaller_sidecar/build_sidecar.py` directly).
+2. **Pinned-deps check** — `ensure_pinned_deps()` parses [`requirements-sidecar.txt`](../../../requirements-sidecar.txt) and verifies every `name==version` against `importlib.metadata.version(name)`. Any missing or mismatched package exits with a `pip install -r requirements-sidecar.txt` hint; no implicit `pip install` is performed.
 3. **Clean** — `clean()` removes:
    - `app/src-tauri/binaries/` (entire directory)
    - `spikes/pyinstaller_sidecar/build/`
@@ -305,51 +185,13 @@ End-to-end, from invocation to artifact:
 
 ---
 
-## 5. Sidecar stdio contract (as inferred from `driver_rust`)
-
-The driver_rust code is the source-of-truth surface this document can verify; the sidecar's full surface is in `sidecar/sidecar.py` (not read here). From the driver alone:
-
-### Protocol shape
-
-- **Transport**: process spawn + argv + stdout/stderr. **No HTTP**, **no port**, **no stdin payload** (the driver explicitly sets `stdin = Stdio::null()` at [`main.rs:126`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L126)).
-- **Framing**: whole-buffer JSON on stdout — `serde_json::from_str(stdout.trim())` at [`main.rs:149`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L149). One JSON document per process invocation. **Not** JSON-Lines, **not** length-prefixed.
-- **Lifetime**: one-shot per invocation. The sidecar exits after writing the response. (NOTES.md mentions a future daemon mode, but the current contract is one-shot.)
-
-### Commands
-
-Only one command is exercised by the driver:
-
-| Command (argv[0]) | Args | Response shape |
-|-------------------|------|----------------|
-| `fetch-javdb` | `<url>` (positional) | `{ ok: bool, magnet_count: usize, magnets: [{ magnet_redacted: String, ... }], error?: String, ... }` |
-
-Additional fields seen in `NOTES.md` testing output (`command`, `engine`, `code`, plus per-magnet `name`/`size`/`tags`) exist in the actual response but are not part of the driver-consumed contract.
-
-### Exit codes (as observed/handled by driver)
-
-- `0` — success (paired with `ok: true` in JSON).
-- Non-zero — failure; driver still attempts to parse stdout JSON to capture the `error` field.
-- `-1` — synthetic value the driver uses when the sidecar never launched.
-
-### Stderr
-
-Free-form. The driver only checks `is_empty()`. Per `NOTES.md`, real-world stderr contains `RequestsDependencyWarning` from urllib3 plus `app_logging` init lines.
-
-### Magnet redaction invariant
-
-Asserted by the driver at [`main.rs:153-161`](../../../spikes/pyinstaller_sidecar/driver_rust/src/main.rs#L153-L161): each `magnet_redacted` string must
-- start with `magnet:?xt=urn:btih:`,
-- contain `...`,
-- be shorter than 64 characters.
-
-This is the driver's encoded expectation that the sidecar never returns full magnet URIs over stdout.
-
----
-
 ## Summary
 
-The sidecar contract, as visible from the spike code, is: **spawn `sidecar-x86_64-pc-windows-msvc.exe` with argv `["fetch-javdb", "<url>"]`, read a single JSON document from stdout, ignore stderr (except for liveness), and check that `ok == true` plus `exit_code == 0`.** The build pipeline is a single Python script (`build_sidecar.py`) that shells out to PyInstaller `--onefile --console` and writes the artifact straight into the Tauri `externalBin` layout — no separate copy step, no `.env` or `cookies.txt` bundling.
+The sidecar build pipeline is a single Python script ([`build_sidecar.py`](../../../spikes/pyinstaller_sidecar/build_sidecar.py)) that verifies pinned Python deps, then shells out to PyInstaller `--onefile --console` and writes the artifact straight into the Tauri `externalBin` layout — no separate copy step, no `.env` or `cookies.txt` bundling.
 
-**Surprising findings**:
-1. The `driver_rust` constants still encode `SIDECAR_NAME = "sidecar.exe"` and probe under `dist/`, but `build_sidecar.py` writes to `app/src-tauri/binaries/sidecar-x86_64-pc-windows-msvc.exe`. The driver's auto-discovery is therefore stale; in practice it only works via the `SIDECAR_EXE` env var or after a manual rename. This is unflagged in the source.
-2. `clean()` removes the **entire** `app/src-tauri/binaries/` directory rather than just the sidecar exe — fine today (single-artifact directory), but a footgun the day another binary lands there.
+The runtime protocol the Tauri backend uses to talk to the produced `sidecar.exe` is documented in [`sidecar-runtime.md`](sidecar-runtime.md), not here.
+
+### Resolved historical issues (M9)
+
+- ~~`driver_rust` constants (`SIDECAR_NAME = "sidecar.exe"`, `dist/...` path walker) drift from the M3 output layout.~~ **RESOLVED M9 Phase 8-C**: the entire `driver_rust/` spike harness was deleted; its argv-style contract was incompatible with the live JSONL daemon and could not smoke-test the M9 sidecar.
+- ~~`ensure_pyinstaller()` performs implicit `pip install` and only pins PyInstaller, leaving other deps to ambient PyPI state.~~ **RESOLVED M9 Phase 8-B**: replaced by `ensure_pinned_deps()`, which fails fast against [`requirements-sidecar.txt`](../../../requirements-sidecar.txt) and never mutates the host environment.

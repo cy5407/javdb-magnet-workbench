@@ -16,11 +16,10 @@
 pyinstaller_sidecar/
 ├── .gitignore           # build/, dist/, *.spec, target/, *.pdb, __pycache__/
 ├── NOTES.md             # 本文件
-├── build_sidecar.py     # PyInstaller 包裝器
-└── driver_rust/         # 模擬 Tauri backend，呼叫 sidecar.exe
-    ├── Cargo.toml
-    └── src/main.rs
+└── build_sidecar.py     # PyInstaller 包裝器
 ```
+
+> **M9 Phase 8-C**：`driver_rust/`（舊 argv-style Rust harness）已刪除。它說的是 pre-M3 的 `<exe> fetch-javdb <url>` argv 協定，與現行 `sidecar/sidecar.py` JSONL daemon 不相容。本目錄的 `build_sidecar.py` 仍是 sidecar.exe 的 build path；live runtime 契約見 [`docs/architecture/contracts/sidecar-runtime.md`](../../docs/architecture/contracts/sidecar-runtime.md)。
 
 ## 打包
 
@@ -126,9 +125,9 @@ PyInstaller 主要參數：
 
 **建議**：build 後跑 `pyi-archive_viewer dist/sidecar.exe` 列出 collected items 存成 baseline，或在 `build_sidecar.py` 加 `--log-level INFO` 留下 PyInstaller 收檔清單。
 
-### Driver timeout（spike 不修，production 必加）
+### Driver timeout — RESOLVED M9 Phase 8-A1
 
-目前 `driver_rust` 用 `Command::output()` 同步等 sidecar，**沒設 timeout**。spike OK，production 必須加 — sidecar hang 會直接拖垮 Tauri command thread。
+舊 `driver_rust` harness 用 `Command::output()` 同步等 sidecar、沒設 timeout，曾被列為 production 必加項。M9 Phase 8-A1 在 `app/src-tauri/src/sidecar_manager.rs` 加了 `REQUEST_TIMEOUT_SECS` + dead-state；driver_rust 本身也已於 Phase 8-C 刪除。
 
 ---
 
@@ -255,7 +254,7 @@ cargo run --release -- "https://javdb.com/v/RkX3Rp"
 4. **Tauri sidecar 機制**
    - `tauri.conf.json` → `bundle.externalBin` 加入打包好的 `sidecar.exe`
    - 路徑 conventions：[Tauri sidecar guide](https://tauri.app/v1/guides/building/sidecar)
-   - **driver_rust/ 是 spike harness，production 走 `tauri::api::process::Command::new_sidecar()`**
+   - Production 走 Tauri plugin-shell 的 `sidecar(...)` API（`app/src-tauri/src/sidecar_manager.rs`），不再有 dev-time argv harness
 
 5. **Code signing pipeline**
    - 第一個正式 release 前必須備好憑證
