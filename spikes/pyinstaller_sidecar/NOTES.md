@@ -35,9 +35,9 @@ PyInstaller 主要參數：
 | `--onefile` | 單一 exe，方便 Tauri sidecar 機制嵌入 |
 | `--console` | **保留 stdout/stderr**（不能用 `--windowed`，會失去 stdout） |
 | `--name sidecar` | 產出 `sidecar.exe` |
-| `--paths <repo_root>` | 讓 PyInstaller 解析 `from javdb_magnet_gui import ...` 等跨資料夾 import |
+| `--paths <repo_root>` | 讓 PyInstaller 解析 `from javdb_scraper import ...` 等跨資料夾 import |
 | `--collect-all curl_cffi` | curl_cffi 有 native deps，光 `--hidden-import` 不夠 |
-| `--hidden-import javdb_magnet_gui / realdebrid / app_logging` | 強制收進去（避免動態 import 偵測失誤） |
+| `--hidden-import javdb_scraper / realdebrid / app_logging` | 強制收進去（避免動態 import 偵測失誤）。M9 起使用 `javdb_scraper`（純 HTTP+parse 模組）取代 `javdb_magnet_gui`，故 Tk widgets / dialogs / DPI helpers 不再被 bundle 進 sidecar.exe。 |
 | `--distpath` / `--workpath` / `--specpath` | 全部限制在 `spikes/pyinstaller_sidecar/` 內 |
 
 不會打包進 exe：
@@ -47,6 +47,8 @@ PyInstaller 主要參數：
 ---
 
 ## 已知 packaging issues（commit 後須處理）
+
+> **歷史說明（M9 update）**：以下三條 issue 是 spike 時期 sidecar 直接 import `javdb_magnet_gui` 所引發的。M9 起 sidecar 改 import [`javdb_scraper`](../../javdb_scraper.py)（不依賴 `app_logging` / `tkinter` / `realdebrid`），Issue 1 的 import-time `setup_logging()` 路徑不再存在；Issue 2/3 的 cookies/env 載入也已被 daemon 的 `cmd_handshake` 訊息取代。本節保留原文作為決策脈絡，不再描述當前 sidecar 行為。
 
 三條同源缺陷都是「路徑硬綁 `app_dir()`」造成，但**綁定用途與嚴重度差很多**，分開列：
 
@@ -126,7 +128,10 @@ PyInstaller 主要參數：
 
 ---
 
-## 測試結果
+## 測試結果（M3 / M8 historical build snapshot）
+
+> ⚠️ 以下表格是 spike 完成時（M3）與 M8 release 時的歷史 build 紀錄，不是 M9 現況。
+> M9 的 `--hidden-import` 已從 `javdb_magnet_gui` 改成 [`javdb_scraper`](../../javdb_scraper.py)（不再 bundle Tk），對應 sidecar.exe 大小縮為 ~20.86 MB。最新建置數值請以 `build_sidecar.py` 跑出來的實際結果為準。
 
 **測試日期**：2026-05-10
 **OS**：Windows 11 Pro
@@ -145,9 +150,9 @@ python spikes/pyinstaller_sidecar/build_sidecar.py
 | 指標 | 值 |
 |------|----|
 | Build 時間 | 約 30 秒 |
-| `sidecar.exe` 大小 | **23.9 MB** |
-| `sidecar.exe` SHA256 | `b05f40bf050935d3c4867cae21af8bdc7db242086394aa76ee5bc5c31d41bcae` |
-| Hidden imports 命中 | `curl_cffi`, `curl_cffi.requests`, `javdb_magnet_gui`, `realdebrid`, `app_logging` |
+| `sidecar.exe` 大小 | **23.9 MB** *(M9 起 ~20.86 MB，Tk 已移除)* |
+| `sidecar.exe` SHA256 | `b05f40bf050935d3c4867cae21af8bdc7db242086394aa76ee5bc5c31d41bcae` *(M3 build；M9 已重 build，hash 不同)* |
+| Hidden imports 命中 | `curl_cffi`, `curl_cffi.requests`, `javdb_magnet_gui`, `realdebrid`, `app_logging` *(M9：`javdb_magnet_gui` → `javdb_scraper`)* |
 | `--collect-all curl_cffi` | 必要（curl_cffi 有 native libs） |
 | `--paths <repo_root>` | 必要（讓 PyInstaller 跨資料夾解析 import） |
 

@@ -1,8 +1,8 @@
 """核心邏輯回歸測試（不連網、純 stdlib）
 
 測試對象：
-- javdb_magnet_gui.parse_size_gb
-- javdb_magnet_gui.parse_file_count
+- javdb_scraper.parse_size_gb
+- javdb_scraper.parse_file_count
 - realdebrid.RealDebrid._extract_code
 - realdebrid.RealDebrid._filename_matches_code
 - realdebrid.RealDebrid.pick_files
@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from javdb_magnet_gui import parse_size_gb, parse_file_count  # noqa: E402
+from javdb_scraper import parse_size_gb, parse_file_count  # noqa: E402
 from realdebrid import RealDebrid  # noqa: E402
 
 

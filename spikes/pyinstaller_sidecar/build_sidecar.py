@@ -70,14 +70,16 @@ def build():
         "--distpath", str(DIST),
         "--workpath", str(BUILD),
         "--specpath", str(SPIKE_DIR),
-        # repo root 加進 PyInstaller 搜尋路徑，讓 javdb_magnet_gui / realdebrid / app_logging 能被解析
+        # repo root 加進 PyInstaller 搜尋路徑，讓 javdb_scraper / realdebrid / app_logging 能被解析
         "--paths", str(REPO_ROOT),
         # curl_cffi 有 native deps，要 collect-all
         "--hidden-import", "curl_cffi",
         "--hidden-import", "curl_cffi.requests",
         "--collect-all", "curl_cffi",
         # 主要 modules 強制收進去
-        "--hidden-import", "javdb_magnet_gui",
+        # M9: sidecar 使用 javdb_scraper（純 HTTP+parse 模組），不再 import
+        # javdb_magnet_gui，故 Tk/widgets 不會被 PyInstaller bundle 進 sidecar.exe。
+        "--hidden-import", "javdb_scraper",
         "--hidden-import", "realdebrid",
         "--hidden-import", "app_logging",
         str(ENTRY),
