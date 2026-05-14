@@ -1,4 +1,26 @@
-"""JavDB 磁力連結擷取工具 - GUI 版"""
+"""JavDB 磁力連結擷取工具 - GUI 版 — RETIRED (M9).
+
+⚠️ 此檔已退役，僅作歷史參考，不在 production runtime 中執行。
+
+Production runtime 是 Tauri / Svelte / Rust + sidecar daemon：
+
+| 舊 (本檔) | 新 |
+|---|---|
+| `create_session` / `fetch_magnets` / `parse_size_gb` / `parse_file_count` | `javdb_scraper.py` (字面相同) |
+| `load_pending` / `save_pending` / `add_pending` / `remove_pending` | Rust `app/src-tauri/src/pending.rs` |
+| `load_cookies` + `COOKIE_FILE` | Rust `commands.rs::cookies_status` + sidecar `cmd_handshake` |
+| `write_env` + `ENV_FILE` | Rust `app/src-tauri/src/settings.rs` |
+| `class App` (主視窗 / 篩選 / 排序 / 清單) | Svelte `app/src/App.svelte` |
+| `class RDInputDialog` | Svelte App.svelte paste-magnet flow |
+| `class RDDialog` (批次送 RD + 進度) | Svelte App.svelte sendBatch + `lib/rdSender.ts` |
+| `class SettingsDialog` | Svelte App.svelte settings 區塊 + `lib/settingsValidation.ts` |
+| `class RetryDialog` | Svelte App.svelte retryAllPending + `lib/magnetUtils.ts::retryPending` |
+| `_enable_dpi_awareness` / `_setup_fonts` 等 DPI/font helpers | WebView native handling |
+
+保留本檔的目的是讓未來讀者能直接看到 pre-Tauri 的 Tk 設計（widget 排版、
+dialog 流程、retry / settings UX），不必去翻 git log 還原。請勿 import
+本檔到 production code、build script 或 sidecar bundle。
+"""
 
 import json
 import re
