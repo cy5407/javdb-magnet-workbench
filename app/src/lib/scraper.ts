@@ -28,13 +28,41 @@ export function isRateLimitError(message: string): boolean {
   return RATE_LIMIT_PATTERNS.some((re) => re.test(message));
 }
 
+export type JitterFn = () => number;
+
 /**
- * Random integer in [min, max] inclusive. Math.random is fine for jitter;
- * this is not a crypto-sensitive context.
+ * Non-cryptographic fractional value in [0, 1) sourced from Web Crypto.
+ *
+ * Sonar's S2245 ("weak cryptography") fires on every `Math.random()`
+ * regardless of intent, so even though our use here is purely jitter
+ * (anti-rate-limit pacing, not a security primitive) we go through
+ * `crypto.getRandomValues`. All our deploy targets expose it:
+ * Tauri WebView2, vitest's jsdom 22+, and Node 19+. Tests that need
+ * deterministic values can inject `rng` into `randomDelayMs` instead
+ * of mocking the global.
  */
-export function randomDelayMs(min: number, max: number): number {
+function jitterFraction(): number {
+  const buf = new Uint32Array(1);
+  // globalThis.crypto is the W3C Web Crypto entrypoint; present in
+  // browsers, WebView2, jsdom, and Node 19+.
+  globalThis.crypto.getRandomValues(buf);
+  // 0x1_0000_0000 == 2**32 — divisor maps the Uint32 onto [0, 1).
+  return buf[0] / 0x1_0000_0000;
+}
+
+/**
+ * Random integer in [min, max] inclusive. Used for between-URL pacing
+ * jitter — not crypto-sensitive, but bits come from Web Crypto so
+ * Sonar's weak-crypto rule doesn't flag this path. Tests can pass a
+ * deterministic `rng` (e.g. `() => 0`) without touching the global.
+ */
+export function randomDelayMs(
+  min: number,
+  max: number,
+  rng: JitterFn = jitterFraction,
+): number {
   if (max <= min) return min;
-  return Math.floor(min + Math.random() * (max - min + 1));
+  return Math.floor(min + rng() * (max - min + 1));
 }
 
 export type SleepFn = (ms: number) => Promise<void>;

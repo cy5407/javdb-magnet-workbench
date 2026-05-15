@@ -200,6 +200,15 @@ class FetchJavdb(unittest.TestCase):
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error"]["code"], "bad_request")
 
+    def test_fetch_rejects_http_scheme(self):
+        # JavDB is https-only; accepting plain http:// would only enable
+        # MITM against the user's session cookies. Sonar S5332 flags
+        # http-accepting endpoints — keep this test as the contract.
+        resp = _call(self.state, {"cmd": "fetch_javdb", "request_id": "r1",
+                                  "url": "http://javdb.com/v/x"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
     def test_fetch_returns_handles_and_redacted_magnets(self):
         full_magnet = (
             "magnet:?xt=urn:btih:"

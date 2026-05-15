@@ -153,11 +153,17 @@ class RealDebrid:
     def _extract_code(magnet: str) -> str | None:
         """從磁力的 dn= 參數抽出 JAV 番號（如 SNOS-192, IPZZ-851）"""
         import re as _re
-        from urllib.parse import unquote
-        m = _re.search(r"dn=([^&]+)", magnet or "")
-        if not m:
+        from urllib.parse import parse_qs, urlparse
+        if not magnet:
             return None
-        name = unquote(m.group(1))
+        # urlparse + parse_qs 取代 r"dn=([^&]+)" — 那種 unbounded [^&]+ 會被
+        # Sonar 認定為 polynomial backtracking。parse_qs 同時負責 `+`/`%XX`
+        # 解碼，行為與原本 unquote(m.group(1)) 相同。
+        parsed = urlparse(magnet)
+        values = parse_qs(parsed.query, keep_blank_values=True).get("dn")
+        if not values:
+            return None
+        name = values[0]
         # 比對 ABCD-1234 / ABCDEF-12345 等格式（2-6 字母 + 3-5 數字）
         code_match = _re.search(r"\b([A-Za-z]{2,6})[-_]?(\d{3,5})\b", name)
         if code_match:
@@ -310,7 +316,9 @@ class RealDebrid:
     def _extract_magnet_hash(magnet: str) -> str:
         """從磁力中抽出 BTIH hash 前 8 碼供 log 標記用；找不到時回傳 'unknown'。"""
         import re as _re
-        m = _re.search(r"btih:([a-fA-F0-9]+)", magnet)
+        # Bounded {1,128} 涵蓋 BTIH v1 (40 hex) 與 v2 (64 hex)，避免 Sonar
+        # 對 unbounded `+` on `[a-fA-F0-9]` 的 super-linear 警告。
+        m = _re.search(r"btih:([a-fA-F0-9]{1,128})", magnet)
         return m.group(1)[:8] if m else "unknown"
 
     def _raise_if_terminal_failure(self, torrent_id: str, status: str, info: dict) -> None:

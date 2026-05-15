@@ -28,6 +28,7 @@ import json
 import re
 import sys
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
 from typing import IO, Any
@@ -53,17 +54,22 @@ SIDECAR_VERSION = "0.1.0"
 # Helpers
 # ---------------------------------------------------------------------------
 
+# BTIH v1 is 40 hex chars; v2 is 64. The {1,128} bound keeps the regex
+# linear (Sonar flags unbounded `+` on `[a-fA-F0-9]` as polynomial
+# backtracking) while still covering both.
+_REDACT_MAGNET_RX = re.compile(
+    r"^(magnet:\?xt=urn:btih:)([a-fA-F0-9]{1,128})"
+)
+
+
 def redact_magnet(uri: str) -> str:
     """Keep `magnet:?xt=urn:btih:` + first 8 hex chars + `...`; drop the rest."""
     if not uri:
         return ""
-    m = re.match(r"^(magnet:\?xt=urn:btih:)([a-fA-F0-9]+)", uri)
+    m = _REDACT_MAGNET_RX.match(uri)
     if m:
         return f"{m.group(1)}{m.group(2)[:8]}..."
     return "magnet:..." if uri.startswith("magnet:") else "<not-a-magnet>"
-
-
-_DN_RX = re.compile(r"[?&]dn=([^&]+)", re.IGNORECASE)
 
 
 def extract_magnet_dn(uri: str) -> str:
@@ -80,14 +86,21 @@ def extract_magnet_dn(uri: str) -> str:
     (`+` -> space, `%XX` -> char) so multi-byte / spaced names display
     correctly. Not a secret: dn is the publicly-advertised name of the
     torrent, included in the magnet by the publisher.
+
+    Parsing goes through stdlib `urllib.parse` instead of a regex over
+    the raw URI so we never run an unbounded `[^&]+` capture (Sonar
+    flags those as super-linear). `parse_qs` already handles `+` and
+    `%XX` decoding for the value.
     """
     if not uri:
         return ""
-    import urllib.parse
-    m = _DN_RX.search(uri)
-    if not m:
+    parsed = urllib.parse.urlparse(uri)
+    values = urllib.parse.parse_qs(
+        parsed.query, keep_blank_values=True
+    ).get("dn")
+    if not values:
         return ""
-    return urllib.parse.unquote_plus(m.group(1))
+    return values[0]
 
 
 def parse_cookie_string(s: str) -> dict[str, str]:
@@ -187,9 +200,8 @@ def cmd_ping(state: DaemonState, req: dict) -> dict:
     return _ok(req, {"uptime_seconds": int(time.time() - state.start_time)})
 
 
-# IGNORECASE already covers uppercase hex, so the class only lists lowercase
-# `a-f` — listing `A-F` as well would be a duplicate range under the flag.
-_BTIH_RX = re.compile(r"xt=urn:btih:([a-f0-9]+)", re.IGNORECASE)
+_BTIH_PREFIX = "urn:btih:"
+_HEX_CHARS = frozenset("0123456789abcdef")
 
 
 def _magnet_dedupe_key(full: str) -> str:
@@ -204,17 +216,26 @@ def _magnet_dedupe_key(full: str) -> str:
       - tracker (`tr=`) list — different mirrors of the same content
       - hash case — some sources emit uppercase hex
 
-    Strategy: pull the BTIH hash via regex (scheme-agnostic search;
-    any parameter position is fine), lowercase it, and return
-    `btih:<hex>`. If no BTIH can be parsed (e.g. v2 `urn:btmh:` or a
-    malformed string that somehow slipped past upstream validation),
-    fall back to the trimmed full string so dedupe still works
-    conservatively.
+    Strategy: parse the magnet URI with stdlib `urllib.parse` (avoids
+    unbounded regex over the raw string, which Sonar flags as
+    super-linear), find an `xt` value of the form `urn:btih:<hex>`,
+    lowercase the hex and return `btih:<hex>`. If no BTIH can be
+    parsed (e.g. v2 `urn:btmh:` or a malformed string that somehow
+    slipped past upstream validation), fall back to the trimmed full
+    string so dedupe still works conservatively.
     """
-    m = _BTIH_RX.search(full)
-    if m:
-        return "btih:" + m.group(1).lower()
-    return full.strip()
+    stripped = full.strip()
+    parsed = urllib.parse.urlparse(stripped)
+    for xt in urllib.parse.parse_qs(
+        parsed.query, keep_blank_values=True
+    ).get("xt", []):
+        lower = xt.lower()
+        if not lower.startswith(_BTIH_PREFIX):
+            continue
+        hash_hex = lower[len(_BTIH_PREFIX):]
+        if hash_hex and all(c in _HEX_CHARS for c in hash_hex):
+            return "btih:" + hash_hex
+    return stripped
 
 
 def _intern_magnet(state: DaemonState, full: str) -> tuple[str, bool]:
@@ -239,8 +260,13 @@ def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
     if not state.handshake_done:
         return _err(req, "bad_request", "handshake required before fetch_javdb")
     url = req.get("url")
-    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
-        return _err(req, "bad_request", "url must start with http(s)")
+    # Require https:// — JavDB itself serves over TLS, so accepting plain
+    # http:// here would only enable MITM / Cloudflare-bypass attempts
+    # against the user's cookies, never a legitimate fetch. Sonar's
+    # "Using http protocol is insecure" (S5332) flags the previous
+    # http-or-https accept-list as a clear-text-channel risk.
+    if not isinstance(url, str) or not url.startswith("https://"):
+        return _err(req, "bad_request", "url must start with https://")
 
     try:
         session, engine = create_session()

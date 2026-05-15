@@ -46,12 +46,22 @@ def create_session():
     return session, "requests"
 
 
+# Bounded number quantifiers keep the size/count regexes linear: with `+`
+# on `[\d.]` the engine can revisit the same bytes O(n) times across
+# starting positions, which Sonar flags as super-linear (polynomial)
+# backtracking. JavDB never emits sizes wider than a handful of digits,
+# so a tight upper bound is both safe and behavior-preserving.
+_SIZE_GB_RX = re.compile(r"(\d{1,12}(?:\.\d{1,12})?)\s{0,4}GB", re.IGNORECASE)
+_SIZE_MB_RX = re.compile(r"(\d{1,12}(?:\.\d{1,12})?)\s{0,4}MB", re.IGNORECASE)
+_FILE_COUNT_RX = re.compile(r"(\d{1,9})\s{0,4}個文件")
+
+
 def parse_size_gb(size_str: str) -> float:
     """從 '5.67GB, 5個文件' 這類字串中解析出 GB 數值"""
-    m = re.search(r"([\d.]+)\s*GB", size_str, re.IGNORECASE)
+    m = _SIZE_GB_RX.search(size_str)
     if m:
         return float(m.group(1))
-    m = re.search(r"([\d.]+)\s*MB", size_str, re.IGNORECASE)
+    m = _SIZE_MB_RX.search(size_str)
     if m:
         return float(m.group(1)) / 1024
     return 0.0
@@ -59,7 +69,7 @@ def parse_size_gb(size_str: str) -> float:
 
 def parse_file_count(size_str: str) -> int:
     """從 '5.67GB, 5個文件' 這類字串中解析出文件數量"""
-    m = re.search(r"(\d+)\s*個文件", size_str)
+    m = _FILE_COUNT_RX.search(size_str)
     if m:
         return int(m.group(1))
     return 999

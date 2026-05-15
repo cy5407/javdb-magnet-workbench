@@ -11,12 +11,21 @@ import type {
   SortDirection,
 } from "./types";
 
+// Bounded number quantifiers keep these regexes linear: with `+` on
+// `[\d.]` the engine can revisit the same bytes O(n) times across
+// starting positions, which Sonar flags as super-linear (polynomial)
+// backtracking. JavDB never emits sizes wider than a handful of
+// digits, so a tight upper bound is both safe and behavior-preserving.
+const SIZE_GB_RX = /(\d{1,12}(?:\.\d{1,12})?)\s{0,4}GB/i;
+const SIZE_MB_RX = /(\d{1,12}(?:\.\d{1,12})?)\s{0,4}MB/i;
+const FILE_COUNT_RX = /(\d{1,9})\s{0,4}個文件/;
+
 /** "5.67GB, 5個文件" → 5.67. "512MB, 1個文件" → 0.5. unparseable → 0. */
 export function parseSizeGb(size: string): number {
   if (!size) return 0;
-  const gb = /([\d.]+)\s*GB/i.exec(size);
+  const gb = SIZE_GB_RX.exec(size);
   if (gb) return Number.parseFloat(gb[1]);
-  const mb = /([\d.]+)\s*MB/i.exec(size);
+  const mb = SIZE_MB_RX.exec(size);
   if (mb) return Number.parseFloat(mb[1]) / 1024;
   return 0;
 }
@@ -24,7 +33,7 @@ export function parseSizeGb(size: string): number {
 /** "5.67GB, 5個文件" → 5. unparseable → 999 (matches the Python tests). */
 export function parseFileCount(size: string): number {
   if (!size) return 999;
-  const m = /(\d+)\s*個文件/.exec(size);
+  const m = FILE_COUNT_RX.exec(size);
   return m ? Number.parseInt(m[1], 10) : 999;
 }
 
