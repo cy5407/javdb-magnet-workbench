@@ -7,7 +7,7 @@
 #### 0. 文件 / 預設值不一致修補（dev worktree，未提交）
 
 回應前一輪 [PROGRESS.md 不一致項目 A–E](#文件-vs-實作不一致建議修補) 的修補。
-**位置**：`C:\Users\cy5407\Desktop\程式語言\爬蟲-dev`（master worktree 未動）。
+**位置**：`<repo>-dev`（dev worktree；master worktree 未動）。
 
 | # | 檔案 | 修改 |
 |---|------|------|
