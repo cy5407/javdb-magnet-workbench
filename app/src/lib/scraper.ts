@@ -46,8 +46,8 @@ function jitterFraction(): number {
   // globalThis.crypto is the W3C Web Crypto entrypoint; present in
   // browsers, WebView2, jsdom, and Node 19+.
   globalThis.crypto.getRandomValues(buf);
-  // 0x1_0000_0000 == 2**32 — divisor maps the Uint32 onto [0, 1).
-  return buf[0] / 0x1_0000_0000;
+  // 2 ** 32 = upper bound of Uint32 range; divisor maps to [0, 1).
+  return buf[0] / 2 ** 32;
 }
 
 /**
