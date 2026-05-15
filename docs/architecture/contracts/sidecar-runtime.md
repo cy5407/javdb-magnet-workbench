@@ -483,13 +483,13 @@ Produced by `_err`:
 
 **Called by**: `run_daemon`.
 
-### `run_daemon(stdin: IO[str], stdout: IO[str], state: DaemonState | None = None) -> int` ([sidecar.py:639](../../../sidecar/sidecar.py#L639))
+### `run_daemon(stdin: IO[str], stdout: IO[str], state: DaemonState | None = None) -> None` ([sidecar.py:639](../../../sidecar/sidecar.py#L639))
 
 **Purpose**: Main JSON-lines read/dispatch/write loop.
 
 **Contract**:
 - Params: text input/output streams; optional injected state for tests.
-- Returns: `0` on stdin EOF or after responding to `shutdown`.
+- Returns: `None` after the loop exits cleanly — either on stdin EOF or after acknowledging `shutdown`. The CLI entry maps this to exit code 0; there is no other terminal state.
 - Side effects: reads stdin forever, writes stdout responses, mutates daemon state through handlers.
 - Errors: invalid JSON and non-object requests are converted to error envelopes; stream I/O errors may propagate.
 

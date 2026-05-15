@@ -63,6 +63,48 @@ def _try_make_dir(p: Path) -> Path | None:
         return None
 
 
+def _resolve_log_dir() -> tuple[Path | None, Path | None]:
+    """Walk candidate dirs and return (chosen, last_attempted)."""
+    last_attempted: Path | None = None
+    for candidate in _candidate_log_dirs():
+        last_attempted = candidate
+        result = _try_make_dir(candidate)
+        if result is not None:
+            return result, last_attempted
+    return None, last_attempted
+
+
+def _log_file_for(dir_: Path | None) -> Path:
+    """Diagnostic path used when no writable dir was secured."""
+    return (dir_ / _LOG_FILE_NAME) if dir_ else Path(_LOG_FILE_NAME)
+
+
+def _attach_file_handler(root: logging.Logger, log_file: Path) -> bool:
+    """Attach a RotatingFileHandler. Return False if the file can't be opened."""
+    try:
+        file_handler = RotatingFileHandler(
+            log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
+    except OSError:
+        return False
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    root.addHandler(file_handler)
+    return True
+
+
+def _attach_console_handler(root: logging.Logger, debug: bool) -> None:
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+    console_handler.setFormatter(logging.Formatter(
+        "[%(levelname)s] %(name)s: %(message)s",
+    ))
+    root.addHandler(console_handler)
+
+
 def setup_logging(debug: bool = False) -> Path:
     """Initialize logging. Idempotent.
 
@@ -80,39 +122,17 @@ def setup_logging(debug: bool = False) -> Path:
     root.setLevel(logging.DEBUG)
     root.handlers.clear()
 
-    chosen_dir: Path | None = None
-    last_attempted: Path | None = None
-    for candidate in _candidate_log_dirs():
-        last_attempted = candidate
-        result = _try_make_dir(candidate)
-        if result is not None:
-            chosen_dir = result
-            break
+    chosen_dir, last_attempted = _resolve_log_dir()
 
-    if chosen_dir is not None:
-        log_file = chosen_dir / _LOG_FILE_NAME
-        try:
-            file_handler = RotatingFileHandler(
-                log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
-            )
-            file_handler.setLevel(logging.DEBUG)
-            file_handler.setFormatter(logging.Formatter(
-                "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            ))
-            root.addHandler(file_handler)
-        except OSError:
-            chosen_dir = None
-            log_file = (last_attempted / _LOG_FILE_NAME) if last_attempted else Path(_LOG_FILE_NAME)
+    if chosen_dir is None:
+        log_file = _log_file_for(last_attempted)
     else:
-        log_file = (last_attempted / _LOG_FILE_NAME) if last_attempted else Path(_LOG_FILE_NAME)
+        log_file = chosen_dir / _LOG_FILE_NAME
+        if not _attach_file_handler(root, log_file):
+            chosen_dir = None
+            log_file = _log_file_for(last_attempted)
 
-    console_handler = logging.StreamHandler(sys.stderr)
-    console_handler.setLevel(logging.DEBUG if debug else logging.INFO)
-    console_handler.setFormatter(logging.Formatter(
-        "[%(levelname)s] %(name)s: %(message)s",
-    ))
-    root.addHandler(console_handler)
+    _attach_console_handler(root, debug)
 
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("requests").setLevel(logging.WARNING)

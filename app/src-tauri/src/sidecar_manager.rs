@@ -129,6 +129,18 @@ fn timeout_for(cmd: &str, body: &Value) -> Result<u64, String> {
     Ok(cache_wait + RD_SEND_TIMEOUT_SLACK_SECS)
 }
 
+/// Drain one `\n`-terminated line from `buffer`, stripping the trailing
+/// `\n` and any preceding `\r`. Returns `None` when no newline is present.
+fn drain_line(buffer: &mut Vec<u8>) -> Option<String> {
+    let idx = buffer.iter().position(|b| *b == b'\n')?;
+    let mut line_bytes: Vec<u8> = buffer.drain(..=idx).collect();
+    line_bytes.pop();
+    if line_bytes.last() == Some(&b'\r') {
+        line_bytes.pop();
+    }
+    Some(String::from_utf8_lossy(&line_bytes).to_string())
+}
+
 impl SidecarManager {
     /// Spawn the bundled `sidecar` binary, complete `hello` + `handshake`,
     /// and return a manager ready to serve requests.
@@ -155,14 +167,7 @@ impl SidecarManager {
                 match event {
                     CommandEvent::Stdout(bytes) => {
                         buffer.extend_from_slice(&bytes);
-                        while let Some(idx) = buffer.iter().position(|b| *b == b'\n') {
-                            let mut line_bytes: Vec<u8> = buffer.drain(..=idx).collect();
-                            // Drop trailing \n and \r
-                            line_bytes.pop();
-                            if line_bytes.last() == Some(&b'\r') {
-                                line_bytes.pop();
-                            }
-                            let line = String::from_utf8_lossy(&line_bytes).to_string();
+                        while let Some(line) = drain_line(&mut buffer) {
                             if line_tx.send(line).is_err() {
                                 return;
                             }
