@@ -454,8 +454,7 @@ class DaemonLoop(unittest.TestCase):
         ]
         stdin = io.StringIO("\n".join(json.dumps(c) for c in commands) + "\n")
         stdout = io.StringIO()
-        rc = sd.run_daemon(stdin, stdout)
-        self.assertEqual(rc, 0)
+        self.assertIsNone(sd.run_daemon(stdin, stdout))
 
         responses = [json.loads(line) for line in stdout.getvalue().splitlines() if line]
         self.assertEqual(len(responses), 4)
@@ -482,8 +481,7 @@ class DaemonLoop(unittest.TestCase):
     def test_eof_exits_cleanly(self):
         stdin = io.StringIO("")
         stdout = io.StringIO()
-        rc = sd.run_daemon(stdin, stdout)
-        self.assertEqual(rc, 0)
+        self.assertIsNone(sd.run_daemon(stdin, stdout))
         self.assertEqual(stdout.getvalue(), "")
 
     def test_blank_lines_between_commands_are_skipped(self):
@@ -502,8 +500,7 @@ class DaemonLoop(unittest.TestCase):
             + json.dumps(commands[1]) + "\n"
         )
         stdout = io.StringIO()
-        rc = sd.run_daemon(stdin, stdout)
-        self.assertEqual(rc, 0)
+        self.assertIsNone(sd.run_daemon(stdin, stdout))
         responses = [json.loads(line) for line in stdout.getvalue().splitlines() if line]
         # Exactly two responses — the two commands. Blank lines emit nothing.
         self.assertEqual(len(responses), 2)
@@ -521,8 +518,7 @@ class DaemonLoop(unittest.TestCase):
             + json.dumps({"cmd": "ping", "request_id": "should-not-fire"}) + "\n"
         )
         stdout = io.StringIO()
-        rc = sd.run_daemon(stdin, stdout)
-        self.assertEqual(rc, 0)
+        self.assertIsNone(sd.run_daemon(stdin, stdout))
         responses = [json.loads(line) for line in stdout.getvalue().splitlines() if line]
         self.assertEqual(len(responses), 1)
         self.assertEqual(responses[0]["request_id"], "r")

@@ -107,73 +107,8 @@ pub fn parse_env(content: &str) -> ParsedEnv {
                 continue;
             }
         };
-        let key = key.trim();
-        // Strip optional matched surrounding quotes from the value.
-        let v = value.trim();
-        let unquoted = if (v.starts_with('"') && v.ends_with('"') && v.len() >= 2)
-            || (v.starts_with('\'') && v.ends_with('\'') && v.len() >= 2)
-        {
-            &v[1..v.len() - 1]
-        } else {
-            v
-        };
-
-        match key {
-            "RD_API_TOKEN" => {
-                if !unquoted.is_empty() {
-                    out.token = Some(unquoted.to_string());
-                    out.recognized_keys.push(key.to_string());
-                }
-            }
-            "RD_FILE_PICK" => {
-                if !unquoted.is_empty() {
-                    rd.insert("file_pick".into(), Value::String(unquoted.to_string()));
-                    out.recognized_keys.push(key.to_string());
-                }
-            }
-            "RD_MIN_SIZE_MB" => match unquoted.parse::<u64>() {
-                Ok(n) => {
-                    rd.insert("min_size_mb".into(), json!(n));
-                    out.recognized_keys.push(key.to_string());
-                }
-                Err(_) => out
-                    .warnings
-                    .push(format!("RD_MIN_SIZE_MB not a non-negative integer: {unquoted}")),
-            },
-            "RD_WAIT_TIMEOUT" => match unquoted.parse::<u64>() {
-                Ok(n) => {
-                    rd.insert("wait_timeout_seconds".into(), json!(n));
-                    out.recognized_keys.push(key.to_string());
-                }
-                Err(_) => out.warnings.push(format!(
-                    "RD_WAIT_TIMEOUT not a non-negative integer: {unquoted}"
-                )),
-            },
-            "RD_CACHE_WAIT" => match unquoted.parse::<u64>() {
-                Ok(n) => {
-                    rd.insert("cache_wait_seconds".into(), json!(n));
-                    out.recognized_keys.push(key.to_string());
-                }
-                Err(_) => out.warnings.push(format!(
-                    "RD_CACHE_WAIT not a non-negative integer: {unquoted}"
-                )),
-            },
-            "UI_SCALE" => {
-                if !unquoted.is_empty() {
-                    ui.insert("scale".into(), Value::String(unquoted.to_string()));
-                    out.recognized_keys.push(key.to_string());
-                }
-            }
-            "UI_THEME" => {
-                if !unquoted.is_empty() {
-                    ui.insert("theme".into(), Value::String(unquoted.to_string()));
-                    out.recognized_keys.push(key.to_string());
-                }
-            }
-            other => {
-                out.warnings.push(format!("ignored unknown key: {other}"));
-            }
-        }
+        let unquoted = strip_matched_quotes(value.trim());
+        dispatch_env_entry(key.trim(), unquoted, &mut rd, &mut ui, &mut out);
     }
 
     if !rd.is_empty() {
@@ -183,6 +118,88 @@ pub fn parse_env(content: &str) -> ParsedEnv {
         out.settings_patch.insert("ui".into(), Value::Object(ui));
     }
     out
+}
+
+/// Strip a single matched pair of surrounding `"` or `'` quotes. Returns
+/// the input unchanged if it isn't quoted (or is too short to be a quoted
+/// pair).
+fn strip_matched_quotes(v: &str) -> &str {
+    if v.len() < 2 {
+        return v;
+    }
+    let bytes = v.as_bytes();
+    let first = bytes[0];
+    let last = bytes[v.len() - 1];
+    let quoted = (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'');
+    if quoted {
+        &v[1..v.len() - 1]
+    } else {
+        v
+    }
+}
+
+/// Route one `KEY=value` pair from a `.env` file to the right bucket
+/// (`rd` / `ui`), the token slot, or the warnings list. Pulled out of
+/// `parse_env` to keep its cognitive complexity in check.
+fn dispatch_env_entry(
+    key: &str,
+    unquoted: &str,
+    rd: &mut Map<String, Value>,
+    ui: &mut Map<String, Value>,
+    out: &mut ParsedEnv,
+) {
+    match key {
+        "RD_API_TOKEN" => assign_token(key, unquoted, out),
+        "RD_FILE_PICK" => assign_str_setting(key, unquoted, "file_pick", rd, out),
+        "RD_MIN_SIZE_MB" => assign_u64_setting(key, unquoted, "min_size_mb", rd, out),
+        "RD_WAIT_TIMEOUT" => assign_u64_setting(key, unquoted, "wait_timeout_seconds", rd, out),
+        "RD_CACHE_WAIT" => assign_u64_setting(key, unquoted, "cache_wait_seconds", rd, out),
+        "UI_SCALE" => assign_str_setting(key, unquoted, "scale", ui, out),
+        "UI_THEME" => assign_str_setting(key, unquoted, "theme", ui, out),
+        other => {
+            out.warnings.push(format!("ignored unknown key: {other}"));
+        }
+    }
+}
+
+fn assign_token(env_key: &str, value: &str, out: &mut ParsedEnv) {
+    if value.is_empty() {
+        return;
+    }
+    out.token = Some(value.to_string());
+    out.recognized_keys.push(env_key.to_string());
+}
+
+fn assign_str_setting(
+    env_key: &str,
+    value: &str,
+    target_key: &str,
+    bucket: &mut Map<String, Value>,
+    out: &mut ParsedEnv,
+) {
+    if value.is_empty() {
+        return;
+    }
+    bucket.insert(target_key.into(), Value::String(value.to_string()));
+    out.recognized_keys.push(env_key.to_string());
+}
+
+fn assign_u64_setting(
+    env_key: &str,
+    value: &str,
+    target_key: &str,
+    bucket: &mut Map<String, Value>,
+    out: &mut ParsedEnv,
+) {
+    match value.parse::<u64>() {
+        Ok(n) => {
+            bucket.insert(target_key.into(), json!(n));
+            out.recognized_keys.push(env_key.to_string());
+        }
+        Err(_) => out
+            .warnings
+            .push(format!("{env_key} not a non-negative integer: {value}")),
+    }
 }
 
 /// Convert one raw legacy pending entry into a sanitized `PendingEntry`.
@@ -291,6 +308,40 @@ pub fn merge_legacy_pending(
     Ok((out, imported, skipped))
 }
 
+/// Read `.env` for `preview`: returns `(has_rd_token, settings_key_names,
+/// warnings)`. Never returns a value from the file.
+fn read_env_for_preview(env_path: &Path) -> (bool, Vec<String>, Vec<String>) {
+    match fs::read_to_string(env_path) {
+        Ok(s) => {
+            let parsed = parse_env(&s);
+            let has_rd_token = parsed.token.is_some();
+            let env_settings_keys: Vec<String> = parsed
+                .recognized_keys
+                .into_iter()
+                .filter(|k| k != "RD_API_TOKEN")
+                .collect();
+            let warnings = parsed
+                .warnings
+                .into_iter()
+                .map(|w| format!(".env: {w}"))
+                .collect();
+            (has_rd_token, env_settings_keys, warnings)
+        }
+        Err(e) => (false, Vec::new(), vec![format!("read .env failed: {e}")]),
+    }
+}
+
+/// Read pending JSON for `preview`: returns `(count, optional_warning)`.
+fn read_pending_count(pending_path: &Path) -> (usize, Option<String>) {
+    match fs::read_to_string(pending_path) {
+        Ok(s) => match serde_json::from_str::<Vec<Value>>(&s) {
+            Ok(arr) => (arr.len(), None),
+            Err(_) => (0, Some("pending_torrents.json is not a JSON array".into())),
+        },
+        Err(e) => (0, Some(format!("read pending JSON failed: {e}"))),
+    }
+}
+
 /// Preview a candidate legacy directory. Reads files just enough to
 /// count entries / collect recognized key names — never returns a
 /// value (token / cookie body / magnet) to the caller.
@@ -312,36 +363,23 @@ pub fn preview(source_dir: &Path) -> LegacyImportPreview {
     let cookies_present = cookies_path.is_file();
     let pending_present = pending_path.is_file();
 
-    let mut env_settings_keys: Vec<String> = Vec::new();
-    let mut has_rd_token = false;
-    if env_present {
-        match fs::read_to_string(&env_path) {
-            Ok(s) => {
-                let parsed = parse_env(&s);
-                has_rd_token = parsed.token.is_some();
-                env_settings_keys = parsed
-                    .recognized_keys
-                    .into_iter()
-                    .filter(|k| k != "RD_API_TOKEN")
-                    .collect();
-                for w in parsed.warnings {
-                    warnings.push(format!(".env: {w}"));
-                }
-            }
-            Err(e) => warnings.push(format!("read .env failed: {e}")),
-        }
-    }
+    let (has_rd_token, env_settings_keys) = if env_present {
+        let (t, keys, env_warnings) = read_env_for_preview(&env_path);
+        warnings.extend(env_warnings);
+        (t, keys)
+    } else {
+        (false, Vec::new())
+    };
 
-    let mut pending_count = 0usize;
-    if pending_present {
-        match fs::read_to_string(&pending_path) {
-            Ok(s) => match serde_json::from_str::<Vec<Value>>(&s) {
-                Ok(arr) => pending_count = arr.len(),
-                Err(_) => warnings.push("pending_torrents.json is not a JSON array".into()),
-            },
-            Err(e) => warnings.push(format!("read pending JSON failed: {e}")),
+    let pending_count = if pending_present {
+        let (count, warning) = read_pending_count(&pending_path);
+        if let Some(w) = warning {
+            warnings.push(w);
         }
-    }
+        count
+    } else {
+        0
+    };
 
     LegacyImportPreview {
         source_dir: source_dir.display().to_string(),

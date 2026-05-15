@@ -13,8 +13,10 @@
 //! directly. RD direct links (non-secret, but routed through Rust for
 //! consistency with magnets) go through `copy_rd_links_bulk`.
 
+use std::path::{Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use tauri::{AppHandle, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_store::StoreExt;
@@ -629,181 +631,228 @@ pub async fn apply_legacy_import(
     sidecar: State<'_, SidecarManager>,
     source_dir: String,
 ) -> Result<LegacyImportReport, String> {
-    use std::path::Path;
+    let src = validate_legacy_source(&source_dir, &path_manager.data_dir)?;
 
+    let mut report = LegacyImportReport::default();
+    let preview = legacy_import::preview(&src);
+    report.warnings.extend(preview.warnings.clone());
+
+    if preview.env_present {
+        import_env_block(&app, &path_manager.data_dir, &sidecar, &src, &mut report).await;
+    }
+    if preview.cookies_present {
+        import_cookies_block(&path_manager.data_dir, &src, &mut report);
+    }
+    if preview.pending_present {
+        import_pending_block(&path_manager.data_dir, &src, &mut report);
+    }
+
+    Ok(report)
+}
+
+/// Validate `source_dir` for `apply_legacy_import`: non-empty, a real
+/// directory, and not the app data dir (which would degenerate into a
+/// self-copy).
+fn validate_legacy_source(source_dir: &str, data_dir: &Path) -> Result<PathBuf, String> {
     let trimmed = source_dir.trim();
     if trimmed.is_empty() {
         return Err("source_dir is empty".to_string());
     }
     let src = Path::new(trimmed);
     if !src.is_dir() {
-        return Err(format!(
-            "source_dir is not a directory: {}",
-            src.display()
-        ));
+        return Err(format!("source_dir is not a directory: {}", src.display()));
     }
-    // Refuse to import from our own data dir — would degenerate into a
-    // self-copy and confuse the report.
-    if src
+    let same_as_data = src
         .canonicalize()
         .ok()
-        .and_then(|s| path_manager.data_dir.canonicalize().ok().map(|d| s == d))
-        .unwrap_or(false)
-    {
+        .and_then(|s| data_dir.canonicalize().ok().map(|d| s == d))
+        .unwrap_or(false);
+    if same_as_data {
         return Err("source_dir must not be the app data directory".to_string());
     }
+    Ok(src.to_path_buf())
+}
 
-    let mut report = LegacyImportReport::default();
-    let preview = legacy_import::preview(src);
-    report.warnings.extend(preview.warnings.clone());
+/// Read `.env` from `src`, parse it, then route the optional RD token to
+/// the credential store / sidecar and the non-secret settings patch to
+/// the tauri-plugin-store. All failures are appended to `report.warnings`.
+async fn import_env_block(
+    app: &AppHandle,
+    data_dir: &Path,
+    sidecar: &SidecarManager,
+    src: &Path,
+    report: &mut LegacyImportReport,
+) {
+    let raw = match std::fs::read_to_string(src.join(legacy_import::LEGACY_ENV_FILE)) {
+        Ok(s) => s,
+        Err(e) => {
+            report.warnings.push(format!("read .env failed: {e}"));
+            return;
+        }
+    };
+    let parsed = legacy_import::parse_env(&raw);
+    report
+        .warnings
+        .extend(parsed.warnings.iter().map(|w| format!(".env: {w}")));
 
-    // ---- .env import ----
-    if preview.env_present {
-        match std::fs::read_to_string(src.join(legacy_import::LEGACY_ENV_FILE)) {
-            Ok(s) => {
-                let parsed = legacy_import::parse_env(&s);
-                report.warnings.extend(
-                    parsed
-                        .warnings
-                        .iter()
-                        .map(|w| format!(".env: {w}")),
-                );
+    if let Some(token) = parsed.token.as_deref() {
+        import_rd_token(sidecar, src, token, report).await;
+    }
+    if !parsed.settings_patch.is_empty() {
+        import_env_settings_patch(app, data_dir, src, &parsed.settings_patch, report);
+    }
+}
 
-                // RD token → credential store + propagate to sidecar.
-                // NEVER written to settings.json.
-                if let Some(token) = parsed.token.as_deref() {
-                    if let Err(e) = secret_store::set_rd_token(token) {
-                        report.warnings.push(format!("credential store: {e}"));
-                    } else {
-                        let payload = json!({ "token": token });
-                        match sidecar.request("rd_set_token", payload).await {
-                            Ok(resp) => {
-                                if resp
-                                    .get("ok")
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(false)
-                                {
-                                    report.rd_token_imported = true;
-                                    report
-                                        .sources
-                                        .push(format!("{}/.env (RD_API_TOKEN)", src.display()));
-                                } else {
-                                    report.warnings.push(format!(
-                                        "sidecar rd_set_token: {}",
-                                        _err_code(&resp)
-                                    ));
-                                }
-                            }
-                            Err(e) => report.warnings.push(format!("sidecar: {e}")),
-                        }
-                    }
-                }
+/// Hand a recovered `RD_API_TOKEN` to the credential store and ask the
+/// running sidecar to use it. Never written into settings.json.
+async fn import_rd_token(
+    sidecar: &SidecarManager,
+    src: &Path,
+    token: &str,
+    report: &mut LegacyImportReport,
+) {
+    if let Err(e) = secret_store::set_rd_token(token) {
+        report.warnings.push(format!("credential store: {e}"));
+        return;
+    }
+    let resp = match sidecar.request("rd_set_token", json!({ "token": token })).await {
+        Ok(r) => r,
+        Err(e) => {
+            report.warnings.push(format!("sidecar: {e}"));
+            return;
+        }
+    };
+    if resp.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        report.rd_token_imported = true;
+        report
+            .sources
+            .push(format!("{}/.env (RD_API_TOKEN)", src.display()));
+    } else {
+        report
+            .warnings
+            .push(format!("sidecar rd_set_token: {}", _err_code(&resp)));
+    }
+}
 
-                // Non-secret settings → patch + save via tauri-plugin-store.
-                if !parsed.settings_patch.is_empty() {
-                    let store_path = path_manager.data_dir.join(crate::STORE_FILE);
-                    match app.store(&store_path) {
-                        Ok(store) => {
-                            // Start from current settings JSON (or defaults).
-                            let mut base = store.get("settings").unwrap_or_else(|| {
-                                serde_json::to_value(crate::settings::Settings::default())
-                                    .unwrap_or(Value::Null)
-                            });
-                            legacy_import::apply_settings_patch(&mut base, &parsed.settings_patch);
-                            // Belt + suspenders: confirm api_token blank.
-                            if let Some(rd) =
-                                base.get_mut("rd").and_then(Value::as_object_mut)
-                            {
-                                if let Some(t) = rd.get_mut("api_token") {
-                                    *t = Value::String(String::new());
-                                }
-                            }
-                            store.set("settings", base);
-                            if let Err(e) = store.save() {
-                                report.warnings.push(format!("settings save: {e}"));
-                            } else {
-                                report.env_imported = true;
-                                report
-                                    .sources
-                                    .push(format!("{}/.env (settings)", src.display()));
-                            }
-                        }
-                        Err(e) => report.warnings.push(format!("settings store: {e}")),
-                    }
-                }
-            }
-            Err(e) => report.warnings.push(format!("read .env failed: {e}")),
+/// Merge a non-secret `.env` settings patch into the tauri-plugin-store
+/// settings.json. Always blanks `rd.api_token` belt-and-suspenders.
+fn import_env_settings_patch(
+    app: &AppHandle,
+    data_dir: &Path,
+    src: &Path,
+    patch: &Map<String, Value>,
+    report: &mut LegacyImportReport,
+) {
+    let store_path = data_dir.join(crate::STORE_FILE);
+    let store = match app.store(&store_path) {
+        Ok(s) => s,
+        Err(e) => {
+            report.warnings.push(format!("settings store: {e}"));
+            return;
+        }
+    };
+    let mut base = store.get("settings").unwrap_or_else(|| {
+        serde_json::to_value(crate::settings::Settings::default()).unwrap_or(Value::Null)
+    });
+    legacy_import::apply_settings_patch(&mut base, patch);
+    blank_rd_api_token(&mut base);
+    store.set("settings", base);
+    if let Err(e) = store.save() {
+        report.warnings.push(format!("settings save: {e}"));
+        return;
+    }
+    report.env_imported = true;
+    report
+        .sources
+        .push(format!("{}/.env (settings)", src.display()));
+}
+
+/// Force `settings.rd.api_token` to an empty string in-place, regardless
+/// of whether the field was present before. Used as a defensive sweep
+/// before we save settings.json so a future patch can never reintroduce
+/// the token into the on-disk settings.
+fn blank_rd_api_token(settings: &mut Value) {
+    if let Some(rd) = settings.get_mut("rd").and_then(Value::as_object_mut) {
+        if let Some(t) = rd.get_mut("api_token") {
+            *t = Value::String(String::new());
         }
     }
+}
 
-    // ---- cookies.txt import ----
-    if preview.cookies_present {
-        let src_cookies = src.join(legacy_import::LEGACY_COOKIES_FILE);
-        let dst_cookies = path_manager
-            .data_dir
-            .join(legacy_import::LEGACY_COOKIES_FILE);
-        if let Err(e) = std::fs::create_dir_all(&path_manager.data_dir) {
-            report.warnings.push(format!("mkdir data_dir: {e}"));
-        }
-        // Refuse to copy onto itself if the user pointed at data_dir.
-        let same = src_cookies
-            .canonicalize()
-            .ok()
-            .and_then(|s| dst_cookies.canonicalize().ok().map(|d| s == d))
-            .unwrap_or(false);
-        if same {
+/// Copy `cookies.txt` from `src` into the data dir, refusing to copy a
+/// file onto itself when the user pointed at data_dir.
+fn import_cookies_block(data_dir: &Path, src: &Path, report: &mut LegacyImportReport) {
+    let src_cookies = src.join(legacy_import::LEGACY_COOKIES_FILE);
+    let dst_cookies = data_dir.join(legacy_import::LEGACY_COOKIES_FILE);
+    if let Err(e) = std::fs::create_dir_all(data_dir) {
+        report.warnings.push(format!("mkdir data_dir: {e}"));
+    }
+    let same = src_cookies
+        .canonicalize()
+        .ok()
+        .and_then(|s| dst_cookies.canonicalize().ok().map(|d| s == d))
+        .unwrap_or(false);
+    if same {
+        report
+            .warnings
+            .push("cookies.txt: source and destination are the same path".into());
+        return;
+    }
+    match std::fs::copy(&src_cookies, &dst_cookies) {
+        Ok(_) => {
+            report.cookies_imported = true;
+            // The running sidecar received its cookies during the
+            // startup handshake and does not re-read cookies.txt.
+            // Keep this as an explicit report warning instead of
+            // silently implying the new JavDB session is live now.
+            report.warnings.push(
+                "cookies.txt imported; restart the app before JavDB fetch uses the new cookies"
+                    .into(),
+            );
             report
-                .warnings
-                .push("cookies.txt: source and destination are the same path".into());
-        } else {
-            match std::fs::copy(&src_cookies, &dst_cookies) {
-                Ok(_) => {
-                    report.cookies_imported = true;
-                    // The running sidecar received its cookies during the
-                    // startup handshake and does not re-read cookies.txt.
-                    // Keep this as an explicit report warning instead of
-                    // silently implying the new JavDB session is live now.
-                    report.warnings.push(
-                        "cookies.txt imported; restart the app before JavDB fetch uses the new cookies"
-                            .into(),
-                    );
-                    report
-                        .sources
-                        .push(format!("{}/cookies.txt", src.display()));
-                }
-                Err(e) => report.warnings.push(format!("cookies copy: {e}")),
-            }
+                .sources
+                .push(format!("{}/cookies.txt", src.display()));
         }
+        Err(e) => report.warnings.push(format!("cookies copy: {e}")),
     }
+}
 
-    // ---- pending_torrents.json import ----
-    if preview.pending_present {
-        let src_pending = src.join(legacy_import::LEGACY_PENDING_FILE);
-        match std::fs::read_to_string(&src_pending) {
-            Ok(raw) => match pending::load(&path_manager.data_dir) {
-                Ok(existing) => match legacy_import::merge_legacy_pending(&raw, &existing) {
-                    Ok((merged, imported, skipped)) => {
-                        match pending::save(&path_manager.data_dir, &merged) {
-                            Ok(_) => {
-                                report.pending_imported = imported;
-                                report.pending_skipped = skipped;
-                                report.sources.push(format!(
-                                    "{}/pending_torrents.json",
-                                    src.display()
-                                ));
-                            }
-                            Err(e) => report.warnings.push(format!("pending save: {e}")),
-                        }
-                    }
-                    Err(e) => report.warnings.push(format!("pending merge: {e}")),
-                },
-                Err(e) => report.warnings.push(format!("pending load (existing): {e}")),
-            },
-            Err(e) => report.warnings.push(format!("read pending JSON failed: {e}")),
+/// Read the legacy `pending_torrents.json`, merge it against the current
+/// pending store, and persist the result. Each step is an early-return
+/// on error so the function stays flat.
+fn import_pending_block(data_dir: &Path, src: &Path, report: &mut LegacyImportReport) {
+    let src_pending = src.join(legacy_import::LEGACY_PENDING_FILE);
+    let raw = match std::fs::read_to_string(&src_pending) {
+        Ok(r) => r,
+        Err(e) => {
+            report.warnings.push(format!("read pending JSON failed: {e}"));
+            return;
         }
+    };
+    let existing = match pending::load(data_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            report.warnings.push(format!("pending load (existing): {e}"));
+            return;
+        }
+    };
+    let (merged, imported, skipped) = match legacy_import::merge_legacy_pending(&raw, &existing) {
+        Ok(tuple) => tuple,
+        Err(e) => {
+            report.warnings.push(format!("pending merge: {e}"));
+            return;
+        }
+    };
+    match pending::save(data_dir, &merged) {
+        Ok(_) => {
+            report.pending_imported = imported;
+            report.pending_skipped = skipped;
+            report
+                .sources
+                .push(format!("{}/pending_torrents.json", src.display()));
+        }
+        Err(e) => report.warnings.push(format!("pending save: {e}")),
     }
-
-    Ok(report)
 }
 
 // ===========================================================================

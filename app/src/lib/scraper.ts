@@ -107,6 +107,55 @@ export function parseMagnetBatch(raw: string): string[] {
   return out;
 }
 
+interface ResolvedScrapeOptions {
+  sleep: SleepFn;
+  fetcher: (url: string) => Promise<FetchResult>;
+  delayRange: [number, number];
+  retryWaitRange: [number, number];
+  signal?: AbortSignal;
+}
+
+function resolveScrapeOptions(opts: ScrapeOptions): ResolvedScrapeOptions {
+  return {
+    sleep: opts.sleep ?? realSleep,
+    fetcher: opts.fetcher ?? defaultFetcher,
+    delayRange: opts.delayRange ?? [DELAY_MIN_MS, DELAY_MAX_MS],
+    retryWaitRange: opts.retryWaitRange ?? [RETRY_WAIT_MIN_MS, RETRY_WAIT_MAX_MS],
+    signal: opts.signal,
+  };
+}
+
+/**
+ * Try a single URL with at most one retry after a rate-limit error.
+ * Mutates `group` in place to record the outcome (status/result/error).
+ */
+async function fetchGroupWithRetry(
+  group: ScrapedGroup,
+  resolved: ResolvedScrapeOptions,
+): Promise<void> {
+  // attempt 0 = first try; attempt 1 = single retry after rate-limit
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      group.result = await resolved.fetcher(group.url);
+      group.status = "ok";
+      group.error = null;
+      return;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      const canRetry =
+        attempt === 0 &&
+        isRateLimitError(message) &&
+        !resolved.signal?.aborted;
+      if (!canRetry) {
+        group.error = message;
+        group.status = "error";
+        return;
+      }
+      await resolved.sleep(randomDelayMs(...resolved.retryWaitRange));
+    }
+  }
+}
+
 /**
  * Run the batch. `onProgress` fires after every group settles (ok or error).
  * Returns the final array of groups in the order URLs were submitted.
@@ -116,11 +165,7 @@ export async function scrapeBatch(
   onProgress: (ev: ScrapeProgressEvent) => void,
   opts: ScrapeOptions = {},
 ): Promise<ScrapedGroup[]> {
-  const sleep = opts.sleep ?? realSleep;
-  const fetcher = opts.fetcher ?? defaultFetcher;
-  const [delayMin, delayMax] = opts.delayRange ?? [DELAY_MIN_MS, DELAY_MAX_MS];
-  const [retryMin, retryMax] =
-    opts.retryWaitRange ?? [RETRY_WAIT_MIN_MS, RETRY_WAIT_MAX_MS];
+  const resolved = resolveScrapeOptions(opts);
 
   const groups: ScrapedGroup[] = urls.map((url) => ({
     url,
@@ -131,38 +176,16 @@ export async function scrapeBatch(
   }));
 
   for (let i = 0; i < groups.length; i++) {
-    if (opts.signal?.aborted) break;
+    if (resolved.signal?.aborted) break;
 
     if (i > 0) {
-      await sleep(randomDelayMs(delayMin, delayMax));
-      if (opts.signal?.aborted) break;
+      await resolved.sleep(randomDelayMs(...resolved.delayRange));
+      if (resolved.signal?.aborted) break;
     }
 
     const group = groups[i];
     group.status = "fetching";
-
-    let attempt = 0;
-    // attempt 0 = first try; attempt 1 = single retry after rate-limit
-    while (attempt < 2) {
-      try {
-        const result = await fetcher(group.url);
-        group.result = result;
-        group.status = "ok";
-        group.error = null;
-        break;
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        if (attempt === 0 && isRateLimitError(message) && !opts.signal?.aborted) {
-          await sleep(randomDelayMs(retryMin, retryMax));
-          attempt++;
-          continue;
-        }
-        group.error = message;
-        group.status = "error";
-        break;
-      }
-    }
-
+    await fetchGroupWithRetry(group, resolved);
     group.finished_at = new Date().toISOString();
     onProgress({ index: i + 1, total: groups.length, group });
   }

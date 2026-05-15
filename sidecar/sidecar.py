@@ -648,16 +648,18 @@ def _emit(stdout: IO[str], obj: dict) -> None:
 
 
 def run_daemon(stdin: IO[str], stdout: IO[str],
-               state: DaemonState | None = None) -> int:
+               state: DaemonState | None = None) -> None:
     """Read JSON lines from `stdin`, write JSON-line responses to `stdout`.
 
-    Exits 0 on `shutdown` command or stdin EOF.
+    Returns on `shutdown` command or stdin EOF. Errors are emitted as JSON
+    envelopes on `stdout`, not signalled through the return value — the
+    caller treats every normal exit as success (exit code 0).
     """
     state = state or DaemonState()
     while True:
         line = stdin.readline()
         if not line:
-            return 0
+            return
         line = line.strip()
         if not line:
             continue
@@ -688,7 +690,7 @@ def run_daemon(stdin: IO[str], stdout: IO[str],
         resp = dispatch(state, req)
         _emit(stdout, resp)
         if is_shutdown:
-            return 0
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -710,7 +712,8 @@ def main(argv: list[str]) -> int:
     from app_logging import setup_logging
     setup_logging()
 
-    return run_daemon(sys.stdin, sys.stdout)
+    run_daemon(sys.stdin, sys.stdout)
+    return 0
 
 
 if __name__ == "__main__":
