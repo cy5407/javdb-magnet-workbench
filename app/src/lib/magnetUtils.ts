@@ -14,18 +14,18 @@ import type {
 /** "5.67GB, 5個文件" → 5.67. "512MB, 1個文件" → 0.5. unparseable → 0. */
 export function parseSizeGb(size: string): number {
   if (!size) return 0;
-  const gb = size.match(/([\d.]+)\s*GB/i);
-  if (gb) return parseFloat(gb[1]);
-  const mb = size.match(/([\d.]+)\s*MB/i);
-  if (mb) return parseFloat(mb[1]) / 1024;
+  const gb = /([\d.]+)\s*GB/i.exec(size);
+  if (gb) return Number.parseFloat(gb[1]);
+  const mb = /([\d.]+)\s*MB/i.exec(size);
+  if (mb) return Number.parseFloat(mb[1]) / 1024;
   return 0;
 }
 
 /** "5.67GB, 5個文件" → 5. unparseable → 999 (matches the Python tests). */
 export function parseFileCount(size: string): number {
   if (!size) return 999;
-  const m = size.match(/(\d+)\s*個文件/);
-  return m ? parseInt(m[1], 10) : 999;
+  const m = /(\d+)\s*個文件/.exec(size);
+  return m ? Number.parseInt(m[1], 10) : 999;
 }
 
 /** Case-insensitive haystack search across name / size / tags / date. */
@@ -87,15 +87,17 @@ export function applyGroupPick(
 
   if (pick === "largest") {
     return [
-      rows.reduce((best, r) =>
-        parseSizeGb(r.size) > parseSizeGb(best.size) ? r : best,
+      rows.reduce(
+        (best, r) => (parseSizeGb(r.size) > parseSizeGb(best.size) ? r : best),
+        rows[0],
       ),
     ];
   }
   if (pick === "smallest") {
     return [
-      rows.reduce((best, r) =>
-        parseSizeGb(r.size) < parseSizeGb(best.size) ? r : best,
+      rows.reduce(
+        (best, r) => (parseSizeGb(r.size) < parseSizeGb(best.size) ? r : best),
+        rows[0],
       ),
     ];
   }
@@ -107,7 +109,7 @@ export function applyGroupPick(
         if (rc !== bc) return rc < bc ? r : best;
         // tie-break: prefer larger file size (more likely to be the main video)
         return parseSizeGb(r.size) > parseSizeGb(best.size) ? r : best;
-      }),
+      }, rows[0]),
     ];
   }
   return rows.slice();

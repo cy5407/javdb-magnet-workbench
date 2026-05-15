@@ -29,7 +29,7 @@ export const SCALE_PRESETS = [
 ] as const;
 
 const SCALE_MIN = 0.5;
-const SCALE_MAX = 3.0;
+const SCALE_MAX = 3;
 
 /** min_size_mb: non-negative integer. */
 export function validateMinSizeMb(value: number): string | null {

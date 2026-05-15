@@ -187,7 +187,9 @@ def cmd_ping(state: DaemonState, req: dict) -> dict:
     return _ok(req, {"uptime_seconds": int(time.time() - state.start_time)})
 
 
-_BTIH_RX = re.compile(r"xt=urn:btih:([a-fA-F0-9]+)", re.IGNORECASE)
+# IGNORECASE already covers uppercase hex, so the class only lists lowercase
+# `a-f` — listing `A-F` as well would be a duplicate range under the flag.
+_BTIH_RX = re.compile(r"xt=urn:btih:([a-f0-9]+)", re.IGNORECASE)
 
 
 def _magnet_dedupe_key(full: str) -> str:
@@ -400,6 +402,8 @@ _RD_ERR_DOWNLOAD = "rd_download_failed"
 _RD_ERR_NOT_FOUND = "rd_torrent_missing"
 _RD_ERR_INTERNAL = "rd_internal"
 
+_RD_NO_TOKEN_MSG = "RD token not configured"
+
 
 def _classify_rd_error(message: str) -> str:
     """Bucket a RealDebridError message into a stable error code."""
@@ -467,7 +471,7 @@ def cmd_rd_user(state: DaemonState, req: dict) -> dict:
     if token_override is not None and not isinstance(token_override, str):
         return _err(req, "bad_request", "token must be a string when provided")
     if not token_override and not state.rd_token:
-        return _err(req, _RD_ERR_NO_TOKEN, "RD token not configured")
+        return _err(req, _RD_ERR_NO_TOKEN, _RD_NO_TOKEN_MSG)
     try:
         client = _rd_client(state, token_override=token_override or None)
         info = client._request("GET", "/user")
@@ -511,7 +515,7 @@ def cmd_rd_send_magnet(state: DaemonState, req: dict) -> dict:
     if not state.handshake_done:
         return _err(req, "bad_request", "handshake required before rd_send_magnet")
     if not state.rd_token:
-        return _err(req, _RD_ERR_NO_TOKEN, "RD token not configured")
+        return _err(req, _RD_ERR_NO_TOKEN, _RD_NO_TOKEN_MSG)
 
     handle_id = req.get("handle_id")
     if not isinstance(handle_id, str):
@@ -558,7 +562,7 @@ def cmd_rd_check_pending(state: DaemonState, req: dict) -> dict:
     """
     from realdebrid import RealDebridError
     if not state.rd_token:
-        return _err(req, _RD_ERR_NO_TOKEN, "RD token not configured")
+        return _err(req, _RD_ERR_NO_TOKEN, _RD_NO_TOKEN_MSG)
     torrent_id = req.get("torrent_id")
     if not isinstance(torrent_id, str) or not torrent_id:
         return _err(req, "bad_request", "torrent_id must be a non-empty string")

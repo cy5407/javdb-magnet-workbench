@@ -30,6 +30,8 @@ def app_dir() -> Path:
 _initialized = False
 _resolved_log_file: Path | None = None
 
+_LOG_FILE_NAME = "debug.log"
+
 
 def _candidate_log_dirs() -> list[Path]:
     """Ordered log-dir candidates. setup_logging() tries each in turn.
@@ -88,7 +90,7 @@ def setup_logging(debug: bool = False) -> Path:
             break
 
     if chosen_dir is not None:
-        log_file = chosen_dir / "debug.log"
+        log_file = chosen_dir / _LOG_FILE_NAME
         try:
             file_handler = RotatingFileHandler(
                 log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
@@ -101,9 +103,9 @@ def setup_logging(debug: bool = False) -> Path:
             root.addHandler(file_handler)
         except OSError:
             chosen_dir = None
-            log_file = (last_attempted / "debug.log") if last_attempted else Path("debug.log")
+            log_file = (last_attempted / _LOG_FILE_NAME) if last_attempted else Path(_LOG_FILE_NAME)
     else:
-        log_file = (last_attempted / "debug.log") if last_attempted else Path("debug.log")
+        log_file = (last_attempted / _LOG_FILE_NAME) if last_attempted else Path(_LOG_FILE_NAME)
 
     console_handler = logging.StreamHandler(sys.stderr)
     console_handler.setLevel(logging.DEBUG if debug else logging.INFO)

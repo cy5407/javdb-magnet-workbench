@@ -59,14 +59,14 @@ $ZipName    = "JavDBMagnet_${Version}_portable.zip"
 $ZipPath    = Join-Path $ReleaseOutDir $ZipName
 
 function Step($title) {
-    Write-Host ""
-    Write-Host "==> $title" -ForegroundColor Cyan
+    Write-Output ""
+    Write-Output "==> $title"
 }
-function Ok($msg)   { Write-Host "    [OK]   $msg" -ForegroundColor Green }
-function Warn($msg) { Write-Host "    [WARN] $msg" -ForegroundColor Yellow }
+function Ok($msg)   { Write-Output "    [OK]   $msg" }
+function Warn($msg) { Write-Output "    [WARN] $msg" }
 function FailExit($msg) {
-    Write-Host ""
-    Write-Host "[FAIL] $msg" -ForegroundColor Red
+    Write-Output ""
+    Write-Output "[FAIL] $msg"
     exit 1
 }
 function Get-Sha256Hex($path) {
@@ -278,15 +278,15 @@ foreach ($exe in $ScanTargets) {
     $text  = [System.Text.Encoding]::ASCII.GetString($bytes)
     $hits = @()
     foreach ($p in $Patterns) {
-        $matches = [regex]::Matches($text, $p.rx)
-        if ($matches.Count -gt 0) {
-            $hits += "      $($p.name)  count=$($matches.Count)"
-            $matches | Select-Object -First 1 | ForEach-Object {
+        $regexMatches = [regex]::Matches($text, $p.rx)
+        if ($regexMatches.Count -gt 0) {
+            $hits += "      $($p.name)  count=$($regexMatches.Count)"
+            $regexMatches | Select-Object -First 1 | ForEach-Object {
                 $sample = $_.Value
                 if ($sample.Length -gt 70) { $sample = $sample.Substring(0,70) + "..." }
                 $hits += "        sample: $sample"
             }
-            $BinaryHitCount += $matches.Count
+            $BinaryHitCount += $regexMatches.Count
         }
     }
     if ($hits.Count -gt 0) {
@@ -341,12 +341,12 @@ foreach ($rel in $sourceFiles) {
     $text = Get-Content -LiteralPath $full -Raw -ErrorAction SilentlyContinue
     if ($null -eq $text) { continue }
     foreach ($p in $Patterns) {
-        $matches = [regex]::Matches($text, $p.rx)
-        if ($matches.Count -gt 0) {
+        $regexMatches = [regex]::Matches($text, $p.rx)
+        if ($regexMatches.Count -gt 0) {
             $SourceHits += [pscustomobject]@{
                 File = $rel
                 Pattern = $p.name
-                Count = $matches.Count
+                Count = $regexMatches.Count
             }
         }
     }

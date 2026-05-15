@@ -1,0 +1,8 @@
+# Pinned Python tools used only by CI (SonarCloud workflow).
+#
+# Kept separate from requirements-sidecar.txt so the sidecar bundle
+# stays free of test-only dependencies. Installed by
+# .github/workflows/sonarcloud.yml via `pip install -r` so that no
+# bare, unpinned packages appear on the pip command line.
+pytest==8.3.4
+coverage==7.6.10
