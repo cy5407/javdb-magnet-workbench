@@ -400,34 +400,44 @@ pub fn preview(source_dir: &Path) -> LegacyImportPreview {
 /// might somehow have made it into the patch — `parse_env` guarantees
 /// it won't, but this method documents the invariant at the boundary.
 pub fn apply_settings_patch(base: &mut Value, patch: &Map<String, Value>) {
-    let base_obj = match base.as_object_mut() {
-        Some(o) => o,
-        None => return,
+    let Some(base_obj) = base.as_object_mut() else {
+        return;
     };
     for (top_key, top_val) in patch {
-        if !top_val.is_object() {
-            base_obj.insert(top_key.clone(), top_val.clone());
+        merge_patch_entry(base_obj, top_key, top_val);
+    }
+    clear_rd_api_token(base_obj);
+}
+
+/// Merge one top-level patch entry into `base_obj`. Scalar (non-object)
+/// values replace the existing key; object values are merged field-by-field
+/// into the existing object (skipping the disallowed `rd.api_token` key).
+fn merge_patch_entry(base_obj: &mut Map<String, Value>, top_key: &str, top_val: &Value) {
+    let Some(patch_obj) = top_val.as_object() else {
+        base_obj.insert(top_key.to_string(), top_val.clone());
+        return;
+    };
+    let target = base_obj
+        .entry(top_key.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(target_obj) = target.as_object_mut() else {
+        return;
+    };
+    for (k, v) in patch_obj {
+        if top_key == "rd" && k == "api_token" {
             continue;
         }
-        let target = base_obj
-            .entry(top_key.clone())
-            .or_insert_with(|| Value::Object(Map::new()));
-        if let (Some(target_obj), Some(patch_obj)) = (target.as_object_mut(), top_val.as_object())
-        {
-            for (k, v) in patch_obj {
-                // Defensive: never let api_token leak through this path.
-                if top_key == "rd" && k == "api_token" {
-                    continue;
-                }
-                target_obj.insert(k.clone(), v.clone());
-            }
-        }
+        target_obj.insert(k.clone(), v.clone());
     }
-    // Final safety net.
-    if let Some(rd) = base_obj.get_mut("rd").and_then(Value::as_object_mut) {
-        if let Some(t) = rd.get_mut("api_token") {
-            *t = Value::String(String::new());
-        }
+}
+
+/// Final safety net: if `rd.api_token` exists for any reason, blank it.
+fn clear_rd_api_token(base_obj: &mut Map<String, Value>) {
+    let Some(rd) = base_obj.get_mut("rd").and_then(Value::as_object_mut) else {
+        return;
+    };
+    if let Some(t) = rd.get_mut("api_token") {
+        *t = Value::String(String::new());
     }
 }
 
