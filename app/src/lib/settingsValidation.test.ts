@@ -133,7 +133,7 @@ describe("validateSettingsDraft", () => {
         cache_wait_seconds: 1,
         wait_timeout_seconds: 1,
       },
-    });
+    } as unknown as Partial<Settings>);
     const errs = validateSettingsDraft(bad);
     expect(Object.keys(errs).sort()).toEqual([
       "rd.cache_wait_seconds",

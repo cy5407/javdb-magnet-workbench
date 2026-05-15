@@ -5,6 +5,7 @@ import {
   sendBatch,
   type RdSendBatchEvent,
   type RdSendItem,
+  type RdSendOptions,
   type RdRetryEvent,
 } from "./rdSender";
 import type { PendingEntry, RdCheckOutcome, RdSendOutcome } from "./types";
@@ -68,7 +69,7 @@ describe("sendBatch", () => {
   });
 
   it("propagates options.defaults to the fetcher", async () => {
-    const fetcher = vi.fn(async (_h: string) => ok("x"));
+    const fetcher = vi.fn(async (_h: string, _opts: RdSendOptions) => ok("x"));
     await sendBatch([item(1)], () => {}, {
       fetcher,
       defaults: { strategy: "largest", min_size_mb: 1000, cache_wait: 5 },
@@ -95,6 +96,50 @@ describe("sendBatch", () => {
     expect(out[1].status).toBe("pending"); // initial value, never sent
     expect(out[2].status).toBe("pending");
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("completed outcome preserves links and torrent_id", async () => {
+    const fetcher = vi.fn(async (h: string) => ok(h));
+    const out = await sendBatch([item(1)], () => {}, { fetcher });
+    expect(out[0].status).toBe("completed");
+    expect(out[0].torrent_id).toBe("t-h-1");
+    expect(out[0].links).toHaveLength(1);
+    expect(out[0].links[0]).toMatchObject({
+      original: "x",
+      download: "y",
+      filename: "f.mp4",
+      filesize: 1,
+      streamable: 0,
+    });
+    expect(out[0].error_code).toBeNull();
+  });
+
+  it("pending outcome keeps torrent_id and empties links", async () => {
+    const fetcher = vi.fn(async (h: string) => pending(h));
+    const out = await sendBatch([item(1)], () => {}, { fetcher });
+    expect(out[0].status).toBe("in_pending");
+    expect(out[0].torrent_id).toBe("t-h-1");
+    expect(out[0].links).toEqual([]);
+    expect(out[0].error_code).toBeNull();
+  });
+
+  it("uses String(e) when fetcher rejects with a non-Error value", async () => {
+    const fetcher = vi.fn(async () => {
+      throw "rd_rate_limited";
+    });
+    const out = await sendBatch([item(1)], () => {}, { fetcher });
+    expect(out[0].status).toBe("error");
+    expect(out[0].error_code).toBe("rd_rate_limited");
+    expect(out[0].links).toEqual([]);
+  });
+
+  it("empty items returns [] without emitting progress or calling fetcher", async () => {
+    const fetcher = vi.fn(async (h: string) => ok(h));
+    const events: RdSendBatchEvent[] = [];
+    const out = await sendBatch([], (ev) => events.push(ev), { fetcher });
+    expect(out).toEqual([]);
+    expect(events).toEqual([]);
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });
 
@@ -176,6 +221,57 @@ describe("retryPending", () => {
       { fetcher, signal: ctrl.signal },
     );
     expect(events).toHaveLength(1);
+  });
+
+  it("pending outcome event carries rd_status, progress, and name", async () => {
+    const fetcher = vi.fn(
+      async (id: string): Promise<RdCheckOutcome> => ({
+        status: "pending",
+        torrent_id: id,
+        name: "movie-name",
+        rd_status: "downloading",
+        progress: 42,
+      }),
+    );
+    const events: RdRetryEvent[] = [];
+    await retryPending([entry("A")], (ev) => events.push(ev), { fetcher });
+    expect(events[0].result.kind).toBe("pending");
+    if (events[0].result.kind === "pending") {
+      expect(events[0].result.rd_status).toBe("downloading");
+      expect(events[0].result.progress).toBe(42);
+      expect(events[0].result.name).toBe("movie-name");
+    }
+  });
+
+  it("completed outcome event carries links and name", async () => {
+    const fetcher = vi.fn(
+      async (id: string): Promise<RdCheckOutcome> => ({
+        status: "completed",
+        torrent_id: id,
+        name: "complete-name",
+        links: [
+          {
+            original: "o",
+            download: "d",
+            filename: "f.mp4",
+            filesize: 123,
+            streamable: 1,
+          },
+        ],
+      }),
+    );
+    const events: RdRetryEvent[] = [];
+    await retryPending([entry("A")], (ev) => events.push(ev), { fetcher });
+    expect(events[0].result.kind).toBe("completed");
+    if (events[0].result.kind === "completed") {
+      expect(events[0].result.name).toBe("complete-name");
+      expect(events[0].result.links).toHaveLength(1);
+      expect(events[0].result.links[0]).toMatchObject({
+        filename: "f.mp4",
+        filesize: 123,
+        streamable: 1,
+      });
+    }
   });
 });
 

@@ -23,14 +23,28 @@ jobs:
           cache: 'npm'
           cache-dependency-path: app/package-lock.json
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install app dependencies
         working-directory: app
         run: npm ci
 
-      - name: Run frontend tests
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-sidecar.txt pytest coverage
+
+      - name: Run frontend coverage
         working-directory: app
-        run: npm test --if-present
-        continue-on-error: true
+        run: npm run test:coverage
+
+      - name: Run Python coverage
+        run: |
+          python -m coverage run -m pytest -q
+          python -m coverage xml -o coverage.xml
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@v4

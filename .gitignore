@@ -17,6 +17,8 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+.coverage
+coverage.xml
 
 # PyInstaller 中間檔與打包產出
 build/

@@ -28,5 +28,10 @@ export default defineConfig({
     // component tests can be added without a config flip.
     environment: "jsdom",
     include: ["src/lib/**/*.test.ts"],
+    coverage: {
+      reporter: ["text", "json", "html", "lcov"],
+      include: ["src/main.ts", "src/lib/**/*.ts"],
+      exclude: ["src/lib/**/*.test.ts"],
+    },
   },
 });

@@ -191,6 +191,47 @@ describe("scrapeBatch", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it("does not sleep before the first url, sleeps once between two urls", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const fetcher = vi.fn(async (url: string) => fakeResult(url));
+    await scrapeBatch(
+      ["https://javdb.com/v/A", "https://javdb.com/v/B"],
+      () => {},
+      { sleep, fetcher, delayRange: [10, 10], retryWaitRange: [0, 0] },
+    );
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(10);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const [firstFetch, secondFetch] = fetcher.mock.invocationCallOrder;
+    const [sleepCall] = sleep.mock.invocationCallOrder;
+    expect(firstFetch).toBeLessThan(sleepCall);
+    expect(sleepCall).toBeLessThan(secondFetch);
+  });
+
+  it("aborting during between-url sleep leaves the second url pending", async () => {
+    const ctrl = new AbortController();
+    const sleep = vi.fn(async () => {
+      ctrl.abort();
+    });
+    const fetcher = vi.fn(async (u: string) => fakeResult(u));
+    const out = await scrapeBatch(
+      ["https://javdb.com/v/A", "https://javdb.com/v/B"],
+      () => {},
+      {
+        sleep,
+        fetcher,
+        delayRange: [10, 10],
+        retryWaitRange: [0, 0],
+        signal: ctrl.signal,
+      },
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledWith("https://javdb.com/v/A");
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(out[0].status).toBe("ok");
+    expect(out[1].status).toBe("pending");
+  });
+
   it("emits progress with index/total", async () => {
     const events: { index: number; total: number; status: string }[] = [];
     const fetcher = vi.fn(async (u: string) => fakeResult(u));
