@@ -10,6 +10,14 @@ import {
 } from "./rdSender";
 import type { PendingEntry, RdCheckOutcome, RdSendOutcome } from "./types";
 
+const tauriMocks = vi.hoisted(() => ({
+  invoke: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: tauriMocks.invoke,
+}));
+
 const item = (i: number): RdSendItem => ({
   handle_id: `h-${i}`,
   code: `SNOS-${i}`,
@@ -286,7 +294,59 @@ describe("rdErrorMessage", () => {
     expect(rdErrorMessage("unknown_handle")).toContain("handle");
   });
 
+  it("maps rd_download_failed / rd_api_error / rd_internal", () => {
+    expect(rdErrorMessage("rd_download_failed")).toContain("下載失敗");
+    expect(rdErrorMessage("rd_api_error")).toContain("API");
+    expect(rdErrorMessage("rd_internal")).toContain("sidecar");
+  });
+
   it("falls through unknown codes with the raw code embedded", () => {
     expect(rdErrorMessage("zzz_unknown_code")).toContain("zzz_unknown_code");
+  });
+});
+
+describe("default Tauri invoke wrappers", () => {
+  it("sendBatch without fetcher invokes rd_send_magnet via @tauri-apps/api/core", async () => {
+    tauriMocks.invoke.mockReset();
+    tauriMocks.invoke.mockResolvedValueOnce(ok("h-1"));
+    const out = await sendBatch([item(1)], () => {});
+    expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+    const [cmd, args] = tauriMocks.invoke.mock.calls[0];
+    expect(cmd).toBe("rd_send_magnet");
+    expect(args).toMatchObject({
+      handleId: "h-1",
+      options: { code: "SNOS-1" },
+    });
+    expect(out[0].status).toBe("completed");
+    expect(out[0].torrent_id).toBe("t-h-1");
+  });
+
+  it("retryPending without fetcher invokes rd_check_pending with strategy", async () => {
+    tauriMocks.invoke.mockReset();
+    tauriMocks.invoke.mockResolvedValueOnce({
+      status: "missing",
+      torrent_id: "tid-1",
+    } satisfies RdCheckOutcome);
+
+    const entry: PendingEntry = {
+      torrent_id: "tid-1",
+      code: "SNOS-1",
+      name: "n",
+      size_label: "5GB",
+      strategy: "largest",
+      added_at: "2026-05-10T00:00:00Z",
+      last_progress: 0,
+      last_rd_status: "",
+      last_checked_at: null,
+    };
+    const events: RdRetryEvent[] = [];
+    await retryPending([entry], (ev) => events.push(ev));
+
+    expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+    const [cmd, args] = tauriMocks.invoke.mock.calls[0];
+    expect(cmd).toBe("rd_check_pending");
+    expect(args).toMatchObject({ torrentId: "tid-1", strategy: "largest" });
+    expect(events).toHaveLength(1);
+    expect(events[0].result.kind).toBe("missing");
   });
 });

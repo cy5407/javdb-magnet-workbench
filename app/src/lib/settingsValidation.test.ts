@@ -60,6 +60,10 @@ describe("validateCacheWaitSeconds", () => {
   it("rejects non-integer", () => {
     expect(validateCacheWaitSeconds(15.5)).toMatch(/整數/);
   });
+  it("rejects NaN / Infinity (not finite)", () => {
+    expect(validateCacheWaitSeconds(NaN)).toMatch(/數字/);
+    expect(validateCacheWaitSeconds(Infinity)).toMatch(/數字/);
+  });
 });
 
 describe("validateWaitTimeoutSeconds", () => {
@@ -71,6 +75,12 @@ describe("validateWaitTimeoutSeconds", () => {
   });
   it("accepts 300", () => {
     expect(validateWaitTimeoutSeconds(300)).toBeNull();
+  });
+  it("rejects NaN (not finite)", () => {
+    expect(validateWaitTimeoutSeconds(NaN)).toMatch(/數字/);
+  });
+  it("rejects non-integer", () => {
+    expect(validateWaitTimeoutSeconds(60.5)).toMatch(/整數/);
   });
 });
 
@@ -98,6 +108,12 @@ describe("validateScale", () => {
   });
   it("empty rejected", () => {
     expect(validateScale("")).toMatch(/空/);
+  });
+  it("non-string rejected (defensive guard for malformed drafts)", () => {
+    // Cast through unknown to mimic a malformed draft where scale is a
+    // number rather than a string — the guard rejects it before parsing.
+    expect(validateScale(1.5 as unknown as string)).toMatch(/字串/);
+    expect(validateScale(null as unknown as string)).toMatch(/字串/);
   });
 });
 

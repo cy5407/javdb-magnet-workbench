@@ -243,4 +243,19 @@ describe("scrapeBatch", () => {
       { index: 2, total: 2, status: "ok" },
     ]);
   });
+
+  it("falls back to real setTimeout-based sleep when no sleep override is given", async () => {
+    // Cover the default realSleep path. delayRange [0,0] keeps the
+    // setTimeout interval at 0ms so the test completes immediately
+    // (the wall-clock cost is one event-loop turn, not a real delay).
+    const fetcher = vi.fn(async (u: string) => fakeResult(u));
+    const out = await scrapeBatch(
+      ["https://javdb.com/v/A", "https://javdb.com/v/B"],
+      () => {},
+      { fetcher, delayRange: [0, 0], retryWaitRange: [0, 0] },
+    );
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(out[0].status).toBe("ok");
+    expect(out[1].status).toBe("ok");
+  });
 });

@@ -10,7 +10,12 @@ import {
   processGroupRows,
   sortRows,
 } from "./magnetUtils";
-import { defaultFilterState, type MagnetRow, type ScrapedGroup } from "./types";
+import {
+  defaultFilterState,
+  type GroupPick,
+  type MagnetRow,
+  type ScrapedGroup,
+} from "./types";
 
 const row = (over: Partial<MagnetRow> = {}): MagnetRow => ({
   handle_id: "h1",
@@ -149,6 +154,14 @@ describe("applyGroupPick", () => {
   it("empty input → empty output", () => {
     expect(applyGroupPick([], "largest")).toEqual([]);
   });
+
+  it("unknown pick value falls through to a defensive copy of rows", () => {
+    // Cast through unknown so we can exercise the default branch even
+    // though the type system would normally rule this out.
+    const out = applyGroupPick(rows, "weird" as unknown as GroupPick);
+    expect(out).toEqual(rows);
+    expect(out).not.toBe(rows);
+  });
 });
 
 describe("sortRows", () => {
@@ -184,6 +197,14 @@ describe("sortRows", () => {
     const out = sortRows(rows, null, "asc");
     expect(out.map((r) => r.handle_id)).toEqual(["a", "b", "c"]);
     expect(out).not.toBe(rows);
+  });
+
+  it("tags column sorts by joined tag list", () => {
+    // rows above have tags ["x"], ["y"], ["a"] — asc order is a < x < y.
+    const out = sortRows(rows, "tags", "asc").map((r) => r.handle_id);
+    expect(out).toEqual(["c", "a", "b"]);
+    const desc = sortRows(rows, "tags", "desc").map((r) => r.handle_id);
+    expect(desc).toEqual(["b", "a", "c"]);
   });
 });
 

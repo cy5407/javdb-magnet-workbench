@@ -382,6 +382,47 @@ class UnknownCommand(unittest.TestCase):
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error"]["code"], "bad_request")
 
+    def test_non_string_cmd_returns_bad_request(self):
+        # cmd field present but not a string → bad_request, not internal.
+        state = sd.DaemonState()
+        resp = _call(state, {"cmd": 123, "request_id": "r1"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
+
+class DispatchInternalError(unittest.TestCase):
+    """`dispatch` is the IPC boundary that catches uncaught handler
+    exceptions and renders them as `internal` envelopes — exception bodies
+    must NEVER cross the boundary verbatim (could contain tokens, cookies,
+    paths). Test by patching a registered handler to raise.
+
+    Contract (see `_err` + the dispatch except-clause):
+      - code = "internal"
+      - message = "<ExcType>: <redacted>" (type name is OK; body is NOT)
+      - internal = "" (default; the redacted marker stays in `message`)
+    """
+
+    def test_handler_exception_rendered_as_internal(self):
+        state = sd.DaemonState()
+        # cmd_ping always succeeds; swap its DISPATCH entry to a raiser.
+        original = sd.DISPATCH["ping"]
+        sd.DISPATCH["ping"] = mock.MagicMock(
+            side_effect=RuntimeError("secret-traceback-leak-XYZ"))
+        try:
+            resp = _call(state, {"cmd": "ping", "request_id": "r"})
+        finally:
+            sd.DISPATCH["ping"] = original
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "internal")
+        self.assertEqual(resp["request_id"], "r")
+        # Type marker lives in `message` (e.g. "RuntimeError: <redacted>"),
+        # which is fine — the rule is "don't leak the secret body".
+        self.assertIn("RuntimeError", resp["error"]["message"])
+        self.assertIn("<redacted>", resp["error"]["message"])
+        # Neither field may echo the raised exception body.
+        self.assertNotIn("secret-traceback-leak-XYZ", resp["error"]["message"])
+        self.assertNotIn("secret-traceback-leak-XYZ", resp["error"]["internal"])
+
 
 # ---------------------------------------------------------------------------
 # Error envelope shape
@@ -444,6 +485,47 @@ class DaemonLoop(unittest.TestCase):
         rc = sd.run_daemon(stdin, stdout)
         self.assertEqual(rc, 0)
         self.assertEqual(stdout.getvalue(), "")
+
+    def test_blank_lines_between_commands_are_skipped(self):
+        # Mixing blank lines and whitespace-only lines into the stream must
+        # not produce error envelopes — they are simply skipped. Without
+        # this, an editor adding trailing newlines could spam bad_request
+        # envelopes back to the Rust caller.
+        commands = [
+            {"cmd": "ping", "request_id": "r1"},
+            {"cmd": "shutdown", "request_id": "r2"},
+        ]
+        stdin = io.StringIO(
+            json.dumps(commands[0]) + "\n"
+            "\n"        # blank line
+            "   \n"     # whitespace only
+            + json.dumps(commands[1]) + "\n"
+        )
+        stdout = io.StringIO()
+        rc = sd.run_daemon(stdin, stdout)
+        self.assertEqual(rc, 0)
+        responses = [json.loads(line) for line in stdout.getvalue().splitlines() if line]
+        # Exactly two responses — the two commands. Blank lines emit nothing.
+        self.assertEqual(len(responses), 2)
+        self.assertEqual(responses[0]["request_id"], "r1")
+        self.assertEqual(responses[1]["request_id"], "r2")
+        for r in responses:
+            self.assertTrue(r["ok"])
+
+    def test_run_daemon_stops_after_shutdown_even_if_more_lines_follow(self):
+        # Lines after shutdown should be ignored; the daemon must exit
+        # cleanly at the shutdown ack — anything else would mean a hung
+        # session in a misbehaving stdin.
+        stdin = io.StringIO(
+            json.dumps({"cmd": "shutdown", "request_id": "r"}) + "\n"
+            + json.dumps({"cmd": "ping", "request_id": "should-not-fire"}) + "\n"
+        )
+        stdout = io.StringIO()
+        rc = sd.run_daemon(stdin, stdout)
+        self.assertEqual(rc, 0)
+        responses = [json.loads(line) for line in stdout.getvalue().splitlines() if line]
+        self.assertEqual(len(responses), 1)
+        self.assertEqual(responses[0]["request_id"], "r")
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +598,25 @@ class RdUser(unittest.TestCase):
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error"]["code"], "rd_premium_required")
 
+    def test_token_must_be_string_when_provided(self):
+        # Non-string token override → bad_request, regardless of state.rd_token.
+        state = _rd_state()
+        resp = _call(state, {"cmd": "rd_user", "request_id": "r", "token": 1234})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_internal_exception_redacted(self):
+        # A non-RealDebridError that escapes _rd_client must bucket to
+        # rd_internal and must NOT echo the exception body in the envelope.
+        state = _rd_state()
+        with mock.patch.object(sd, "_rd_client",
+                               side_effect=RuntimeError("secret-payload-XYZ")):
+            resp = _call(state, {"cmd": "rd_user", "request_id": "r"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], sd._RD_ERR_INTERNAL)
+        self.assertNotIn("secret-payload-XYZ", resp["error"]["message"])
+        self.assertNotIn("secret-payload-XYZ", resp["error"]["internal"])
+
 
 class RdSetToken(unittest.TestCase):
     def test_set_token_updates_state(self):
@@ -569,6 +670,15 @@ class RdSendMagnet(unittest.TestCase):
                               "handle_id": "h-missing"})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error"]["code"], "unknown_handle")
+
+    def test_handle_id_must_be_string(self):
+        state = self._state_with_magnet()
+        # Numeric handle id → bad_request (separate from unknown_handle so
+        # the frontend can flag a protocol mistake vs. a missed entry).
+        resp = _call(state, {"cmd": "rd_send_magnet", "request_id": "r",
+                              "handle_id": 42})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
 
     def test_completed_path(self):
         state = self._state_with_magnet()
@@ -697,6 +807,44 @@ class RdCheckPending(unittest.TestCase):
                                   "torrent_id": "ABC"})
         self.assertTrue(resp["ok"])
         self.assertEqual(resp["status"], "missing")
+
+    def test_torrent_id_non_string_returns_bad_request(self):
+        state = _rd_state()
+        resp = _call(state, {"cmd": "rd_check_pending", "request_id": "r",
+                              "torrent_id": 42})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_torrent_id_empty_string_returns_bad_request(self):
+        state = _rd_state()
+        resp = _call(state, {"cmd": "rd_check_pending", "request_id": "r",
+                              "torrent_id": ""})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_realdebrid_error_classified(self):
+        # RealDebridError from check_torrent → mapped via _classify_rd_error
+        # (e.g. 401 → rd_token_invalid).
+        from realdebrid import RealDebridError
+        state = _rd_state()
+        with mock.patch.object(sd, "_rd_client",
+                               side_effect=RealDebridError("HTTP 401: token 無效")):
+            resp = _call(state, {"cmd": "rd_check_pending", "request_id": "r",
+                                  "torrent_id": "ABC"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], sd._RD_ERR_AUTH)
+
+    def test_internal_exception_redacted(self):
+        # Non-RD exception → rd_internal envelope with body redacted.
+        state = _rd_state()
+        with mock.patch.object(sd, "_rd_client",
+                               side_effect=RuntimeError("hidden-trace-XYZ")):
+            resp = _call(state, {"cmd": "rd_check_pending", "request_id": "r",
+                                  "torrent_id": "ABC"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], sd._RD_ERR_INTERNAL)
+        self.assertNotIn("hidden-trace-XYZ", resp["error"]["message"])
+        self.assertNotIn("hidden-trace-XYZ", resp["error"]["internal"])
 
 
 class RdDispatchRegistration(unittest.TestCase):

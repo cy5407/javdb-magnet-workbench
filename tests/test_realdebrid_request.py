@@ -284,6 +284,263 @@ class CheckTorrent(unittest.TestCase):
         self.assertEqual(out["rd_status"], "downloading")
         self.assertEqual(out["progress"], 42)
 
+    def test_waiting_files_selection_auto_selects_then_downloaded(self):
+        # 1st info: waiting_files_selection with files
+        # 2nd info (after select): downloaded
+        # 3rd call: unrestrict_link
+        files = [
+            {"id": 1, "path": "/x/big.mp4", "bytes": 2 * 1024**3},
+            {"id": 2, "path": "/x/small.txt", "bytes": 1},
+        ]
+        info_wait = {"status": "waiting_files_selection", "files": files,
+                     "filename": "x"}
+        info_done = {"status": "downloaded", "filename": "x.mp4",
+                     "links": ["https://l/1"]}
+        unrestricted = {"download": "https://dl/1", "filename": "x.mp4",
+                        "filesize": 0, "streamable": 0}
+        with mock.patch.object(self.rd, "_request") as mock_req:
+            # torrent_info → select_files (204) → torrent_info → unrestrict_link
+            mock_req.side_effect = [info_wait, None, info_done, unrestricted]
+            out = self.rd.check_torrent("TID-x", strategy="largest")
+        self.assertEqual(out["status"], "completed")
+        self.assertEqual(len(out["links"]), 1)
+        # The select_files POST call should have happened
+        select_calls = [c for c in mock_req.call_args_list
+                        if c.args[0] == "POST" and "selectFiles" in c.args[1]]
+        self.assertEqual(len(select_calls), 1)
+
+    def test_waiting_files_selection_no_pick_falls_through_to_pending(self):
+        # pick_files returns [] when files is empty; no select_files call,
+        # status stays as waiting_files_selection → returns pending.
+        info_wait = {"status": "waiting_files_selection", "files": [],
+                     "filename": "x", "progress": 0}
+        with mock.patch.object(self.rd, "_request", return_value=info_wait):
+            out = self.rd.check_torrent("TID-x")
+        self.assertEqual(out["status"], "pending")
+        self.assertEqual(out["rd_status"], "waiting_files_selection")
+
+
+# ---------------------------------------------------------------------------
+# _collect_links branches
+# ---------------------------------------------------------------------------
+
+class CollectLinks(unittest.TestCase):
+    def setUp(self):
+        self.rd = RealDebrid("tok")
+
+    def test_empty_links_returns_empty_list(self):
+        # torrent info without `links` → early-return []
+        out = self.rd._collect_links({"links": []})
+        self.assertEqual(out, [])
+
+    def test_missing_links_key_returns_empty_list(self):
+        out = self.rd._collect_links({})
+        self.assertEqual(out, [])
+
+    def test_unrestrict_failure_recorded_as_error_entry(self):
+        # First link succeeds, second raises → second slot gets {"original", "error"}.
+        good = {"download": "https://dl/ok", "filename": "ok.mp4",
+                "filesize": 1, "streamable": 0}
+        info = {"links": ["https://l/a", "https://l/b"]}
+        with mock.patch.object(self.rd, "unrestrict_link") as un:
+            un.side_effect = [good, RealDebridError("HTTP 503: gone")]
+            out = self.rd._collect_links(info)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0]["download"], "https://dl/ok")
+        self.assertEqual(out[1]["original"], "https://l/b")
+        self.assertIn("503", out[1]["error"])
+        self.assertNotIn("download", out[1])  # error entries don't carry download
+
+
+# ---------------------------------------------------------------------------
+# process_magnet branches
+#
+# All HTTP boundaries are mocked at the RealDebrid method level (add_magnet,
+# torrent_info, etc.) so no requests/Session is touched.
+#
+# Time is driven by a small fake-clock helper rather than a finite
+# `side_effect=[...]` list. Reason: `mock.patch("realdebrid.time.time", ...)`
+# patches the SHARED `time` module — the `logging` module also calls
+# `time.time()` when formatting records, so a finite list runs out and
+# raises StopIteration mid-test. The fake clock is an unbounded callable
+# that advances only when `time.sleep` is called, which (a) survives any
+# number of incidental logging calls and (b) still lets us push past the
+# `cache_wait` deadline deterministically.
+# ---------------------------------------------------------------------------
+
+
+class _FakeClock:
+    """Monotonic clock that advances only when `sleep` is called.
+
+    Returns the current `now` for every `time()` invocation — incidental
+    callers (e.g. logging's record timestamp) just see the same value
+    repeatedly and never affect loop control. A real sleep advances
+    `now` by `sleep_advance` regardless of the requested seconds; tests
+    set `sleep_advance` large enough that one sleep can push past the
+    cache_wait deadline (so timeout cases finish in O(1) iterations).
+    """
+
+    def __init__(self, start: float = 0.0, sleep_advance: float = 0.0):
+        self.now = start
+        self.sleep_advance = sleep_advance
+
+    def time(self) -> float:
+        return self.now
+
+    def sleep(self, _secs: float) -> None:
+        self.now += self.sleep_advance
+
+
+class ProcessMagnet(unittest.TestCase):
+    SAMPLE_MAGNET = "magnet:?xt=urn:btih:0123456789abcdef&dn=SNOS-192"
+
+    def setUp(self):
+        self.rd = RealDebrid("tok")
+
+    def _patch_clock(self, sleep_advance: float = 0.0):
+        """Patch realdebrid.time.time / .sleep with a fake clock and return
+        a context that yields the clock. Default sleep_advance=0 keeps the
+        clock pinned at 0 — use a value > cache_wait to drive timeout tests."""
+        clk = _FakeClock(sleep_advance=sleep_advance)
+        # Patch via the module reference so `import time` in realdebrid uses
+        # our fake. We use `new` (not `side_effect`) so the wrapped function
+        # IS the clock method — no MagicMock list bookkeeping to exhaust.
+        p_time = mock.patch("realdebrid.time.time", new=clk.time)
+        p_sleep = mock.patch("realdebrid.time.sleep", new=clk.sleep)
+        return clk, p_time, p_sleep
+
+    def test_downloaded_immediately_returns_completed(self):
+        info = {"status": "downloaded", "filename": "f.mp4",
+                "links": ["https://l/1"], "progress": 100}
+        unrestricted = {"download": "https://dl/1", "filename": "f.mp4",
+                        "filesize": 1, "streamable": 0}
+        _, p_t, p_s = self._patch_clock()
+        with p_t, p_s, \
+             mock.patch.object(self.rd, "add_magnet", return_value="T-1"), \
+             mock.patch.object(self.rd, "torrent_info", return_value=info), \
+             mock.patch.object(self.rd, "unrestrict_link", return_value=unrestricted):
+            out = self.rd.process_magnet(self.SAMPLE_MAGNET)
+        self.assertEqual(out["status"], "completed")
+        self.assertEqual(out["torrent_id"], "T-1")
+        self.assertEqual(out["name"], "f.mp4")
+        self.assertEqual(out["links"][0]["download"], "https://dl/1")
+
+    def test_waiting_files_selection_then_downloaded(self):
+        files = [{"id": 1, "path": "/x/movie.mp4", "bytes": 5 * 1024**3}]
+        info_wait = {"status": "waiting_files_selection", "files": files,
+                     "filename": "m.mp4", "progress": 0}
+        info_done = {"status": "downloaded", "filename": "m.mp4",
+                     "links": [], "progress": 100}
+        _, p_t, p_s = self._patch_clock()
+        # Clock pinned at 0, waiting_files_selection does `continue` (no
+        # sleep), then second iteration sees downloaded → returns. No
+        # timeout risk.
+        with p_t, p_s, \
+             mock.patch.object(self.rd, "add_magnet", return_value="T-2"), \
+             mock.patch.object(self.rd, "torrent_info",
+                               side_effect=[info_wait, info_done]), \
+             mock.patch.object(self.rd, "select_files") as sel:
+            out = self.rd.process_magnet(self.SAMPLE_MAGNET, strategy="largest")
+        self.assertEqual(out["status"], "completed")
+        # select_files must have been invoked with the only candidate id.
+        sel.assert_called_once_with("T-2", [1])
+
+    def test_magnet_error_raises_and_deletes(self):
+        info = {"status": "magnet_error", "filename": "bad", "progress": 0}
+        _, p_t, p_s = self._patch_clock()
+        with p_t, p_s, \
+             mock.patch.object(self.rd, "add_magnet", return_value="T-3"), \
+             mock.patch.object(self.rd, "torrent_info", return_value=info), \
+             mock.patch.object(self.rd, "delete_torrent") as dele:
+            with self.assertRaises(RealDebridError) as cm:
+                self.rd.process_magnet(self.SAMPLE_MAGNET)
+        self.assertIn("磁力解析失敗", str(cm.exception))
+        dele.assert_called_once_with("T-3")
+
+    def test_error_status_raises_and_deletes(self):
+        info = {"status": "error", "filename": "", "progress": 0}
+        _, p_t, p_s = self._patch_clock()
+        with p_t, p_s, \
+             mock.patch.object(self.rd, "add_magnet", return_value="T-4"), \
+             mock.patch.object(self.rd, "torrent_info", return_value=info), \
+             mock.patch.object(self.rd, "delete_torrent") as dele:
+            with self.assertRaises(RealDebridError) as cm:
+                self.rd.process_magnet(self.SAMPLE_MAGNET)
+        self.assertIn("下載失敗", str(cm.exception))
+        dele.assert_called_once_with("T-4")
+
+    def test_pick_files_empty_raises_and_deletes(self):
+        # waiting_files_selection but pick_files returns [] → delete + raise.
+        info_wait = {"status": "waiting_files_selection", "files": [],
+                     "progress": 0}
+        _, p_t, p_s = self._patch_clock()
+        with p_t, p_s, \
+             mock.patch.object(self.rd, "add_magnet", return_value="T-5"), \
+             mock.patch.object(self.rd, "torrent_info", return_value=info_wait), \
+             mock.patch.object(self.rd, "pick_files", return_value=[]), \
+             mock.patch.object(self.rd, "delete_torrent") as dele:
+            with self.assertRaises(RealDebridError) as cm:
+                self.rd.process_magnet(self.SAMPLE_MAGNET)
+        self.assertIn("沒有可選的檔案", str(cm.exception))
+        dele.assert_called_once_with("T-5")
+
+    def test_timeout_returns_pending(self):
+        # Loop enters once (status=downloading), sleeps once → clock jumps
+        # past deadline → while-check fails → return pending. One sleep is
+        # enough because sleep_advance > cache_wait.
+        info = {"status": "downloading", "filename": "p", "progress": 17}
+        _, p_t, p_s = self._patch_clock(sleep_advance=1000.0)
+        with p_t, p_s, \
+             mock.patch.object(self.rd, "add_magnet", return_value="T-6"), \
+             mock.patch.object(self.rd, "torrent_info", return_value=info):
+            out = self.rd.process_magnet(self.SAMPLE_MAGNET, cache_wait=15)
+        self.assertEqual(out["status"], "pending")
+        self.assertEqual(out["torrent_id"], "T-6")
+        self.assertEqual(out["rd_status"], "downloading")
+        self.assertEqual(out["progress"], 17)
+        self.assertFalse(out["files_selected"])
+
+    def test_timeout_after_files_selected_returns_pending(self):
+        # waiting_files_selection → select → still downloading → timeout.
+        files = [{"id": 1, "path": "/x/m.mp4", "bytes": 3 * 1024**3}]
+        info_wait = {"status": "waiting_files_selection", "files": files,
+                     "filename": "n", "progress": 0}
+        info_dl = {"status": "downloading", "filename": "n", "progress": 50}
+        _, p_t, p_s = self._patch_clock(sleep_advance=1000.0)
+        with p_t, p_s, \
+             mock.patch.object(self.rd, "add_magnet", return_value="T-7"), \
+             mock.patch.object(self.rd, "torrent_info",
+                               side_effect=[info_wait, info_dl, info_dl]), \
+             mock.patch.object(self.rd, "select_files"):
+            out = self.rd.process_magnet(self.SAMPLE_MAGNET)
+        self.assertEqual(out["status"], "pending")
+        self.assertTrue(out["files_selected"])
+        self.assertEqual(out["progress"], 50)
+
+    def test_progress_callback_invoked_on_each_log(self):
+        info = {"status": "downloaded", "filename": "f", "links": [], "progress": 100}
+        progress_calls: list[str] = []
+        _, p_t, p_s = self._patch_clock()
+        with p_t, p_s, \
+             mock.patch.object(self.rd, "add_magnet", return_value="T-8"), \
+             mock.patch.object(self.rd, "torrent_info", return_value=info):
+            self.rd.process_magnet(self.SAMPLE_MAGNET,
+                                    progress=progress_calls.append)
+        # At minimum: "新增磁力...", "等待解析檔案清單...", "已快取..."
+        self.assertGreaterEqual(len(progress_calls), 2)
+        self.assertTrue(any("新增磁力" in m for m in progress_calls))
+
+    def test_magnet_without_btih_uses_unknown_marker(self):
+        # The function should still process a malformed magnet (no btih hash);
+        # the log marker just becomes "unknown" — no exception path here.
+        info = {"status": "downloaded", "filename": "x", "links": [], "progress": 100}
+        _, p_t, p_s = self._patch_clock()
+        with p_t, p_s, \
+             mock.patch.object(self.rd, "add_magnet", return_value="T-9"), \
+             mock.patch.object(self.rd, "torrent_info", return_value=info):
+            out = self.rd.process_magnet("magnet:?xt=urn:sha1:zz&dn=no-btih")
+        self.assertEqual(out["status"], "completed")
+
 
 # ---------------------------------------------------------------------------
 # load_env
