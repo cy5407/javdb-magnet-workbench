@@ -18,7 +18,17 @@ VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".wmv", ".mov", ".m4v", ".ts", ".webm"}
 
 
 def load_env(path: Path) -> dict[str, str]:
-    """簡易 .env 檔案解析器"""
+    """簡易 .env 檔案解析器。
+
+    .. deprecated::
+        Legacy only — kept solely for ``legacy/javdb_magnet_gui.py`` and
+        its tests. New code paths MUST NOT call this: the live sidecar
+        receives credentials via :mod:`sidecar.sidecar` handshake / OS
+        keyring, and settings are owned by the Rust ``settings`` module.
+        Re-introducing this on the production path would re-open the
+        F-06 finding (any ``key=value`` line in an attacker-controlled
+        file becomes config).
+    """
     env: dict[str, str] = {}
     if not path.exists():
         return env

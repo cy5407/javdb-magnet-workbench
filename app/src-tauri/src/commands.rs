@@ -311,11 +311,19 @@ pub async fn rd_test_token(
 }
 
 /// Persist a token to the credential store + push to the running sidecar.
+///
+/// Format validation lives in [`secret_store::is_valid_rd_token`] so every
+/// path that writes the credential store applies the same rule (F-04).
+/// We pre-check here for an immediate user-facing error code; `set_rd_token`
+/// itself also revalidates as a belt-and-suspenders guard.
 #[tauri::command]
 pub async fn rd_save_token(
     sidecar: State<'_, SidecarManager>,
     token: String,
 ) -> Result<(), String> {
+    if !token.is_empty() && !secret_store::is_valid_rd_token(&token) {
+        return Err(secret_store::RD_TOKEN_FORMAT_ERR.to_string());
+    }
     secret_store::set_rd_token(&token)?;
     let payload: Value = if token.is_empty() {
         json!({ "token": Value::Null })
@@ -703,14 +711,44 @@ async fn import_env_block(
     }
 }
 
+/// Pre-validation for a legacy RD token before any side effect. Returns
+/// `Ok(())` if the value matches the Real-Debrid token format, otherwise
+/// the warning string that should land in [`LegacyImportReport::warnings`].
+/// Pure function — testable without touching the credential store or
+/// sidecar.
+pub(crate) fn validate_legacy_rd_token(token: &str) -> Result<(), String> {
+    if secret_store::is_valid_rd_token(token) {
+        Ok(())
+    } else {
+        Err(
+            "ignored legacy RD_API_TOKEN: value does not match the Real-Debrid \
+             API token format (expected ≤255 ASCII alphanumeric chars); \
+             credential store and sidecar left untouched"
+                .to_string(),
+        )
+    }
+}
+
 /// Hand a recovered `RD_API_TOKEN` to the credential store and ask the
 /// running sidecar to use it. Never written into settings.json.
+///
+/// A malformed value short-circuits BEFORE the credential store or
+/// sidecar see it: otherwise we'd end up in a half-success state where
+/// the keyring held a dirty token but `rd_token_imported` stayed
+/// `false`, and the next sidecar restart would pick up the dirty value
+/// from the keyring at handshake time (F-04 cross-path leak).
 async fn import_rd_token(
     sidecar: &SidecarManager,
     src: &Path,
     token: &str,
     report: &mut LegacyImportReport,
 ) {
+    if let Err(msg) = validate_legacy_rd_token(token) {
+        report.warnings.push(msg);
+        // rd_token_imported stays at its default `false`; do not append
+        // to `sources` since nothing was imported.
+        return;
+    }
     if let Err(e) = secret_store::set_rd_token(token) {
         report.warnings.push(format!("credential store: {e}"));
         return;
@@ -1094,6 +1132,40 @@ mod tests_m7b {
         assert!(text.contains("cf_clearance"));
         // No real-looking secret pattern (XXX placeholder is fine).
         assert!(text.contains("_jdb_session=XXX"));
+    }
+
+    #[test]
+    fn validate_legacy_rd_token_passes_valid_value() {
+        // Sanity: the 52-char ASCII-alphanumeric shape that
+        // `secret_store::is_valid_rd_token` accepts must also clear
+        // the legacy-import gate.
+        assert!(super::validate_legacy_rd_token(&"A".repeat(52)).is_ok());
+    }
+
+    #[test]
+    fn validate_legacy_rd_token_rejects_with_warning_text() {
+        // A malformed legacy token must produce a warning string that
+        // names the field and tells the user nothing was written. The
+        // exact wording is checked here so future refactors can't
+        // accidentally drop the "credential store ... untouched"
+        // promise that callers (and the report.warnings vec) rely on.
+        let err =
+            super::validate_legacy_rd_token("abc-123").expect_err("dash must fail");
+        assert!(err.contains("RD_API_TOKEN"), "got: {err}");
+        assert!(err.contains("credential store"), "got: {err}");
+        assert!(err.contains("untouched"), "got: {err}");
+        // And neither the dirty value nor any hint of its bytes leaks.
+        assert!(!err.contains("abc-123"), "warning echoed dirty value: {err}");
+    }
+
+    #[test]
+    fn validate_legacy_rd_token_rejects_overlong_and_non_ascii() {
+        assert!(super::validate_legacy_rd_token(&"a".repeat(256)).is_err());
+        assert!(super::validate_legacy_rd_token("ＡＢＣ123").is_err());
+        // Empty also fails — caller in import_rd_token only ever invokes
+        // us with a non-empty token (parse_env filters empty), but we
+        // still encode the rule.
+        assert!(super::validate_legacy_rd_token("").is_err());
     }
 
     #[test]

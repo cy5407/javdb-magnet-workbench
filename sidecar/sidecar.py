@@ -104,13 +104,21 @@ def extract_magnet_dn(uri: str) -> str:
 
 
 def parse_cookie_string(s: str) -> dict[str, str]:
-    """Parse `k=v; k=v` cookie header into dict. Empty/whitespace returns {}."""
+    """Parse `k=v; k=v` cookie header into dict. Empty/whitespace returns {}.
+
+    Pairs containing CR or LF are dropped: a stray newline inside a
+    cookie value is the classic shape for HTTP-header injection / response
+    splitting (CWE-93). The desktop app never legitimately needs a
+    multi-line cookie, so refusing is safer than escaping (F-05).
+    """
     if not s or not s.strip():
         return {}
     out: dict[str, str] = {}
     for pair in s.split(";"):
         pair = pair.strip()
         if "=" not in pair:
+            continue
+        if "\r" in pair or "\n" in pair:
             continue
         key, value = pair.split("=", 1)
         out[key.strip()] = value.strip()
@@ -187,13 +195,52 @@ def cmd_hello(state: DaemonState, req: dict) -> dict:
     })
 
 
+_HANDSHAKE_TOKEN_WARNING = {
+    "code": "rd_token_format_invalid",
+    # Generic message — never echoes the dirty value (M1). Covers both
+    # the wrong-type case (e.g. hand-crafted handshake with rd_token=123)
+    # and the wrong-shape case (e.g. dirty keyring blob with punctuation).
+    "message": (
+        "rd_token from handshake was not a well-formed Real-Debrid "
+        "token (expected a string of <=255 ASCII alphanumeric chars); "
+        "the value has been dropped and no token is configured"
+    ),
+}
+
+
 def cmd_handshake(state: DaemonState, req: dict) -> dict:
     state.cookies = parse_cookie_string(req.get("cookies", "") or "")
-    state.rd_token = req.get("rd_token") or ""
+    # F-04 cross-path leak: if a malformed token slipped past the Rust
+    # guards (e.g. a corrupted keyring entry from an earlier version,
+    # or a hand-crafted handshake), refuse to carry it into state.
+    # rd_send_magnet would otherwise hand the dirty value straight to
+    # the Real-Debrid API. Empty string here means "no token configured"
+    # — cmd_rd_user / cmd_rd_send_magnet already surface that as
+    # rd_no_token, which is the correct user-facing signal.
+    #
+    # Type-guard ordering matters here: a non-string rd_token (number /
+    # list / object from a hand-crafted handshake) MUST NOT reach
+    # _is_valid_rd_token, which would TypeError on len()/iteration and
+    # turn the whole dispatch into an `internal` error envelope. None
+    # and "" are the steady-state "not configured" shapes and stay
+    # silent; anything else of the wrong type is warned and dropped.
+    raw = req.get("rd_token")
+    warnings: list[dict] = []
+    if raw is None or raw == "":
+        rd_token = ""
+    elif isinstance(raw, str) and _is_valid_rd_token(raw):
+        rd_token = raw
+    else:
+        # Machine-readable so a future UI/agent can prompt the user to
+        # re-enter the token rather than silently seeing "rd_no_token".
+        warnings.append(dict(_HANDSHAKE_TOKEN_WARNING))
+        rd_token = ""
+    state.rd_token = rd_token
     state.settings = req.get("settings") or {}
     state.paths = req.get("paths") or {}
     state.handshake_done = True
-    return _ok(req)
+    extra = {"warnings": warnings} if warnings else None
+    return _ok(req, extra)
 
 
 def cmd_ping(state: DaemonState, req: dict) -> dict:
@@ -256,6 +303,25 @@ def _intern_magnet(state: DaemonState, full: str) -> tuple[str, bool]:
     return handle_id, False
 
 
+_JAVDB_ALLOWED_HOST = "javdb.com"
+
+
+def _is_javdb_host(host: str) -> bool:
+    """True iff `host` is javdb.com or an immediate subdomain.
+
+    requests.Session.get(url, cookies=dict) does NOT scope cookies by
+    host — every cookie in the dict is appended to the outgoing
+    `Cookie:` header no matter what URL `url` points at. Without a host
+    allowlist, a user tricked into supplying an arbitrary HTTPS URL
+    would leak `_jdb_session` + `cf_clearance` to the attacker's
+    endpoint (F-01 / CWE-200 / CWE-540).
+    """
+    if not host:
+        return False
+    host = host.lower()
+    return host == _JAVDB_ALLOWED_HOST or host.endswith("." + _JAVDB_ALLOWED_HOST)
+
+
 def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
     if not state.handshake_done:
         return _err(req, "bad_request", "handshake required before fetch_javdb")
@@ -267,6 +333,15 @@ def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
     # http-or-https accept-list as a clear-text-channel risk.
     if not isinstance(url, str) or not url.startswith("https://"):
         return _err(req, "bad_request", "url must start with https://")
+    # F-01: pin the host to javdb.com (or *.javdb.com). See
+    # _is_javdb_host for the rationale; without this gate the JavDB
+    # cookies would be sent to any HTTPS URL the caller passes in.
+    try:
+        host = (urllib.parse.urlparse(url).hostname or "")
+    except ValueError:
+        return _err(req, "bad_request", "url is not a valid URL")
+    if not _is_javdb_host(host):
+        return _err(req, "bad_request", "url host not allowed")
 
     try:
         session, engine = create_session()
@@ -515,17 +590,54 @@ def cmd_rd_user(state: DaemonState, req: dict) -> dict:
     })
 
 
+# !!! KEEP IN SYNC with the Rust `secret_store::RD_TOKEN_MAX_LEN`
+# (`app/src-tauri/src/secret_store.rs`). Same rule applied on both
+# sides of the IPC.
+_RD_TOKEN_MAX_LEN = 255
+
+
+def _is_valid_rd_token(token: str) -> bool:
+    """Real-Debrid API tokens are 52 ASCII alphanumeric characters at
+    time of writing. Bound to <=255 chars / ASCII-alnum so a paste of
+    surrounding HTML, a stray newline, or a stale OAuth blob can't be
+    stored as a token (F-04).
+
+    !!! KEEP IN SYNC with the Rust ``secret_store::is_valid_rd_token``
+    (``app/src-tauri/src/secret_store.rs``). The two implementations
+    MUST accept and reject exactly the same strings — handshake
+    (Python) and credential store (Rust) both gate on this rule, and
+    drift would let a token pass one side but fail the other (silent
+    UX breakage where the keyring holds a value the sidecar then drops
+    at handshake time, or vice versa). If you change the rule, update
+    both files in the same commit and re-run both test suites.
+    """
+    return (
+        0 < len(token) <= _RD_TOKEN_MAX_LEN
+        and all(c.isascii() and c.isalnum() for c in token)
+    )
+
+
 def cmd_rd_set_token(state: DaemonState, req: dict) -> dict:
     """Update state.rd_token at runtime. Used by the settings UI after the
     user pastes / changes a token, so a sidecar restart isn't needed."""
+    # F-17: align with cmd_rd_send_magnet — require handshake first so a
+    # caller cannot push tokens before the protocol is established.
+    if not state.handshake_done:
+        return _err(req, "bad_request", "handshake required before rd_set_token")
     token = req.get("token")
     if token is None:
         state.rd_token = ""
         return _ok(req, {"set": False})
     if not isinstance(token, str):
         return _err(req, "bad_request", "token must be a string")
+    if token == "":
+        # Treat an explicit empty string like null — a clear, not a set.
+        state.rd_token = ""
+        return _ok(req, {"set": False})
+    if not _is_valid_rd_token(token):
+        return _err(req, "bad_request", "rd_token_format_invalid")
     state.rd_token = token
-    return _ok(req, {"set": bool(token)})
+    return _ok(req, {"set": True})
 
 
 def cmd_rd_send_magnet(state: DaemonState, req: dict) -> dict:

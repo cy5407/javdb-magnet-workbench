@@ -114,6 +114,34 @@ class ParseCookieString(unittest.TestCase):
     def test_value_may_contain_equals(self):
         self.assertEqual(sd.parse_cookie_string("key=a=b=c"), {"key": "a=b=c"})
 
+    def test_drops_pair_with_lf(self):
+        # F-05: a `\n` inside a cookie KV is the shape of HTTP-header
+        # injection / response splitting. The desktop app never
+        # legitimately needs multi-line cookies; refuse the whole pair
+        # rather than escape.
+        self.assertEqual(
+            sd.parse_cookie_string("good=1; bad=injected\nX-Evil: 1; ok=2"),
+            {"good": "1", "ok": "2"},
+        )
+
+    def test_drops_pair_with_cr(self):
+        self.assertEqual(
+            sd.parse_cookie_string("good=1; bad=v\rX-Evil: 1"),
+            {"good": "1"},
+        )
+
+    def test_drops_pair_with_crlf(self):
+        self.assertEqual(
+            sd.parse_cookie_string("good=1; bad=v\r\nX-Evil: 1"),
+            {"good": "1"},
+        )
+
+    def test_drops_pair_when_lf_in_key(self):
+        self.assertEqual(
+            sd.parse_cookie_string("good=1; bad\nname=v"),
+            {"good": "1"},
+        )
+
 
 # ---------------------------------------------------------------------------
 # hello / handshake
@@ -163,6 +191,154 @@ class Handshake(unittest.TestCase):
         self.assertTrue(resp["ok"])
         self.assertEqual(state.rd_token, "")
 
+    def test_handshake_drops_malformed_token(self):
+        # F-04 cross-path leak: a dirty value from a corrupted keyring
+        # entry (or a hand-crafted handshake) MUST NOT land in
+        # state.rd_token; otherwise rd_send_magnet would feed it
+        # straight into the Real-Debrid API on the very first call.
+        # The handshake itself still succeeds (other state needs to be
+        # set up); the rd_token slot just clears to empty so the user
+        # sees `rd_no_token` instead of a 401. M1: a machine-readable
+        # warning is included so a future UI/agent can prompt the user
+        # to re-enter the token rather than silently failing later.
+        state = sd.DaemonState()
+        dirty = "abc-123"  # dash → fails format
+        resp = _call(state, {
+            "cmd": "handshake", "request_id": "r",
+            "cookies": "k=v",
+            "rd_token": dirty,
+            "settings": {}, "paths": {},
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(state.rd_token, "")
+        self.assertTrue(state.handshake_done)
+        # Warning is structured (list of dicts with stable `code`) so a
+        # future UI can switch on it without regex-matching prose.
+        warnings = resp.get("warnings")
+        self.assertIsInstance(warnings, list)
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]["code"], "rd_token_format_invalid")
+        self.assertIn("message", warnings[0])
+        # The dirty token value MUST NOT round-trip back to the caller.
+        serialized = json.dumps(resp)
+        self.assertNotIn(dirty, serialized,
+                         f"handshake response leaked the dirty token: {serialized}")
+
+    def test_handshake_drops_overlong_token(self):
+        state = sd.DaemonState()
+        dirty = "a" * 256
+        resp = _call(state, {
+            "cmd": "handshake", "request_id": "r",
+            "cookies": "",
+            "rd_token": dirty,
+            "settings": {}, "paths": {},
+        })
+        self.assertEqual(state.rd_token, "")
+        # Same warning shape regardless of which rule failed.
+        warnings = resp.get("warnings") or []
+        self.assertEqual([w["code"] for w in warnings], ["rd_token_format_invalid"])
+        self.assertNotIn(dirty, json.dumps(resp))
+
+    def test_handshake_keeps_well_formed_token(self):
+        # A 52-char ASCII-alphanumeric token (RD's documented shape)
+        # must pass through the handshake guard unchanged. Without this
+        # assertion the regression would be invisible: the test above
+        # would pass even if we accidentally dropped every token.
+        # And there must be NO warning — only the malformed path is
+        # supposed to emit one.
+        state = sd.DaemonState()
+        good = "A" * 52
+        resp = _call(state, {
+            "cmd": "handshake", "request_id": "r",
+            "cookies": "",
+            "rd_token": good,
+            "settings": {}, "paths": {},
+        })
+        self.assertEqual(state.rd_token, good)
+        self.assertNotIn("warnings", resp)
+
+    def test_handshake_null_token_does_not_warn(self):
+        # Absent/null token is the steady-state for a fresh install —
+        # it's "not configured", not "configured but dirty". Must be a
+        # silent ok response so the UI doesn't surface a misleading
+        # warning to a user who hasn't pasted a token yet.
+        state = sd.DaemonState()
+        resp = _call(state, {
+            "cmd": "handshake", "request_id": "r",
+            "cookies": "", "rd_token": None,
+            "settings": {}, "paths": {},
+        })
+        self.assertTrue(resp["ok"])
+        self.assertNotIn("warnings", resp)
+
+    def test_handshake_rejects_non_string_token_without_typeerror(self):
+        # M1.1 — defence against a hand-crafted handshake (or a future
+        # mis-encoded Rust call) that ships rd_token as a non-string:
+        # number, list, or object. Before the type guard, _is_valid_rd_token
+        # would TypeError on len()/iteration and the dispatch boundary
+        # would render an `internal` error envelope, losing the chance
+        # to surface a clear warning. Now: handshake stays ok, state
+        # clears to empty, response carries the same rd_token_format_invalid
+        # warning shape as the string-malformed path, and the dirty value
+        # is NEVER round-tripped back through IPC.
+        cases = [
+            ("number", 1234567890),
+            ("negative_number", -987654321),
+            ("float", 12.5),
+            ("bool_true", True),
+            ("list", ["DIRTY_TOKEN_SENTINEL_LIST"]),
+            ("dict", {"DIRTY_KEY": "DIRTY_TOKEN_SENTINEL_DICT"}),
+        ]
+        for label, bad in cases:
+            with self.subTest(label=label):
+                state = sd.DaemonState()
+                resp = _call(state, {
+                    "cmd": "handshake", "request_id": f"r-{label}",
+                    "cookies": "",
+                    "rd_token": bad,
+                    "settings": {}, "paths": {},
+                })
+                self.assertTrue(resp["ok"], f"{label}: {resp}")
+                # Critical: handshake must NOT degrade into an `internal`
+                # envelope from a TypeError in the validator.
+                self.assertNotIn("error", resp)
+                self.assertEqual(state.rd_token, "")
+                self.assertTrue(state.handshake_done)
+                warnings = resp.get("warnings") or []
+                self.assertEqual(
+                    [w["code"] for w in warnings],
+                    ["rd_token_format_invalid"],
+                    f"{label}: {warnings}",
+                )
+                # Leak check is scoped to the non-protocol part of the
+                # response. Including `ok` and `request_id` would create
+                # a false positive on small primitives — e.g. bad=True
+                # serializes to "true", which always appears as
+                # `"ok": true` in the envelope, regardless of leak status.
+                payload = {k: v for k, v in resp.items()
+                           if k not in ("ok", "request_id")}
+                payload_blob = json.dumps(payload, ensure_ascii=False)
+                self.assertNotIn(
+                    json.dumps(bad, ensure_ascii=False),
+                    payload_blob,
+                    f"{label} leaked dirty value into response payload: {payload_blob}",
+                )
+
+    def test_handshake_empty_string_token_does_not_warn(self):
+        # Explicit "" should behave like None — caller chose to send an
+        # empty value rather than omit the field. Either way it's the
+        # steady-state "not configured" shape, not a dirty token, so
+        # the response must stay silent.
+        state = sd.DaemonState()
+        resp = _call(state, {
+            "cmd": "handshake", "request_id": "r",
+            "cookies": "", "rd_token": "",
+            "settings": {}, "paths": {},
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(state.rd_token, "")
+        self.assertNotIn("warnings", resp)
+
 
 # ---------------------------------------------------------------------------
 # ping
@@ -208,6 +384,65 @@ class FetchJavdb(unittest.TestCase):
                                   "url": "http://javdb.com/v/x"})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_fetch_rejects_non_javdb_host(self):
+        # F-01: requests.Session.get(url, cookies=dict) does NOT scope
+        # cookies by host — every cookie in the dict is appended to the
+        # outgoing request regardless of `url`. Without an allowlist,
+        # any HTTPS URL the caller supplies would leak `_jdb_session`
+        # and `cf_clearance`. Reject anything that isn't javdb.com or
+        # a .javdb.com subdomain.
+        with mock.patch.object(sd, "create_session") as cs, \
+             mock.patch.object(sd, "fetch_magnets") as fm:
+            resp = _call(self.state, {"cmd": "fetch_javdb", "request_id": "r1",
+                                      "url": "https://attacker.example/leak"})
+            self.assertFalse(resp["ok"])
+            self.assertEqual(resp["error"]["code"], "bad_request")
+            # Critical: cookies must NOT reach the network layer.
+            cs.assert_not_called()
+            fm.assert_not_called()
+
+    def test_fetch_rejects_lookalike_host(self):
+        # `javdb.com.attacker.example` is a subdomain of attacker.example,
+        # NOT of javdb.com. `endswith` without the leading dot would
+        # have matched it — guard against the classic suffix bypass.
+        resp = _call(self.state, {"cmd": "fetch_javdb", "request_id": "r1",
+                                  "url": "https://evil.javdb.com.attacker.example/"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_fetch_rejects_url_with_userinfo_pointing_elsewhere(self):
+        # `https://javdb.com@attacker.example/...` parses with hostname
+        # = attacker.example. Must be rejected.
+        resp = _call(self.state, {"cmd": "fetch_javdb", "request_id": "r1",
+                                  "url": "https://javdb.com@attacker.example/p"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_fetch_accepts_subdomain_of_javdb(self):
+        # `*.javdb.com` is allowed (mirrors, regional fronts).
+        with mock.patch.object(sd, "create_session",
+                               return_value=(mock.MagicMock(), "mock_engine")), \
+             mock.patch.object(sd, "fetch_magnets") as mock_fetch:
+            mock_fetch.return_value = {
+                "url": "https://en.javdb.com/v/x", "code": "", "title": "",
+                "error": "", "magnets": [],
+            }
+            resp = _call(self.state, {"cmd": "fetch_javdb", "request_id": "r1",
+                                      "url": "https://en.javdb.com/v/x"})
+        self.assertTrue(resp["ok"])
+
+    def test_fetch_host_match_is_case_insensitive(self):
+        with mock.patch.object(sd, "create_session",
+                               return_value=(mock.MagicMock(), "mock_engine")), \
+             mock.patch.object(sd, "fetch_magnets") as mock_fetch:
+            mock_fetch.return_value = {
+                "url": "https://JAVDB.com/v/x", "code": "", "title": "",
+                "error": "", "magnets": [],
+            }
+            resp = _call(self.state, {"cmd": "fetch_javdb", "request_id": "r1",
+                                      "url": "https://JAVDB.com/v/x"})
+        self.assertTrue(resp["ok"])
 
     def test_fetch_returns_handles_and_redacted_magnets(self):
         full_magnet = (
@@ -624,24 +859,104 @@ class RdUser(unittest.TestCase):
 
 
 class RdSetToken(unittest.TestCase):
-    def test_set_token_updates_state(self):
+    def _post_handshake_state(self):
         state = sd.DaemonState()
-        resp = _call(state, {"cmd": "rd_set_token", "request_id": "r", "token": "new-tok"})
+        state.handshake_done = True
+        return state
+
+    def test_set_token_updates_state(self):
+        state = self._post_handshake_state()
+        # 52-char ASCII-alphanumeric matches the current RD token shape.
+        token = "A" * 52
+        resp = _call(state, {"cmd": "rd_set_token", "request_id": "r", "token": token})
         self.assertTrue(resp["ok"])
         self.assertTrue(resp["set"])
-        self.assertEqual(state.rd_token, "new-tok")
+        self.assertEqual(state.rd_token, token)
 
     def test_null_token_clears_state(self):
-        state = sd.DaemonState()
+        state = self._post_handshake_state()
         state.rd_token = "old"
         resp = _call(state, {"cmd": "rd_set_token", "request_id": "r", "token": None})
         self.assertTrue(resp["ok"])
         self.assertFalse(resp["set"])
         self.assertEqual(state.rd_token, "")
 
+    def test_empty_string_token_clears_state(self):
+        # rd_save_token sends `{ "token": Null }` on empty input, but be
+        # defensive: an explicit empty string is treated like null —
+        # clear, not format error — so callers don't get a confusing
+        # `rd_token_format_invalid` from a clear gesture.
+        state = self._post_handshake_state()
+        state.rd_token = "old"
+        resp = _call(state, {"cmd": "rd_set_token", "request_id": "r", "token": ""})
+        self.assertTrue(resp["ok"])
+        self.assertFalse(resp["set"])
+        self.assertEqual(state.rd_token, "")
+
     def test_non_string_token_rejected(self):
-        state = sd.DaemonState()
+        state = self._post_handshake_state()
         resp = _call(state, {"cmd": "rd_set_token", "request_id": "r", "token": 123})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_requires_handshake(self):
+        # F-17: align with rd_send_magnet — without handshake, calling
+        # rd_set_token must error. Defence in depth against any future
+        # caller that tries to push a token before the protocol is
+        # established.
+        state = sd.DaemonState()  # handshake_done = False
+        resp = _call(state, {
+            "cmd": "rd_set_token", "request_id": "r", "token": "A" * 52,
+        })
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+        # And the token must NOT have been stored.
+        self.assertEqual(state.rd_token, "")
+
+    def test_rejects_token_with_dash(self):
+        # F-04: RD tokens are ASCII-alphanumeric. A paste that brings in
+        # punctuation (a stray dash, a wrapping comment, etc.) must be
+        # refused so a malformed value never gets persisted as a token.
+        state = self._post_handshake_state()
+        resp = _call(state, {
+            "cmd": "rd_set_token", "request_id": "r", "token": "abc-123",
+        })
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+        self.assertEqual(state.rd_token, "")
+
+    def test_rejects_token_with_whitespace(self):
+        state = self._post_handshake_state()
+        resp = _call(state, {
+            "cmd": "rd_set_token", "request_id": "r", "token": "abc 123",
+        })
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_rejects_token_with_newline(self):
+        # Most common copy-paste accident; explicit assertion.
+        state = self._post_handshake_state()
+        resp = _call(state, {
+            "cmd": "rd_set_token", "request_id": "r", "token": "abc\n",
+        })
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_rejects_overlong_token(self):
+        state = self._post_handshake_state()
+        resp = _call(state, {
+            "cmd": "rd_set_token", "request_id": "r", "token": "a" * 256,
+        })
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+        self.assertEqual(state.rd_token, "")
+
+    def test_rejects_non_ascii_token(self):
+        # Unicode digits (e.g. fullwidth) are alnum but NOT ASCII.
+        state = self._post_handshake_state()
+        resp = _call(state, {
+            "cmd": "rd_set_token", "request_id": "r", "token": "ＡＢＣ123",
+        })
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error"]["code"], "bad_request")
 

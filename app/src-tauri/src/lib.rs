@@ -50,6 +50,16 @@ fn load_handshake_inputs(path_manager: &PathManager) -> (String, Option<String>,
 /// the credential store, then rewrite the JSON file with the field cleared.
 /// Returns the migrated token (so the first sidecar handshake still has
 /// it) or None if there was nothing to migrate.
+///
+/// A malformed legacy value (anything that fails
+/// [`secret_store::is_valid_rd_token`]) is left in place untouched: we do
+/// NOT write it to the keyring and we do NOT blank the JSON field, so
+/// the user can see what was rejected and fix it. Returning a malformed
+/// token here would have it flow into the first sidecar handshake and
+/// straight into a Real-Debrid API call (F-04 cross-path leak); the
+/// sidecar's handshake-side guard will also drop it, but defence in
+/// depth keeps the dirty value out of the credential store on the next
+/// run as well.
 fn migrate_legacy_token(path_manager: &PathManager, settings_value: &Value) -> Option<String> {
     let token = settings_value
         .get("rd")
@@ -57,6 +67,15 @@ fn migrate_legacy_token(path_manager: &PathManager, settings_value: &Value) -> O
         .and_then(|t| t.as_str())
         .filter(|s| !s.is_empty())?
         .to_string();
+
+    if !secret_store::is_valid_rd_token(&token) {
+        eprintln!(
+            "[migrate] legacy settings.rd.api_token does not match Real-Debrid \
+             token format; leaving the plaintext field intact and skipping the \
+             keyring write so the dirty value cannot reach the sidecar"
+        );
+        return None;
+    }
 
     if let Err(e) = secret_store::set_rd_token(&token) {
         eprintln!("[migrate] keyring write failed, leaving plaintext: {e}");
@@ -81,6 +100,94 @@ fn migrate_legacy_token(path_manager: &PathManager, settings_value: &Value) -> O
         }
     }
     Some(token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn temp_data_dir() -> PathManager {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let root = env::temp_dir().join(format!(
+            "javdbmagnet-migrate-test-{}-{}",
+            std::process::id(),
+            id
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let data_dir = root.join("data");
+        let log_dir = root.join("logs");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&log_dir).unwrap();
+        PathManager { data_dir, log_dir }
+    }
+
+    /// Build a settings-wrapper JSON whose `rd.api_token` is `token` and
+    /// drop it into `<data_dir>/settings.json`. Returns the parsed
+    /// `settings` value (what `load_handshake_inputs` would feed to
+    /// `migrate_legacy_token`).
+    fn write_wrapper(pm: &PathManager, token: &str) -> Value {
+        let wrapper = json!({
+            "settings": {
+                "rd": {"api_token": token, "file_pick": "smart"},
+                "ui": {"theme": "dark"},
+            }
+        });
+        fs::write(
+            pm.data_dir.join(STORE_FILE),
+            serde_json::to_string_pretty(&wrapper).unwrap(),
+        )
+        .unwrap();
+        wrapper.get("settings").cloned().unwrap()
+    }
+
+    #[test]
+    fn migrate_legacy_token_skips_invalid_value_and_keeps_settings_intact() {
+        // A malformed legacy token (here: a dash, which is the canonical
+        // bad-paste shape) must NOT be migrated. The keyring must not be
+        // touched and settings.json must be left exactly as we wrote it
+        // so the user can see the dirty value and fix it. Otherwise a
+        // future `load_handshake_inputs` call would still try to feed
+        // the dirty value through `migrate_legacy_token` again — by
+        // leaving it intact we keep the invariant local.
+        let pm = temp_data_dir();
+        let bad = "abc-123";
+        let before = write_wrapper(&pm, bad);
+        let raw_before = fs::read_to_string(pm.data_dir.join(STORE_FILE)).unwrap();
+
+        let result = migrate_legacy_token(&pm, &before);
+        assert!(
+            result.is_none(),
+            "invalid token must NOT be returned to the sidecar handshake; got {result:?}"
+        );
+
+        let raw_after = fs::read_to_string(pm.data_dir.join(STORE_FILE)).unwrap();
+        assert_eq!(
+            raw_before, raw_after,
+            "settings.json must be byte-identical when migration is skipped"
+        );
+        // And the dirty token must still be on disk for the user to fix
+        // (i.e. we did NOT blank it).
+        assert!(
+            raw_after.contains(bad),
+            "expected dirty token '{bad}' to remain in settings.json; got: {raw_after}"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_token_no_token_returns_none_without_modifying_settings() {
+        // Empty / absent api_token is the steady-state for a fresh
+        // install; must be a no-op (no warning, no I/O on settings.json).
+        let pm = temp_data_dir();
+        let before = write_wrapper(&pm, "");
+        let raw_before = fs::read_to_string(pm.data_dir.join(STORE_FILE)).unwrap();
+        assert!(migrate_legacy_token(&pm, &before).is_none());
+        let raw_after = fs::read_to_string(pm.data_dir.join(STORE_FILE)).unwrap();
+        assert_eq!(raw_before, raw_after);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

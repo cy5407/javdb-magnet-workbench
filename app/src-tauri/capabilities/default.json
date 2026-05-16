@@ -8,8 +8,7 @@
     {
       "identifier": "shell:allow-open",
       "allow": [
-        { "url": "https://real-debrid.com/*" },
-        { "url": "https://javdb.com/*" }
+        { "url": "https://real-debrid.com/apitoken" }
       ]
     }
   ]
