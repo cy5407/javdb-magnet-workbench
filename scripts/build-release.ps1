@@ -228,7 +228,7 @@ foreach ($f in $StagedFiles) {
         $StagingViolations += "subdir entry: $rel"
         continue
     }
-    if ($AllowedNames -notcontains $f.FullName.Split('\\')[-1]) {
+    if ($AllowedNames -notcontains (Split-Path $f.FullName -Leaf)) {
         $StagingViolations += "unexpected file: $rel"
     }
 }
