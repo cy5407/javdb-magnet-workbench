@@ -51,6 +51,31 @@ export interface RdSendBatchOptions {
   fetcher?: (handle_id: string, opts: RdSendOptions) => Promise<RdSendOutcome>;
 }
 
+/**
+ * Stable sort by `completed_at` ascending. Rows missing `completed_at` are
+ * placed using `missingCompletedAtFallback` as their sort key — caller MUST
+ * pass this explicitly so the "missing row" position is always an
+ * intentional choice (e.g. `lastBatchStartAt` in the UI; `""` to push them
+ * before all timestamped rows).
+ */
+export function sortCompletedRowsByCompletionTime<T extends { completed_at?: string }>(
+  rows: T[],
+  missingCompletedAtFallback: string,
+): T[] {
+  return rows
+    .map((row, index) => ({
+      row,
+      index,
+      completedAt: row.completed_at ?? missingCompletedAtFallback,
+    }))
+    .sort((a, b) => {
+      if (a.completedAt < b.completedAt) return -1;
+      if (a.completedAt > b.completedAt) return 1;
+      return a.index - b.index;
+    })
+    .map((entry) => entry.row);
+}
+
 const defaultFetcher = (
   handle_id: string,
   opts: RdSendOptions,
@@ -105,6 +130,7 @@ export async function sendBatch(
           status: "completed",
           links: outcome.links,
           error_code: null,
+          completed_at: new Date().toISOString(),
           torrent_id: outcome.torrent_id,
         };
       } else {

@@ -231,6 +231,8 @@ export interface RdSendProgress {
   status: "pending" | "sending" | "completed" | "in_pending" | "error";
   links: RdLink[];
   error_code: string | null;
+  /** ISO-8601 UTC timestamp set by the frontend when this row completes. */
+  completed_at?: string;
   /**
    * RD-side torrent identifier captured when the send-magnet outcome
    * was `completed` or `pending`. Lets the pending-retry path find

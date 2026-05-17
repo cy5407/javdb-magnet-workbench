@@ -19,6 +19,7 @@
     rdErrorMessage,
     retryPending,
     sendBatch,
+    sortCompletedRowsByCompletionTime,
     type RdRetryEvent,
     type RdSendBatchEvent,
     type RdSendItem,
@@ -91,6 +92,7 @@
   let rdSendAbort: AbortController | null = null;
   let pendingEntries = $state<PendingEntry[]>([]);
   let isRetryingPending = $state(false);
+  let lastBatchStartAt = $state(new Date().toISOString());
   let retryAbort: AbortController | null = null;
   // Inline status for the pending section, rendered right under the
   // section header so feedback is visible without scrolling back up
@@ -606,6 +608,7 @@
       rdMessage = "目前沒有可送出的磁力";
       return;
     }
+    lastBatchStartAt = new Date().toISOString();
     isRdSending = true;
     rdSendProgress = items.map((it) => ({
       handle_id: it.handle_id,
@@ -657,11 +660,13 @@
 
   async function copyRdDownloads() {
     const lines: string[] = [];
-    for (const row of rdSendProgress) {
-      if (row.status === "completed") {
-        for (const link of row.links) {
-          if (link.download) lines.push(link.download);
-        }
+    const completedRows = sortCompletedRowsByCompletionTime(
+      rdSendProgress.filter((row) => row.status === "completed"),
+      lastBatchStartAt,
+    );
+    for (const row of completedRows) {
+      for (const link of row.links) {
+        if (link.download) lines.push(link.download);
       }
     }
     if (lines.length === 0) {
@@ -699,6 +704,7 @@
   async function retryAllPending() {
     if (isRetryingPending) return;
     if (pendingEntries.length === 0) return;
+    lastBatchStartAt = new Date().toISOString();
     isRetryingPending = true;
     retryAbort = new AbortController();
     pendingMessage = { kind: "info", text: `重試中 0/${pendingEntries.length}…` };
@@ -731,6 +737,7 @@
                   status: "completed",
                   links: ev.result.links,
                   error_code: null,
+                  completed_at: new Date().toISOString(),
                 };
                 break;
               }

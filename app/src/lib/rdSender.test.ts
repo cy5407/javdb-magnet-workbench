@@ -3,12 +3,13 @@ import {
   rdErrorMessage,
   retryPending,
   sendBatch,
+  sortCompletedRowsByCompletionTime,
   type RdSendBatchEvent,
   type RdSendItem,
   type RdSendOptions,
   type RdRetryEvent,
 } from "./rdSender";
-import type { PendingEntry, RdCheckOutcome, RdSendOutcome } from "./types";
+import type { PendingEntry, RdCheckOutcome, RdSendOutcome, RdSendProgress } from "./types";
 
 const tauriMocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -148,6 +149,63 @@ describe("sendBatch", () => {
     expect(out).toEqual([]);
     expect(events).toEqual([]);
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe("sortCompletedRowsByCompletionTime", () => {
+  const row = (code: string, completed_at?: string): RdSendProgress => ({
+    handle_id: `h-${code}`,
+    code,
+    status: "completed",
+    links: [],
+    error_code: null,
+    completed_at,
+  });
+
+  it("preserves original order for rows with identical completed_at", () => {
+    const rows = [
+      row("A", "2026-05-17T01:00:00.000Z"),
+      row("B", "2026-05-17T01:00:00.000Z"),
+      row("C", "2026-05-17T02:00:00.000Z"),
+    ];
+
+    expect(sortCompletedRowsByCompletionTime(rows, "").map((r) => r.code)).toEqual([
+      "A",
+      "B",
+      "C",
+    ]);
+  });
+
+  it("with empty-string fallback, missing rows sort before timestamped rows while preserving their order", () => {
+    const rows = [
+      row("timestamped-early", "2026-05-17T01:00:00.000Z"),
+      row("missing-first"),
+      row("timestamped-late", "2026-05-17T02:00:00.000Z"),
+      row("missing-second"),
+    ];
+
+    expect(sortCompletedRowsByCompletionTime(rows, "").map((r) => r.code)).toEqual([
+      "missing-first",
+      "missing-second",
+      "timestamped-early",
+      "timestamped-late",
+    ]);
+  });
+
+  it("sortCompletedRowsByCompletionTime places missing-completed_at rows at fallback position", () => {
+    const rows = [
+      row("row1", "2026-01-01T00:00:00.000Z"),
+      row("row2"),
+      row("row3", "2026-06-01T00:00:00.000Z"),
+      row("row4"),
+    ];
+
+    expect(
+      sortCompletedRowsByCompletionTime(
+        rows,
+        "2026-03-15T00:00:00.000Z",
+      ).map((r) => r.code),
+    ).toEqual(["row1", "row2", "row4", "row3"]);
   });
 });
 
