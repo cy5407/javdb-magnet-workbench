@@ -112,6 +112,12 @@
   let cookiesShown = $state(false);
   let cookiesError = $state("");
   let cookiesMessage = $state<{ kind: "ok" | "info" | "error"; text: string } | null>(null);
+  // M9: Direct paste flow — alternative to "create template + edit file +
+  // restart". Pasting a cookie header here writes the keyring + live-
+  // updates the running sidecar, so no restart is needed.
+  let cookiesPasteOpen = $state(false);
+  let cookiesPasteInput = $state("");
+  let cookiesSaving = $state(false);
 
   // M7c: Settings editor
   let settingsShown = $state(false);
@@ -854,10 +860,63 @@
   async function refreshCookiesStatus() {
     cookiesError = "";
     try {
-      cookiesStatus = await invoke<CookiesStatus>("get_cookies_status");
+      // M9: "重新整理 / 套用變更" runs the file→keyring migration on demand
+      // (was previously a startup-only path) AND pushes the migrated value
+      // to the running sidecar, so a cf_clearance refresh takes effect
+      // without an app restart. If no file exists or only the template
+      // scaffold is present, this is a cheap status read with no side
+      // effects.
+      cookiesStatus = await invoke<CookiesStatus>("migrate_cookies_now");
     } catch (e) {
-      cookiesError = `讀取 cookies 狀態失敗：${e}`;
-      cookiesStatus = null;
+      cookiesError = `更新 cookies 狀態失敗：${e}`;
+      try {
+        // Fallback: at least show a read-only snapshot if the migrate path
+        // surfaced an error (e.g. sidecar transient issue) so the UI
+        // doesn't drop to "null" and lose all state.
+        cookiesStatus = await invoke<CookiesStatus>("get_cookies_status");
+      } catch {
+        cookiesStatus = null;
+      }
+    }
+  }
+
+  function toggleCookiesPaste() {
+    cookiesPasteOpen = !cookiesPasteOpen;
+    cookiesMessage = null;
+    cookiesError = "";
+    if (!cookiesPasteOpen) cookiesPasteInput = "";
+  }
+
+  async function saveCookies() {
+    const value = cookiesPasteInput.trim();
+    if (!value) {
+      cookiesMessage = { kind: "error", text: "請貼上 cookie 字串再儲存。" };
+      return;
+    }
+    cookiesSaving = true;
+    cookiesError = "";
+    cookiesMessage = null;
+    try {
+      cookiesStatus = await invoke<CookiesStatus>("save_cookies", {
+        cookies: value,
+      });
+      cookiesPasteInput = "";
+      cookiesPasteOpen = false;
+      cookiesMessage = {
+        kind: "ok",
+        text: "cookies 已加密儲存到 Credential Manager，sidecar 已即時更新（不必重啟 app）。",
+      };
+    } catch (e) {
+      const code = e instanceof Error ? e.message : String(e);
+      const friendly =
+        code === "cookies_empty"
+          ? "cookies 為空"
+          : code === "cookies_too_large"
+            ? "cookies 字串超過 64 KiB 上限"
+            : code;
+      cookiesMessage = { kind: "error", text: `儲存失敗：${friendly}` };
+    } finally {
+      cookiesSaving = false;
     }
   }
 
@@ -882,12 +941,18 @@
   async function createCookiesTemplate() {
     cookiesError = "";
     cookiesMessage = null;
+    // Capture pre-create state so the success message can mention restart
+    // only when keyring already holds cookies (= user is refreshing
+    // cf_clearance, not setting up for the first time).
+    const wasInKeyring = cookiesStatus?.storage === "keyring";
     try {
       await invoke("create_cookies_template");
       await refreshCookiesStatus();
       cookiesMessage = {
         kind: "ok",
-        text: "已建立 cookies.txt 範本，請按「打開資料目錄」編輯並填入 cookie。",
+        text: wasInKeyring
+          ? "已建立新 cookies.txt 範本：編輯填入新 cookie 後，重啟 app 即會自動加密寫回 Credential Manager 並刪除明文檔。"
+          : "已建立 cookies.txt 範本，請按「打開資料目錄」編輯並填入 cookie。填好後重啟 app 即會自動加密儲存。",
       };
     } catch (e) {
       cookiesMessage = { kind: "error", text: `建立範本失敗：${e}` };
@@ -1413,27 +1478,47 @@
     </h2>
     {#if cookiesShown}
       <p class="hint">
-        JavDB 抓取需要登入後的 cookies.txt。此區只顯示路徑 / 大小 / 修改時間，
+        JavDB 抓取需要登入後的 cookies。此區只顯示儲存位置 / 大小 / 修改時間，
         <strong>絕不讀取 cookies 內容</strong>。
       </p>
       {#if cookiesStatus}
-        <div class="inline-msg" data-kind={cookiesStatus.present ? "info" : "error"}>
-          {#if cookiesStatus.present}
+        {#if cookiesStatus.storage === "keyring"}
+          <div class="inline-msg" data-kind="info">
             <p>
-              <strong>✓ 已找到 cookies.txt</strong>
+              <strong>✓ cookies 已加密儲存</strong>
+              ／ Windows Credential Manager
+            </p>
+            <p class="muted small">
+              位置：<code>JavDBMagnet/JAVDB_COOKIES</code>（按 Win+R →
+              <code>control /name Microsoft.CredentialManager</code> →
+              「Windows 認證」可檢視）
+            </p>
+            <p class="muted small">
+              cf_clearance 過期時：點下方「建立 cookies.txt 範本」→ 編輯範本貼入新 cookie →
+              <strong>重啟 app</strong> 即會自動把新值加密寫回 Credential Manager 並刪除明文檔。
+            </p>
+          </div>
+        {:else if cookiesStatus.storage === "file"}
+          <div class="inline-msg" data-kind="info">
+            <p>
+              <strong>○ cookies.txt 已建立</strong>
               ／ 大小 {formatBytes(cookiesStatus.size_bytes)}
               {#if cookiesStatus.modified_iso}
                 ／ 修改時間 {cookiesStatus.modified_iso.replace("T", " ").slice(0, 19)}
               {/if}
             </p>
-          {:else}
-            <p><strong>✗ 尚未設定 cookies.txt</strong>，JavDB 擷取會被 Cloudflare 擋下。</p>
-          {/if}
-          <p class="muted small">路徑：<code>{cookiesStatus.path}</code></p>
-          <p class="muted small">
-            ⚠ cookies 以純文字儲存，請勿分享 <code>%APPDATA%\JavDBMagnet</code> 或將該目錄同步到雲端。
-          </p>
-        </div>
+            <p class="muted small">路徑：<code>{cookiesStatus.path}</code></p>
+            <p class="muted small">
+              ⚠ 目前是純文字儲存。<strong>重啟 app</strong> 後若檔案內含真實 cookie 行，
+              會自動加密搬到 Credential Manager 並刪除此檔；只有空模板的話則維持不動。
+            </p>
+          </div>
+        {:else}
+          <div class="inline-msg" data-kind="error">
+            <p><strong>✗ 尚未設定 cookies</strong>，JavDB 擷取會被 Cloudflare 擋下。</p>
+            <p class="muted small">預期路徑：<code>{cookiesStatus.path}</code></p>
+          </div>
+        {/if}
       {/if}
       {#if cookiesError}
         <p class="inline-msg" data-kind="error">{cookiesError}</p>
@@ -1442,13 +1527,50 @@
         <p class="inline-msg" data-kind={cookiesMessage.kind}>{cookiesMessage.text}</p>
       {/if}
       <div class="row">
-        <button onclick={refreshCookiesStatus}>重新整理</button>
+        <button onclick={refreshCookiesStatus}>重新整理 / 套用變更</button>
         <button onclick={openDataDir}>打開資料目錄</button>
         <button onclick={openLogsDir}>打開 logs 目錄</button>
-        {#if cookiesStatus && !cookiesStatus.present}
+        <button onclick={toggleCookiesPaste} disabled={cookiesSaving}>
+          {cookiesPasteOpen ? "取消輸入" : "貼上新 cookies"}
+        </button>
+        {#if cookiesStatus && cookiesStatus.storage !== "file"}
           <button onclick={createCookiesTemplate}>建立 cookies.txt 範本</button>
         {/if}
       </div>
+      {#if cookiesPasteOpen}
+        <div class="paste-cookies" style="margin-top: 0.75rem;">
+          <p class="hint">
+            把瀏覽器 DevTools → Network → Request Headers → 「<code>Cookie:</code>」
+            那行整段內容（<strong>不包含「Cookie: 」前綴</strong>）貼到下方框內，
+            按「儲存到認證管理員」即會：
+          </p>
+          <ul class="hint" style="margin: 0.25rem 0 0.5rem 1.25rem;">
+            <li>立即加密寫入 Windows Credential Manager
+              (<code>JavDBMagnet/JAVDB_COOKIES</code>)</li>
+            <li>把新 cookies 推送到正在跑的 sidecar，<strong>不必重啟 app</strong></li>
+            <li>順手清掉資料目錄裡任何過舊的 <code>cookies.txt</code></li>
+          </ul>
+          <textarea
+            bind:value={cookiesPasteInput}
+            rows="3"
+            spellcheck="false"
+            placeholder="_jdb_session=...; cf_clearance=...; locale=zh"
+            style="width: 100%; font-family: monospace; font-size: 0.85rem;"
+            disabled={cookiesSaving}
+          ></textarea>
+          <div class="row" style="margin-top: 0.5rem;">
+            <button
+              onclick={saveCookies}
+              disabled={cookiesSaving || !cookiesPasteInput.trim()}
+            >
+              {cookiesSaving ? "儲存中…" : "儲存到認證管理員"}
+            </button>
+            <button onclick={toggleCookiesPaste} disabled={cookiesSaving}>
+              取消
+            </button>
+          </div>
+        </div>
+      {/if}
     {/if}
   </section>
 

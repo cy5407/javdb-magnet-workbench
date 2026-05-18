@@ -961,6 +961,100 @@ class RdSetToken(unittest.TestCase):
         self.assertEqual(resp["error"]["code"], "bad_request")
 
 
+class SetCookies(unittest.TestCase):
+    """Cookies live-update path. M9 added this so a cf_clearance refresh
+    doesn't need a sidecar restart — the Rust ``migrate_cookies_now`` /
+    ``save_cookies`` commands push the new value through this command
+    so ``state.cookies`` is current before the next ``fetch_javdb``.
+    """
+
+    def _post_handshake_state(self):
+        state = sd.DaemonState()
+        state.handshake_done = True
+        return state
+
+    def test_set_cookies_updates_state(self):
+        state = self._post_handshake_state()
+        resp = _call(state, {
+            "cmd": "set_cookies", "request_id": "r",
+            "cookies": "_jdb_session=abc; cf_clearance=xyz; locale=zh",
+        })
+        self.assertTrue(resp["ok"])
+        self.assertTrue(resp["set"])
+        self.assertEqual(state.cookies["_jdb_session"], "abc")
+        self.assertEqual(state.cookies["cf_clearance"], "xyz")
+        self.assertEqual(state.cookies["locale"], "zh")
+
+    def test_set_cookies_replaces_prior_state(self):
+        # A subsequent set fully replaces — not merges — so an updated
+        # cf_clearance overwrites the previous one cleanly.
+        state = self._post_handshake_state()
+        state.cookies = {"_jdb_session": "old", "cf_clearance": "stale"}
+        resp = _call(state, {
+            "cmd": "set_cookies", "request_id": "r",
+            "cookies": "_jdb_session=new; cf_clearance=fresh",
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(state.cookies, {
+            "_jdb_session": "new",
+            "cf_clearance": "fresh",
+        })
+
+    def test_null_cookies_clears_state(self):
+        state = self._post_handshake_state()
+        state.cookies = {"_jdb_session": "old"}
+        resp = _call(state, {
+            "cmd": "set_cookies", "request_id": "r", "cookies": None,
+        })
+        self.assertTrue(resp["ok"])
+        self.assertFalse(resp["set"])
+        self.assertEqual(state.cookies, {})
+
+    def test_empty_string_clears_state(self):
+        state = self._post_handshake_state()
+        state.cookies = {"_jdb_session": "old"}
+        resp = _call(state, {
+            "cmd": "set_cookies", "request_id": "r", "cookies": "   ",
+        })
+        self.assertTrue(resp["ok"])
+        self.assertFalse(resp["set"])
+        self.assertEqual(state.cookies, {})
+
+    def test_non_string_rejected(self):
+        state = self._post_handshake_state()
+        resp = _call(state, {
+            "cmd": "set_cookies", "request_id": "r", "cookies": 123,
+        })
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+        # state must be untouched
+        self.assertEqual(state.cookies, {})
+
+    def test_requires_handshake(self):
+        # F-17 mirror: without handshake the daemon refuses cookie updates
+        # so an out-of-protocol caller can't seed cookies before identity
+        # is established.
+        state = sd.DaemonState()  # handshake_done = False
+        resp = _call(state, {
+            "cmd": "set_cookies", "request_id": "r",
+            "cookies": "_jdb_session=abc",
+        })
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+        self.assertEqual(state.cookies, {})
+
+    def test_crlf_pairs_dropped(self):
+        # F-05 lives in parse_cookie_string; this confirms the live-update
+        # path also benefits from it (header-injection defence in depth).
+        state = self._post_handshake_state()
+        resp = _call(state, {
+            "cmd": "set_cookies", "request_id": "r",
+            "cookies": "good=ok; bad=injection\nattack; other=fine",
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(state.cookies, {"good": "ok", "other": "fine"})
+
+
 class RdSendMagnet(unittest.TestCase):
     def _state_with_magnet(self):
         state = _rd_state()

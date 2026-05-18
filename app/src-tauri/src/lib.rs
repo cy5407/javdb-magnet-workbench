@@ -93,7 +93,10 @@ fn load_cookies(path_manager: &PathManager) -> String {
 /// the security invariant. If the OS refuses the delete (FS busy, AV lock,
 /// read-only mount), the keyring already has the value and the next
 /// handshake will re-migrate idempotently.
-fn migrate_cookies_from_file(cookies_path: &std::path::Path) -> Option<String> {
+///
+/// Visible to the `commands` module (and tests) so the "重新整理 / 套用變更"
+/// Tauri command can re-run this without the user having to restart the app.
+pub(crate) fn migrate_cookies_from_file(cookies_path: &std::path::Path) -> Option<String> {
     let meta = std::fs::metadata(cookies_path).ok()?;
     if meta.len() > COOKIES_MAX_BYTES {
         eprintln!(
@@ -385,6 +388,8 @@ pub fn run() {
             commands::preview_legacy_import,
             commands::apply_legacy_import,
             commands::get_cookies_status,
+            commands::migrate_cookies_now,
+            commands::save_cookies,
             commands::create_cookies_template,
             commands::open_data_dir,
             commands::open_logs_dir,

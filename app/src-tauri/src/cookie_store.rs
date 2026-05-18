@@ -40,14 +40,22 @@ fn entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(SERVICE, ACCOUNT).map_err(|e| format!("keyring entry: {e}"))
 }
 
+/// Pure-function size check. Extracted so tests can exercise the rule
+/// without touching the real OS credential store (which would otherwise
+/// clobber a developer machine's actual JavDB cookies on every test run).
+pub fn check_cookies_format(value: &str) -> Result<(), String> {
+    if value.len() > COOKIES_MAX_BYTES {
+        return Err(COOKIES_TOO_LARGE_ERR.to_string());
+    }
+    Ok(())
+}
+
 /// Persist a cookie blob. Empty string is treated as "delete" (mirrors
 /// [`crate::secret_store::set_rd_token`]). Inputs over [`COOKIES_MAX_BYTES`]
 /// are rejected BEFORE the keyring is touched so an oversized paste can
 /// never overwrite a previously-good credential.
 pub fn set_cookies(value: &str) -> Result<(), String> {
-    if value.len() > COOKIES_MAX_BYTES {
-        return Err(COOKIES_TOO_LARGE_ERR.to_string());
-    }
+    check_cookies_format(value)?;
     let e = entry()?;
     if value.is_empty() {
         return delete_internal(&e);
@@ -66,6 +74,11 @@ pub fn get_cookies() -> Result<Option<String>, String> {
     }
 }
 
+/// Remove the keyring entry entirely. Production code never invokes this
+/// directly (a "clear cookies" UI gesture would call `set_cookies("")`
+/// which already delegates here), but it's pub so integration tests can
+/// reset the keyring around their work — see `KeyringSandbox` in
+/// `commands.rs::tests_cookies_e2e`.
 #[allow(dead_code)]
 pub fn delete_cookies() -> Result<(), String> {
     let e = entry()?;
@@ -138,35 +151,25 @@ mod tests {
     }
 
     #[test]
-    fn set_cookies_rejects_oversized_before_touching_keyring() {
-        // The size cap runs BEFORE `entry()` so even on a CI host with no
-        // usable secret-service backend, an oversized blob produces the
-        // documented error code rather than a backend failure. This is the
-        // contract that protects every caller — if a future path forgets
-        // to pre-validate length, set_cookies still refuses.
+    fn check_cookies_format_rejects_oversized() {
+        // Pure rule check — does NOT touch the keyring (so a dev box's real
+        // JavDB cookies cannot be accidentally overwritten by the test
+        // suite). The contract: anything past COOKIES_MAX_BYTES must
+        // produce COOKIES_TOO_LARGE_ERR before set_cookies even tries to
+        // construct a keyring entry.
         let huge = "a".repeat(COOKIES_MAX_BYTES + 1);
-        let err = set_cookies(&huge).expect_err("must reject oversized cookies");
+        let err = check_cookies_format(&huge)
+            .expect_err("must reject oversized cookies");
         assert_eq!(err, COOKIES_TOO_LARGE_ERR);
     }
 
     #[test]
-    fn set_cookies_accepts_at_cap() {
-        // Boundary: input exactly at the cap is still allowed (the check
-        // is a strict greater-than). We can't actually verify the keyring
-        // write succeeds on every CI host, so accept either Ok or a
-        // backend-flavoured Err — but the format error must NOT fire.
-        let at_cap = "a".repeat(COOKIES_MAX_BYTES);
-        match set_cookies(&at_cap) {
-            Ok(_) | Err(_) => {
-                // The point is that COOKIES_TOO_LARGE_ERR is NOT the
-                // error path. Re-check by asserting the err string.
-                if let Err(e) = set_cookies(&at_cap) {
-                    assert_ne!(
-                        e, COOKIES_TOO_LARGE_ERR,
-                        "boundary input must not trip the size-cap branch"
-                    );
-                }
-            }
-        }
+    fn check_cookies_format_accepts_at_cap_and_smaller() {
+        // Boundary: the check is strict `>`, so a value exactly at the cap
+        // is allowed. Also covers a realistic-size sample to lock down the
+        // "small inputs pass" branch.
+        assert!(check_cookies_format(&"a".repeat(COOKIES_MAX_BYTES)).is_ok());
+        assert!(check_cookies_format("_jdb_session=abc; cf_clearance=xyz").is_ok());
+        assert!(check_cookies_format("").is_ok()); // empty is "clear", not "invalid format"
     }
 }

@@ -985,6 +985,110 @@ pub fn get_cookies_status(path_manager: State<PathManager>) -> CookiesStatus {
     cookies_status_for(&path_manager.data_dir)
 }
 
+/// "重新整理 / 套用變更" — run the same file→keyring→delete migration
+/// that happens at startup, but on demand and with a live push to the
+/// running sidecar (no app restart needed for the new cookies to take
+/// effect on the next JavDB fetch).
+///
+/// Returns the post-migration [`CookiesStatus`] so the UI can re-render
+/// directly without a second IPC round-trip.
+///
+/// Behaviour matrix:
+///   - file with real cookie content → keyring write + file delete + sidecar push
+///   - file with only the template scaffold → unchanged; status stays `"file"`
+///   - file > 64 KiB → rejected (still left on disk for the user to inspect)
+///   - no file → falls through to the credential-store snapshot
+///
+/// Errors from keyring write surface to the caller, but a successful
+/// keyring write followed by a failed sidecar push is also reported as
+/// an error so the user knows the running session is stale; the file is
+/// already deleted by that point so a follow-up "重新整理" will report
+/// `storage: "keyring"` and the user can decide whether to restart.
+#[tauri::command]
+pub async fn migrate_cookies_now(
+    sidecar: State<'_, SidecarManager>,
+    path_manager: State<'_, PathManager>,
+) -> Result<CookiesStatus, String> {
+    let cookies_path = path_manager.data_dir.join(COOKIES_FILE_NAME);
+    if let Some(migrated) = crate::migrate_cookies_from_file(&cookies_path) {
+        push_cookies_to_sidecar(&sidecar, &migrated).await?;
+    }
+    Ok(cookies_status_for(&path_manager.data_dir))
+}
+
+/// Pure validation for [`save_cookies`]. Returns the trimmed value on
+/// success or a stable error code:
+///   - `"cookies_empty"` — whitespace-only / empty input (the UI's paste
+///     box can't infer intent from blank text; refuse here so the caller
+///     gets a deterministic error instead of a silent no-op).
+///   - [`cookie_store::COOKIES_TOO_LARGE_ERR`] — over the 64 KiB cap.
+///
+/// Extracted so tests can exercise the rule without touching the OS
+/// credential store or the sidecar (which would otherwise need a full
+/// Tauri State harness to instantiate).
+pub(crate) fn validate_cookies_input(cookies: &str) -> Result<String, String> {
+    let trimmed = cookies.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("cookies_empty".to_string());
+    }
+    crate::cookie_store::check_cookies_format(&trimmed)?;
+    Ok(trimmed)
+}
+
+/// Pure helper for [`save_cookies`]: runs validation, persists to the
+/// keyring, and removes any stale `cookies.txt` next to the credential
+/// store. Returns the trimmed value that was actually stored.
+///
+/// Extracted so integration tests can verify the keyring + file
+/// invariants without standing up a [`SidecarManager`] (which would
+/// need a live Tauri app harness). The sidecar push is the caller's
+/// responsibility — see [`save_cookies`].
+pub(crate) fn save_cookies_local(
+    data_dir: &Path,
+    cookies: &str,
+) -> Result<String, String> {
+    let trimmed = validate_cookies_input(cookies)?;
+    crate::cookie_store::set_cookies(&trimmed)?;
+    // Best-effort: nuke any stale plaintext so the next startup doesn't
+    // re-migrate an older file over our fresh keyring value.
+    let stale = data_dir.join(COOKIES_FILE_NAME);
+    let _ = std::fs::remove_file(&stale);
+    Ok(trimmed)
+}
+
+/// Direct paste path: take a cookie header string from the UI, validate
+/// length, write to the credential store, scrub any stale `cookies.txt`,
+/// and push to the running sidecar so the new value is live immediately.
+///
+/// Empty / whitespace input is rejected (no silent clears via this
+/// command; use a dedicated clear gesture if one is ever needed).
+#[tauri::command]
+pub async fn save_cookies(
+    sidecar: State<'_, SidecarManager>,
+    path_manager: State<'_, PathManager>,
+    cookies: String,
+) -> Result<CookiesStatus, String> {
+    let trimmed = save_cookies_local(&path_manager.data_dir, &cookies)?;
+    push_cookies_to_sidecar(&sidecar, &trimmed).await?;
+    Ok(cookies_status_for(&path_manager.data_dir))
+}
+
+/// Shared helper: push a cookie header to the running sidecar via the
+/// `set_cookies` protocol command. Surfaces the sidecar's error code on
+/// failure so the UI can show a stable string.
+async fn push_cookies_to_sidecar(
+    sidecar: &SidecarManager,
+    value: &str,
+) -> Result<(), String> {
+    let resp = sidecar
+        .request("set_cookies", json!({ "cookies": value }))
+        .await?;
+    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(_err_code(&resp));
+    }
+    Ok(())
+}
+
 /// Body of the generated cookies.txt scaffold. Inline instructions
 /// only — no real cookies, ever. Stored as a Rust constant so the
 /// audit (and the no-secret-in-source scan) sees it.
@@ -1237,6 +1341,41 @@ mod tests_m7b {
     }
 
     #[test]
+    fn validate_cookies_input_rejects_empty() {
+        // The paste box can't infer intent from blank text — refuse with a
+        // stable code instead of silently doing nothing.
+        let err = super::validate_cookies_input("").expect_err("must reject empty");
+        assert_eq!(err, "cookies_empty");
+        let err = super::validate_cookies_input("   \n\t  ")
+            .expect_err("must reject whitespace-only");
+        assert_eq!(err, "cookies_empty");
+    }
+
+    #[test]
+    fn validate_cookies_input_rejects_oversized() {
+        // Mirrors check_cookies_format's contract — the >64KiB cap fires
+        // before any keyring or sidecar touch can happen.
+        use crate::cookie_store::{COOKIES_MAX_BYTES, COOKIES_TOO_LARGE_ERR};
+        let huge = "a".repeat(COOKIES_MAX_BYTES + 1);
+        let err = super::validate_cookies_input(&huge)
+            .expect_err("must reject oversized cookies");
+        assert_eq!(err, COOKIES_TOO_LARGE_ERR);
+    }
+
+    #[test]
+    fn validate_cookies_input_trims_whitespace_around_real_value() {
+        // Users frequently copy a Cookie: header with trailing newline or
+        // padding spaces from DevTools. The validator must strip those
+        // before pushing to keyring + sidecar so two visually-identical
+        // pastes don't end up as different entries.
+        let v = super::validate_cookies_input(
+            "\n  _jdb_session=abc; cf_clearance=xyz  \n",
+        )
+        .expect("realistic paste must pass");
+        assert_eq!(v, "_jdb_session=abc; cf_clearance=xyz");
+    }
+
+    #[test]
     fn create_cookies_template_refuses_overwrite() {
         let d = temp_dir();
         let existing_body = "ORIGINAL_USER_COOKIES_KEEP_INTACT";
@@ -1250,5 +1389,284 @@ mod tests_m7b {
         // Original content untouched.
         let after = fs::read_to_string(d.join(COOKIES_FILE_NAME)).unwrap();
         assert_eq!(after, existing_body);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end keyring tests (Goal 1/2/3 acceptance)
+//
+// These tests touch the **real** OS credential store. To avoid clobbering a
+// developer machine's actual `JavDBMagnet/JAVDB_COOKIES` entry we:
+//   1. Serialise all keyring-touching tests behind a single Mutex
+//      (cargo runs tests on multiple threads by default).
+//   2. Snapshot the user's pre-test value, clear it, run the test, then
+//      restore the snapshot in `Drop` so even a panicking test leaves the
+//      keyring in the user's original state.
+//
+// A keyring backend that's missing (e.g. CI without a session) will surface
+// as `set_cookies`/`get_cookies` errors — the sandbox propagates those so
+// the test is recorded as failing rather than silently passing.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests_cookies_e2e {
+    use super::*;
+    use std::env;
+    use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// One global mutex so concurrent keyring tests don't race over the
+    /// shared `JavDBMagnet/JAVDB_COOKIES` entry.
+    fn keyring_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// RAII guard that snapshots the user's pre-test cookies and restores
+    /// them on drop. Holds the global keyring lock for the test's lifetime.
+    struct KeyringSandbox {
+        _guard: MutexGuard<'static, ()>,
+        saved: Option<String>,
+    }
+
+    impl KeyringSandbox {
+        fn new() -> Self {
+            let guard = keyring_lock();
+            let saved = crate::cookie_store::get_cookies()
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty());
+            // Start from a known-empty state. Backend failure is benign here
+            // because tests using the sandbox call `set_cookies` themselves
+            // and will fail loudly if the backend's broken.
+            let _ = crate::cookie_store::delete_cookies();
+            Self { _guard: guard, saved }
+        }
+    }
+
+    impl Drop for KeyringSandbox {
+        fn drop(&mut self) {
+            let _ = crate::cookie_store::delete_cookies();
+            if let Some(saved) = &self.saved {
+                let _ = crate::cookie_store::set_cookies(saved);
+            }
+        }
+    }
+
+    fn temp_dir() -> std::path::PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = env::temp_dir().join(format!(
+            "javdbmagnet-cookies-e2e-{}-{}",
+            std::process::id(),
+            id
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    // -----------------------------------------------------------------
+    // Goal 1: refresh / startup migration — file→keyring→delete
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn goal_1_migration_writes_keyring_and_removes_file() {
+        let _sb = KeyringSandbox::new();
+
+        let d = temp_dir();
+        let path = d.join(COOKIES_FILE_NAME);
+        let test_cookies =
+            "_jdb_session=e2e_jdb_session; cf_clearance=e2e_cf_clearance; locale=zh";
+        fs::write(&path, test_cookies).unwrap();
+
+        let migrated = crate::migrate_cookies_from_file(&path)
+            .expect("real-content file must yield a migration");
+        assert_eq!(migrated, test_cookies, "migration must surface trimmed value");
+
+        // File invariant: deleted (the entire point of the migration).
+        assert!(
+            !path.exists(),
+            "cookies.txt must be removed after a successful migration",
+        );
+
+        // Keyring invariant: the value is now persisted in the credential
+        // store. This is the half that was previously untested — without
+        // this assertion we couldn't claim Goal 1 ("Cookie 會被存入 windows
+        // 認證器") was actually satisfied at runtime.
+        let stored = crate::cookie_store::get_cookies()
+            .expect("keyring read must succeed")
+            .expect("keyring must hold the migrated value");
+        assert_eq!(stored, test_cookies);
+    }
+
+    #[test]
+    fn goal_1_template_only_file_leaves_keyring_untouched() {
+        // Symmetric guarantee: a freshly-created template (no real cookies
+        // yet) MUST NOT migrate. Otherwise users would lose their good
+        // keyring entry the moment they clicked "create template" then
+        // restarted.
+        let _sb = KeyringSandbox::new();
+        let preexisting =
+            "_jdb_session=preexisting_session; cf_clearance=preexisting_cf";
+        crate::cookie_store::set_cookies(preexisting)
+            .expect("seed keyring with a pre-existing value");
+
+        let d = temp_dir();
+        let template_only = "# JavDBMagnet cookies.txt\n\
+                             # ====\n\
+                             # _jdb_session=XXX; cf_clearance=XXX; locale=zh\n\
+                             # === 在下面貼上你的 cookie 整行 ===\n\n";
+        fs::write(d.join(COOKIES_FILE_NAME), template_only).unwrap();
+
+        let result = crate::migrate_cookies_from_file(&d.join(COOKIES_FILE_NAME));
+        assert!(result.is_none(), "template-only file must not migrate");
+
+        // Keyring value untouched.
+        let kept = crate::cookie_store::get_cookies()
+            .expect("keyring read")
+            .expect("keyring value must remain");
+        assert_eq!(kept, preexisting);
+        // File still on disk so user can edit it.
+        assert!(d.join(COOKIES_FILE_NAME).exists());
+    }
+
+    // -----------------------------------------------------------------
+    // Goal 2: three storage labels reflect real state
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn goal_2_status_reports_none_when_neither_file_nor_keyring() {
+        let _sb = KeyringSandbox::new(); // keyring is empty after sandbox setup
+        let d = temp_dir(); // no file
+        let s = cookies_status_for(&d);
+        assert_eq!(s.storage, "none", "no file + no keyring → storage=none");
+        assert!(!s.present);
+        assert!(s.modified_iso.is_none());
+        assert_eq!(s.size_bytes, 0);
+    }
+
+    #[test]
+    fn goal_2_status_reports_keyring_when_only_keyring_has_value() {
+        let _sb = KeyringSandbox::new();
+        crate::cookie_store::set_cookies(
+            "_jdb_session=label_test; cf_clearance=label_test_cf",
+        )
+        .expect("seed keyring");
+        let d = temp_dir(); // no file
+        let s = cookies_status_for(&d);
+        assert_eq!(
+            s.storage, "keyring",
+            "keyring-only state must surface storage=keyring so the UI shows the right label",
+        );
+        assert!(s.present);
+        assert!(s.modified_iso.is_none(), "keyring has no mtime");
+        assert_eq!(s.size_bytes, 0, "keyring has no on-disk size");
+    }
+
+    #[test]
+    fn goal_2_status_reports_file_when_file_present_regardless_of_keyring() {
+        // File "wins" because it's the user's most recent intent (they
+        // just pasted new cookies). The next migration runs the
+        // file→keyring promotion.
+        let _sb = KeyringSandbox::new();
+        crate::cookie_store::set_cookies("_jdb_session=older_keyring_value")
+            .expect("seed keyring");
+
+        let d = temp_dir();
+        fs::write(
+            d.join(COOKIES_FILE_NAME),
+            "_jdb_session=brand_new; cf_clearance=brand_new",
+        )
+        .unwrap();
+
+        let s = cookies_status_for(&d);
+        assert_eq!(s.storage, "file", "file presence must win even when keyring is populated");
+        assert!(s.present);
+        assert!(s.size_bytes > 0);
+    }
+
+    // -----------------------------------------------------------------
+    // Goal 3: paste UI path — save_cookies_local
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn goal_3_paste_path_writes_keyring_and_removes_stale_file() {
+        let _sb = KeyringSandbox::new();
+
+        let d = temp_dir();
+        // Pretend an older cookies.txt is still sitting in the data dir
+        // (e.g. user edited it but is now using the paste UI instead).
+        fs::write(d.join(COOKIES_FILE_NAME), "stale legacy contents").unwrap();
+
+        let saved = save_cookies_local(
+            &d,
+            "  _jdb_session=paste_session; cf_clearance=paste_cf  \n",
+        )
+        .expect("paste with realistic value must succeed");
+
+        assert_eq!(
+            saved,
+            "_jdb_session=paste_session; cf_clearance=paste_cf",
+            "value must be trimmed before persisting",
+        );
+
+        // Keyring invariant
+        let in_keyring = crate::cookie_store::get_cookies()
+            .expect("keyring read")
+            .expect("keyring must hold the pasted value");
+        assert_eq!(in_keyring, saved);
+
+        // File invariant: stale plaintext is gone so the next startup
+        // can't re-migrate older content over the fresh paste.
+        assert!(
+            !d.join(COOKIES_FILE_NAME).exists(),
+            "stale cookies.txt must be removed by the paste path",
+        );
+
+        // And after the paste, cookies_status_for must report keyring.
+        let s = cookies_status_for(&d);
+        assert_eq!(s.storage, "keyring");
+        assert!(s.present);
+    }
+
+    #[test]
+    fn goal_3_paste_path_rejects_empty_without_touching_keyring() {
+        // Defense in depth: the validator runs before any keyring write,
+        // so a bug that lets empty input through still can't blank a
+        // real entry. We seed a value, attempt an empty paste, and
+        // verify the value survives.
+        let _sb = KeyringSandbox::new();
+        let preexisting = "_jdb_session=keep_me_alive";
+        crate::cookie_store::set_cookies(preexisting).expect("seed");
+
+        let d = temp_dir();
+        let err = save_cookies_local(&d, "   \n\t").expect_err("empty must error");
+        assert_eq!(err, "cookies_empty");
+
+        let still_there = crate::cookie_store::get_cookies()
+            .expect("keyring read")
+            .expect("keyring must still hold pre-paste value");
+        assert_eq!(still_there, preexisting);
+    }
+
+    #[test]
+    fn goal_3_paste_path_rejects_oversized_without_touching_keyring() {
+        let _sb = KeyringSandbox::new();
+        let preexisting = "_jdb_session=keep_me_alive";
+        crate::cookie_store::set_cookies(preexisting).expect("seed");
+
+        let d = temp_dir();
+        let huge = "a".repeat(crate::cookie_store::COOKIES_MAX_BYTES + 1);
+        let err = save_cookies_local(&d, &huge).expect_err("oversized must error");
+        assert_eq!(err, crate::cookie_store::COOKIES_TOO_LARGE_ERR);
+
+        let still_there = crate::cookie_store::get_cookies()
+            .expect("keyring read")
+            .expect("keyring must still hold pre-paste value");
+        assert_eq!(still_there, preexisting);
     }
 }

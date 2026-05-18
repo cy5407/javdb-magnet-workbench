@@ -12,15 +12,22 @@
 # (echo '{"cmd":"hello",...}' | sidecar.exe), and verify bundle size
 # is in the expected range.
 pyinstaller==6.19.0
-curl_cffi>=0.15.0,<1.0
-requests>=2.33.0,<3.0
+# curl_cffi 0.15.0 fixes CVE-2026-33752 (redirect-based SSRF + TLS
+# impersonation bypass). build_sidecar.py's pin parser requires
+# exact `name==version`, so we bump in lockstep instead of using a
+# range constraint.
+curl_cffi==0.15.0
+# requests 2.34.2 picks up CVE-2026-25645 (insecure temp file reuse).
+requests==2.34.2
 beautifulsoup4==4.14.3
 
 # Transitive deps of requests / curl_cffi pinned to silence
 # `RequestsDependencyWarning` and keep the bundle byte-stable across
-# environments. chardet stays in the 5.x line — requests 2.32.5
+# environments. urllib3 2.7.0 fixes CVE-2026-44431 (cross-origin
+# Authorization-forward in streaming) and CVE-2026-44432 (decompression
+# bomb safeguard bypass). chardet stays in the 5.x line — requests 2.34.x
 # supports `chardet>=3.0.2,<6.0.0`, and 6.0.0.post1 trips the warning.
-urllib3>=2.7.0,<3.0
+urllib3==2.7.0
 charset-normalizer==3.4.4
 idna==3.11
 certifi==2026.1.4

@@ -4,5 +4,7 @@
 # stays free of test-only dependencies. Installed by
 # .github/workflows/sonarcloud.yml via `pip install -r` so that no
 # bare, unpinned packages appear on the pip command line.
-pytest>=9.0.3,<10.0
+# pytest 9.0.3 picks up CVE-2025-71176 (tmpdir handling). Exact pin to
+# mirror requirements-sidecar.txt's reproducibility convention.
+pytest==9.0.3
 coverage==7.6.10

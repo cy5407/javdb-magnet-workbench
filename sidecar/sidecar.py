@@ -471,6 +471,37 @@ def cmd_update_settings(state: DaemonState, req: dict) -> dict:
     return _ok(req)
 
 
+def cmd_set_cookies(state: DaemonState, req: dict) -> dict:
+    """Update state.cookies at runtime so a cf_clearance refresh doesn't
+    require an app restart.
+
+    Mirrors ``cmd_rd_set_token``:
+      - handshake gate (F-17): refuse until handshake is established.
+      - ``cookies`` may be ``null`` / ``""`` to clear, or a non-empty
+        ``Cookie:``-header-style string (``k=v; k=v``) to set.
+      - parsing reuses ``parse_cookie_string`` (already drops CR/LF
+        pairs per F-05).
+
+    The full cookies blob is opaque text — we don't size-validate here
+    beyond what ``parse_cookie_string`` already enforces because the
+    Rust caller (``save_cookies`` / ``migrate_cookies_now``) applies
+    the [`cookie_store::COOKIES_MAX_BYTES`] cap before crossing IPC.
+    """
+    if not state.handshake_done:
+        return _err(req, "bad_request", "handshake required before set_cookies")
+    cookies = req.get("cookies")
+    if cookies is None:
+        state.cookies = {}
+        return _ok(req, {"set": False})
+    if not isinstance(cookies, str):
+        return _err(req, "bad_request", "cookies must be a string when provided")
+    if not cookies.strip():
+        state.cookies = {}
+        return _ok(req, {"set": False})
+    state.cookies = parse_cookie_string(cookies)
+    return _ok(req, {"set": bool(state.cookies)})
+
+
 def cmd_cancel(state: DaemonState, req: dict) -> dict:
     # M3 sidecar processes commands synchronously; nothing is "in flight"
     # that an out-of-band cancel could interrupt. Acknowledge so the Rust
@@ -747,6 +778,7 @@ DISPATCH = {
     "forget_magnets": cmd_forget_magnets,
     "register_magnets": cmd_register_magnets,
     "update_settings": cmd_update_settings,
+    "set_cookies": cmd_set_cookies,
     "cancel": cmd_cancel,
     "rd_user": cmd_rd_user,
     "rd_set_token": cmd_rd_set_token,

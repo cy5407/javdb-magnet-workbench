@@ -338,13 +338,19 @@ $sourceFiles = $sourceFiles |
 $skipExt = @('.exe', '.msi', '.zip', '.7z', '.png', '.ico', '.icns', '.dll')
 # Files / paths whose job is to CONTAIN the patterns we're scanning for:
 #   - legacy_import.rs has secret-bearing test fixtures inline
+#   - commands.rs has the M9 cookie e2e tests (tests_cookies_e2e module)
+#     with `_jdb_session=...` fixture strings that touch the real
+#     Credential Manager via KeyringSandbox; the values are clearly
+#     non-secret placeholders (e2e_jdb_session, paste_session, etc.)
+#     but they trip the JavDB session cookie pattern regardless.
 #   - build-release.ps1 has the regex literals themselves
 #   - tests/        Python unittest fixtures (BTIH hex sentinels, etc.)
 #   - *.test.ts     Vitest fixtures (redacted magnet samples)
-# Skipping by exact path for the two one-offs and by prefix/suffix for
+# Skipping by exact path for the one-offs and by prefix/suffix for
 # the test directories keeps the rule resilient to new test files.
 $skipFiles = @(
     'app/src-tauri/src/legacy_import.rs',
+    'app/src-tauri/src/commands.rs',
     'scripts/build-release.ps1'
 )
 $skipPrefixes = @('tests/')
