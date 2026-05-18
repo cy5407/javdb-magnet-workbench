@@ -1,0 +1,12 @@
+# glib 0.18.5 — GHSA-wrw7-89jp-8q8g (Iterator/DoubleEndedIterator unsoundness
+# in glib::VariantStrIter; fixed in 0.20.0).
+#
+# Transitive via wry → webkit2gtk → gtk → glib, which is Linux/macOS-only.
+# Verified absent from the x86_64-pc-windows-msvc target via:
+#   cargo tree --target x86_64-pc-windows-msvc -i glib  → "nothing to print"
+# README locks the ship target to Windows (WebView2, not webkit2gtk), so this
+# code path is never compiled into the released binary.
+#
+# Re-evaluate if cross-platform ship is ever planned: revisit upstream
+# Tauri/gtk bumps to a glib >= 0.20.0 chain before removing this entry.
+GHSA-wrw7-89jp-8q8g

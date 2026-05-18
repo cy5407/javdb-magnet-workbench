@@ -16,9 +16,9 @@
 | **P2.3** commands.rs clippy unneeded return | ✅ DONE | working tree, codex job `b63cawifh` |
 | **P2.4** tauri.conf.json `"targets": []` | ✅ DONE | working tree, codex job `b4vzcm86b` |
 | **P2.5** Cargo.toml keyring 三個 OS features | ✅ DONE | working tree, codex job `b4vzcm86b` |
+| **P2.7** npm svelte / devalue bump | ✅ DONE | commit `2a0b5e0` — `npm audit fix` to devalue 5.8.1 + svelte 5.55.7 |
+| **P2.6** glib 0.18.5 transitive | ✅ SUPPRESSED | phantom finding — verified absent from x86_64-pc-windows-msvc target; `.trivyignore` documents rationale |
 | **P2.1** CSP policy | 🟡 DEFERRED | needs interactive WebView testing; not safe for blind codex dispatch |
-| **P2.7** npm svelte / devalue bump | 🟡 DEFERRED | better as one-shot `cd app && npm audit fix`; codex not value-add for npm ops |
-| **P2.6** glib 0.18.5 transitive | 🟡 AWAIT UPSTREAM | needs Tauri / gtk bump to 0.20.0 |
 
 ### Working tree summary
 
@@ -230,9 +230,17 @@ Ok(())
 
 ### P2.6 — glib 0.18.5 transitive MEDIUM（GHSA-wrw7-89jp-8q8g）
 
-**狀態**: 等 Tauri / gtk 上游 bump 到 glib 0.20.0。本 repo 無法直接修。
+**狀態（修正）**: phantom finding — 本 repo ship target 為 Windows，glib 是 Linux/macOS 路徑（wry → webkit2gtk → gtk → glib）；Windows 用 WebView2 不走這條。
 
-**追蹤**: 每月跑一次 `cargo audit` 看 Tauri 是否已 bump。若超過 3 個月仍未修可考慮 `[patch.crates-io]` workaround，但會增加維護成本。
+**驗證**:
+```
+cargo tree --target x86_64-pc-windows-msvc -i glib
+# → "nothing to print" (確認 Windows build 完全不含 glib)
+```
+
+**處置**: 已新增 `.trivyignore` 抑制 GHSA-wrw7-89jp-8q8g 並附 rationale comment。trivy 重掃 0 findings。
+
+**重新評估時機**: 若日後決定支援 Linux/macOS ship，必須移除 `.trivyignore` 那條並等 Tauri 上游 bump 到 glib 0.20.0 鏈，或考慮 `[patch.crates-io]` workaround。
 
 ---
 
