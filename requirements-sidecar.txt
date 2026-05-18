@@ -12,15 +12,15 @@
 # (echo '{"cmd":"hello",...}' | sidecar.exe), and verify bundle size
 # is in the expected range.
 pyinstaller==6.19.0
-curl_cffi==0.14.0
-requests==2.32.5
+curl_cffi>=0.15.0,<1.0
+requests>=2.33.0,<3.0
 beautifulsoup4==4.14.3
 
 # Transitive deps of requests / curl_cffi pinned to silence
 # `RequestsDependencyWarning` and keep the bundle byte-stable across
 # environments. chardet stays in the 5.x line — requests 2.32.5
 # supports `chardet>=3.0.2,<6.0.0`, and 6.0.0.post1 trips the warning.
-urllib3==2.6.3
+urllib3>=2.7.0,<3.0
 charset-normalizer==3.4.4
 idna==3.11
 certifi==2026.1.4

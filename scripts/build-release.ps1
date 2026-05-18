@@ -15,7 +15,7 @@
 #   4. Audit staging dir         (whitelist: exe + exe + README.txt; nothing else)
 #   5. Binary content scan       (tokens / magnets / Cloudflare cookies must NOT
 #                                 appear in either exe)
-#   6. Source diff secret scan   (same patterns over `git diff origin/dev..HEAD`
+#   6. Source diff secret scan   (same patterns over `git diff <origin/HEAD>..HEAD`
 #                                 + working-tree diff)
 #   7. Compress-Archive → release/JavDBMagnet_<version>_portable.zip
 #   8. SHA256 for zip + 2 exes  → release/SHA256SUMS.txt
@@ -304,12 +304,17 @@ if ($ScanFail) { FailExit "Binary content scan failed" }
 # ---------------------------------------------------------------------------
 Step "Source diff secret scan"
 $sourceFiles = @()
-try {
-    $sourceFiles += (& git -C $RepoRoot diff --name-only origin/dev..HEAD)
-    $sourceFiles += (& git -C $RepoRoot diff --name-only)
-} catch {
-    Warn "git diff source scan list failed: $($_.Exception.Message)"
+$defaultBranch = (& git -C $RepoRoot symbolic-ref --short refs/remotes/origin/HEAD 2>$null)
+if (-not $defaultBranch) {
+    $defaultBranch = "origin/master"  # fallback
 }
+$diffOutput = & git -C $RepoRoot diff --name-only "$defaultBranch..HEAD"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "FATAL: source-secret-scan git diff failed (exit $LASTEXITCODE). Refusing to ship a release without committed-diff scan."
+    exit 1
+}
+$sourceFiles += $diffOutput
+$sourceFiles += (& git -C $RepoRoot diff --name-only)
 $sourceFiles = $sourceFiles |
     Where-Object { $_ -and (Test-Path (Join-Path $RepoRoot $_) -PathType Leaf) } |
     Sort-Object -Unique

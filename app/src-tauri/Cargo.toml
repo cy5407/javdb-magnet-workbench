@@ -28,7 +28,7 @@ tokio = { version = "1", features = ["sync"] }
 # RD API token storage. Backed by Windows Credential Manager on the dev box;
 # `apple-native` / `linux-native-async-persistent` enable the equivalent
 # secure stores on the other targets so `keyring::Entry` works uniformly.
-keyring = { version = "3", features = ["windows-native"] }
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-async-persistent"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 
 [profile.release]

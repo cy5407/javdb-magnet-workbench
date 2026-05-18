@@ -4,5 +4,5 @@
 # stays free of test-only dependencies. Installed by
 # .github/workflows/sonarcloud.yml via `pip install -r` so that no
 # bare, unpinned packages appear on the pip command line.
-pytest==8.3.4
+pytest>=9.0.3,<10.0
 coverage==7.6.10

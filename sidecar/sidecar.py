@@ -509,11 +509,11 @@ _RD_NO_TOKEN_MSG = "RD token not configured"
 def _classify_rd_error(message: str) -> str:
     """Bucket a RealDebridError message into a stable error code."""
     m = (message or "").lower()
-    if "401" in m or "token 無效" in m or "token" in m and "過期" in m:
+    if "401" in m or "token 無效" in m or ("token" in m and "過期" in m):
         return _RD_ERR_AUTH
     if "403" in m or "premium" in m or "權限不足" in m:
         return _RD_ERR_PREMIUM
-    if "429" in m or "rate" in m and "limit" in m:
+    if "429" in m or ("rate" in m and "limit" in m):
         return _RD_ERR_RATE
     if "magnet_error" in m or "磁力解析失敗" in m or "磁力錯誤" in m:
         return _RD_ERR_MAGNET

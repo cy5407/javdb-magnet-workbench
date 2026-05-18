@@ -1035,7 +1035,7 @@ fn open_in_explorer(p: &std::path::Path) -> Result<(), String> {
             .arg(p.as_os_str())
             .spawn()
             .map_err(|e| format!("spawn explorer: {e}"))?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(target_os = "windows"))]
     {
