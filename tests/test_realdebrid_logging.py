@@ -123,5 +123,70 @@ class RedactsMagnetInDebugLog(unittest.TestCase):
         self.assertNotIn(link, log_text)
 
 
+class RedactsAuthHeadersInDebugLog(unittest.TestCase):
+    """Defense-in-depth coverage for ``_redact_log_kwargs``.
+
+    The Bearer token normally lives on ``session.headers["Authorization"]`` so
+    it never reaches the per-request kwargs path; but if a caller ever passes
+    ``headers={...}`` to ``_request`` (per-request override), the redactor must
+    still mask ``Authorization`` / ``Proxy-Authorization`` / ``Cookie`` so the
+    token / session cookie cannot leak into ``debug.log``.
+    """
+
+    BEARER_TOKEN = "SECRETBEARER_DO_NOT_LEAK_INTO_LOGS_0123456789"
+    SESSION_COOKIE = "SECRETSESSION_DO_NOT_LEAK_jdb_session=xyz"
+
+    def test_authorization_header_is_redacted(self):
+        # Pure unit: drive the redactor directly so we don't have to fake out
+        # the whole HTTP stack.
+        out = RealDebrid._redact_log_kwargs({
+            "headers": {"Authorization": f"Bearer {self.BEARER_TOKEN}"},
+        })
+        rendered = repr(out)
+        self.assertNotIn(self.BEARER_TOKEN, rendered)
+        self.assertEqual(out, {"headers": {"Authorization": "<redacted>"}})
+
+    def test_cookie_and_proxy_auth_headers_are_redacted(self):
+        out = RealDebrid._redact_log_kwargs({
+            "headers": {
+                "Cookie": self.SESSION_COOKIE,
+                "Proxy-Authorization": "Basic SECRETPROXYCREDS_DO_NOT_LEAK",
+                "X-Custom-Trace": "trace-id-not-secret",
+            },
+        })
+        rendered = repr(out)
+        self.assertNotIn(self.SESSION_COOKIE, rendered)
+        self.assertNotIn("SECRETPROXYCREDS", rendered)
+        self.assertEqual(out["headers"]["Cookie"], "<redacted>")
+        self.assertEqual(out["headers"]["Proxy-Authorization"], "<redacted>")
+        # Non-auth headers stay visible (truncated at 80 chars if long).
+        self.assertEqual(out["headers"]["X-Custom-Trace"], "trace-id-not-secret")
+
+    def test_header_match_is_case_insensitive(self):
+        # requests normalises header keys but a user-supplied dict can be
+        # lower / mixed case. Redaction must not depend on capitalisation.
+        out = RealDebrid._redact_log_kwargs({
+            "headers": {"authorization": f"Bearer {self.BEARER_TOKEN}"},
+        })
+        self.assertNotIn(self.BEARER_TOKEN, repr(out))
+        self.assertEqual(out["headers"]["authorization"], "<redacted>")
+
+    def test_data_and_headers_both_handled(self):
+        # When both kwargs are present neither path is shadowed by the other.
+        out = RealDebrid._redact_log_kwargs({
+            "data": {"magnet": "magnet:?xt=urn:btih:DEAD", "files": "all"},
+            "headers": {"Authorization": "Bearer LEAKABLE"},
+        })
+        self.assertEqual(out["data"]["magnet"], "<redacted>")
+        self.assertEqual(out["data"]["files"], "all")
+        self.assertEqual(out["headers"]["Authorization"], "<redacted>")
+        self.assertNotIn("LEAKABLE", repr(out))
+
+    def test_empty_kwargs_still_returns_empty_dict(self):
+        # Backwards-compat: callers used to rely on `_redact_log_kwargs({}) == {}`.
+        self.assertEqual(RealDebrid._redact_log_kwargs({}), {})
+        self.assertEqual(RealDebrid._redact_log_kwargs({"timeout": 30}), {})
+
+
 if __name__ == "__main__":
     unittest.main()

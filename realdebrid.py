@@ -17,32 +17,6 @@ API_BASE = "https://api.real-debrid.com/rest/1.0"
 VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".wmv", ".mov", ".m4v", ".ts", ".webm"}
 
 
-def load_env(path: Path) -> dict[str, str]:
-    """簡易 .env 檔案解析器。
-
-    .. deprecated::
-        Legacy only — kept solely for ``legacy/javdb_magnet_gui.py`` and
-        its tests. New code paths MUST NOT call this: the live sidecar
-        receives credentials via :mod:`sidecar.sidecar` handshake / OS
-        keyring, and settings are owned by the Rust ``settings`` module.
-        Re-introducing this on the production path would re-open the
-        F-06 finding (any ``key=value`` line in an attacker-controlled
-        file becomes config).
-    """
-    env: dict[str, str] = {}
-    if not path.exists():
-        return env
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        env[key.strip()] = value.strip().strip('"').strip("'")
-    return env
-
-
 class RealDebridError(Exception):
     pass
 
@@ -75,18 +49,36 @@ class RealDebrid:
 
     @staticmethod
     def _redact_log_kwargs(kwargs: dict) -> dict:
-        """產生 debug log 用的 kwargs；magnet 遮蔽，其他欄位 80 字截斷。
-        實際送出的 kwargs 不變。"""
-        if "data" not in kwargs:
-            return {}
-        log_data = {}
-        for k, v in kwargs["data"].items():
-            if k == "magnet":
-                log_data[k] = "<redacted>"
-                continue
-            s = str(v)
-            log_data[k] = (s[:80] + "...") if len(s) > 80 else s
-        return {"data": log_data}
+        """產生 debug log 用的 kwargs；magnet / Authorization 全遮蔽，其餘欄位 80 字截斷。
+        實際送出的 kwargs 不變。
+
+        Bearer token 平時掛在 ``self.session.headers["Authorization"]``，不會出現
+        在每個 ``_request`` 的 kwargs 裡——但如果未來有人在 ``_request`` 加上
+        ``headers=`` per-request override，這條 defense-in-depth 確保 Authorization
+        值不會洩進 debug log（F-09 / Authorization redaction）。
+        """
+        log: dict = {}
+        if "data" in kwargs:
+            log_data = {}
+            for k, v in kwargs["data"].items():
+                if k == "magnet":
+                    log_data[k] = "<redacted>"
+                    continue
+                s = str(v)
+                log_data[k] = (s[:80] + "...") if len(s) > 80 else s
+            log["data"] = log_data
+        if "headers" in kwargs:
+            log_headers = {}
+            for k, v in kwargs["headers"].items():
+                # case-insensitive match; any header that authenticates the
+                # request gets fully redacted (don't even keep the prefix).
+                if k.lower() in ("authorization", "proxy-authorization", "cookie"):
+                    log_headers[k] = "<redacted>"
+                else:
+                    s = str(v)
+                    log_headers[k] = (s[:80] + "...") if len(s) > 80 else s
+            log["headers"] = log_headers
+        return log
 
     def _retry_after_rate_limit(self, resp, method: str, path: str, retry_count: int, kwargs: dict):
         """429 自動重試（最多 3 次）"""

@@ -48,7 +48,8 @@ import requests
 from bs4 import BeautifulSoup
 
 from app_logging import setup_logging, get_logger, app_dir, get_log_file
-from realdebrid import RealDebrid, RealDebridError, load_env
+from realdebrid import RealDebrid, RealDebridError
+from legacy._legacy_env import load_env
 
 logger = get_logger(__name__)
 

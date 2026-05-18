@@ -272,21 +272,38 @@ $Patterns = @(
 
 $ScanFail = $false
 $BinaryHitCount = 0
+# We decode the binary bytes both as ASCII *and* UTF-16LE because PE
+# images routinely embed strings in both encodings:
+#   - ASCII / UTF-8 covers Rust &str literals, format!() output, and
+#     anything wired through libc-style APIs.
+#   - UTF-16LE covers strings handed to the Win32 wide API (e.g. a
+#     `let path = format!("HKCU\\...\\{}", token);` later passed to
+#     `RegOpenKeyExW`), which would otherwise sail past an ASCII-only
+#     scan even though the secret material is plainly readable in a
+#     hex dump.
+# Running both passes is cheap (two regex sweeps over the same byte
+# blob); failing to do it would silently halve the scan's coverage.
+$Encodings = @(
+    @{ label = 'ASCII';      encoding = [System.Text.Encoding]::ASCII },
+    @{ label = 'UTF-16LE';   encoding = [System.Text.Encoding]::Unicode }
+)
 foreach ($exe in $ScanTargets) {
     $name = Split-Path $exe -Leaf
     $bytes = [System.IO.File]::ReadAllBytes($exe)
-    $text  = [System.Text.Encoding]::ASCII.GetString($bytes)
     $hits = @()
-    foreach ($p in $Patterns) {
-        $regexMatches = [regex]::Matches($text, $p.rx)
-        if ($regexMatches.Count -gt 0) {
-            $hits += "      $($p.name)  count=$($regexMatches.Count)"
-            $regexMatches | Select-Object -First 1 | ForEach-Object {
-                $sample = $_.Value
-                if ($sample.Length -gt 70) { $sample = $sample.Substring(0,70) + "..." }
-                $hits += "        sample: $sample"
+    foreach ($enc in $Encodings) {
+        $text = $enc.encoding.GetString($bytes)
+        foreach ($p in $Patterns) {
+            $regexMatches = [regex]::Matches($text, $p.rx)
+            if ($regexMatches.Count -gt 0) {
+                $hits += "      [$($enc.label)] $($p.name)  count=$($regexMatches.Count)"
+                $regexMatches | Select-Object -First 1 | ForEach-Object {
+                    $sample = $_.Value
+                    if ($sample.Length -gt 70) { $sample = $sample.Substring(0,70) + "..." }
+                    $hits += "        sample: $sample"
+                }
+                $BinaryHitCount += $regexMatches.Count
             }
-            $BinaryHitCount += $regexMatches.Count
         }
     }
     if ($hits.Count -gt 0) {
@@ -294,7 +311,7 @@ foreach ($exe in $ScanTargets) {
         $hits | ForEach-Object { Write-Host $_ -ForegroundColor Red }
         $ScanFail = $true
     } else {
-        Ok ("[$name] no leak patterns")
+        Ok ("[$name] no leak patterns (ASCII + UTF-16LE)")
     }
 }
 if ($ScanFail) { FailExit "Binary content scan failed" }

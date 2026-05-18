@@ -6,8 +6,10 @@ Covers:
 - 401 / 403 mapped to RealDebridError with the expected Chinese message
 - Generic non-ok status (e.g. 500) surfaces the API error message
 - 204 / empty body → None return
-- load_env: simple parser, comments, missing file
 - RealDebrid(token="") raises RealDebridError immediately
+
+``load_env`` was removed from ``realdebrid.py`` (F-06 hardening) and now
+lives in ``legacy._legacy_env`` — see ``tests/test_legacy_env.py``.
 
 All HTTP traffic is mocked via patch.object(rd.session, "request"). No
 network or token is required.
@@ -22,7 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from realdebrid import RealDebrid, RealDebridError, load_env  # noqa: E402
+from realdebrid import RealDebrid, RealDebridError  # noqa: E402
 
 
 def _resp(status: int, *, json_body=None, headers=None, content: bytes = b"{}") -> mock.MagicMock:
@@ -540,37 +542,6 @@ class ProcessMagnet(unittest.TestCase):
              mock.patch.object(self.rd, "torrent_info", return_value=info):
             out = self.rd.process_magnet("magnet:?xt=urn:sha1:zz&dn=no-btih")
         self.assertEqual(out["status"], "completed")
-
-
-# ---------------------------------------------------------------------------
-# load_env
-# ---------------------------------------------------------------------------
-
-class LoadEnv(unittest.TestCase):
-    def test_missing_file_returns_empty(self):
-        self.assertEqual(load_env(Path("/no/such/path.env")), {})
-
-    def test_parses_pairs_and_strips_quotes(self):
-        import tempfile
-        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".env",
-                                          encoding="utf-8") as tmp:
-            tmp.write("# this is a comment\n")
-            tmp.write("\n")
-            tmp.write("RD_API_TOKEN=abc-123\n")
-            tmp.write('QUOTED="hello world"\n')
-            tmp.write("SQUOTED='single'\n")
-            tmp.write("no_equals_sign\n")
-            tmp.write("PADDED  =   spaced   \n")
-            path = Path(tmp.name)
-        try:
-            env = load_env(path)
-        finally:
-            path.unlink()
-        self.assertEqual(env["RD_API_TOKEN"], "abc-123")
-        self.assertEqual(env["QUOTED"], "hello world")
-        self.assertEqual(env["SQUOTED"], "single")
-        self.assertEqual(env["PADDED"], "spaced")
-        self.assertNotIn("no_equals_sign", env)
 
 
 if __name__ == "__main__":

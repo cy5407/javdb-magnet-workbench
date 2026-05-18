@@ -94,12 +94,19 @@ export interface LegacyImportPreview {
  * this shape — Rust reads only `metadata()` (size + mtime) and returns
  * those + the on-disk path so the UI can show "where it is / is it
  * there / how fresh".
+ *
+ * `storage` (M9+) distinguishes legacy plaintext from the
+ * post-migration credential-store state:
+ *   - "none"    — nothing configured; UI shows "create template"
+ *   - "file"    — plaintext cookies.txt present; will migrate on next handshake
+ *   - "keyring" — Windows Credential Manager (steady-state)
  */
 export interface CookiesStatus {
   present: boolean;
   path: string;
   modified_iso: string | null;
   size_bytes: number;
+  storage: "none" | "file" | "keyring";
 }
 
 export interface LegacyImportReport {

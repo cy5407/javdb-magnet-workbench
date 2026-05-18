@@ -1,4 +1,5 @@
 mod commands;
+mod cookie_store;
 mod path_manager;
 mod pending;
 mod legacy_import;
@@ -14,21 +15,27 @@ use sidecar_manager::SidecarManager;
 
 const STORE_FILE: &str = "settings.json";
 
+/// Upper bound on `cookies.txt` we'll load into memory at handshake.
+/// A real JavDB cookie blob is a few hundred bytes; 64 KiB is two orders of
+/// magnitude of slack. Anything past this is either a corrupted file or an
+/// accidental paste of the wrong content (HTML page dump, log output, etc.)
+/// and refusing it keeps the sidecar handshake from ballooning a multi-MB
+/// string into the Python process for no benefit.
+const COOKIES_MAX_BYTES: u64 = 64 * 1024;
+
 /// Read on-disk handshake inputs from the data dir. Missing files are not
 /// errors — the sidecar accepts empty cookies (subsequent fetch_javdb will
 /// surface a cloudflare_block) and an empty settings/token snapshot.
 ///
 /// Token sourcing in M5+:
-///   1. OS credential store (preferred)
-///   2. Legacy `settings.rd.api_token` field — kept ONLY for the M4→M5
-///      migration. If found, we copy it into the credential store and
-///      blank the JSON field, so subsequent reads come from the secure
-///      backend. The value is never returned to the frontend.
+///
+/// 1. OS credential store (preferred)
+/// 2. Legacy `settings.rd.api_token` field — kept ONLY for the M4→M5
+///    migration. If found, we copy it into the credential store and
+///    blank the JSON field, so subsequent reads come from the secure
+///    backend. The value is never returned to the frontend.
 fn load_handshake_inputs(path_manager: &PathManager) -> (String, Option<String>, Value) {
-    let cookies_path = path_manager.data_dir.join("cookies.txt");
-    let cookies = std::fs::read_to_string(&cookies_path)
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
+    let cookies = load_cookies(path_manager);
 
     let settings_path = path_manager.data_dir.join(STORE_FILE);
     let settings_value = std::fs::read_to_string(&settings_path)
@@ -44,6 +51,85 @@ fn load_handshake_inputs(path_manager: &PathManager) -> (String, Option<String>,
     };
 
     (cookies, rd_token, settings_value)
+}
+
+/// Resolve cookies for the sidecar handshake.
+///
+/// Source-of-truth precedence:
+///   1. If `cookies.txt` exists AND contains a real cookie pair (not just
+///      the template scaffold) → take that as the authoritative value,
+///      write it to the OS credential store via [`cookie_store::set_cookies`],
+///      and remove the plaintext file. This is the "user just refreshed
+///      cf_clearance" path.
+///   2. Else → fall back to the credential store. This is the steady-state
+///      after the one-shot migration above.
+///   3. Else → empty cookies. Sidecar surfaces `cloudflare_block` on the
+///      first JavDB fetch, which is the right user-facing signal.
+///
+/// Failures are logged to stderr but do not abort the handshake — losing
+/// JavDB cookies degrades to "needs re-paste", not "app unusable".
+fn load_cookies(path_manager: &PathManager) -> String {
+    let cookies_path = path_manager.data_dir.join("cookies.txt");
+
+    if let Some(migrated) = migrate_cookies_from_file(&cookies_path) {
+        return migrated;
+    }
+
+    cookie_store::get_cookies()
+        .unwrap_or_else(|e| {
+            eprintln!("[handshake] cookie keyring read failed: {e}");
+            None
+        })
+        .unwrap_or_default()
+}
+
+/// Read `cookies.txt`, refuse files larger than [`COOKIES_MAX_BYTES`],
+/// and — if the content has a real (non-template) cookie pair — migrate
+/// it into the credential store + remove the plaintext file. Returns the
+/// migrated cookie value, or `None` if nothing was migrated (caller falls
+/// back to the credential store).
+///
+/// File deletion is best-effort: keyring write success is what matters for
+/// the security invariant. If the OS refuses the delete (FS busy, AV lock,
+/// read-only mount), the keyring already has the value and the next
+/// handshake will re-migrate idempotently.
+fn migrate_cookies_from_file(cookies_path: &std::path::Path) -> Option<String> {
+    let meta = std::fs::metadata(cookies_path).ok()?;
+    if meta.len() > COOKIES_MAX_BYTES {
+        eprintln!(
+            "[handshake] cookies.txt at {} is {} bytes (> {} cap); refusing to load",
+            cookies_path.display(),
+            meta.len(),
+            COOKIES_MAX_BYTES,
+        );
+        return None;
+    }
+
+    let raw = std::fs::read_to_string(cookies_path).ok()?;
+    if !cookie_store::file_has_real_cookies(&raw) {
+        // File is still just the template scaffold (or otherwise comment-only).
+        // Leave it in place; nothing to migrate.
+        return None;
+    }
+    let trimmed = raw.trim().to_string();
+
+    if let Err(e) = cookie_store::set_cookies(&trimmed) {
+        eprintln!(
+            "[handshake] keyring write for cookies failed ({e}); falling back to file"
+        );
+        // We still want the sidecar to function this session — return the
+        // file value so JavDB fetch works while the user fixes the keyring.
+        return Some(trimmed);
+    }
+
+    if let Err(e) = std::fs::remove_file(cookies_path) {
+        // Keyring already has the value; on next launch the file's still
+        // here so we'll re-migrate. Idempotent.
+        eprintln!(
+            "[handshake] cookies migrated to keyring but file delete failed: {e}"
+        );
+    }
+    Some(trimmed)
 }
 
 /// One-shot migration: pull `settings.rd.api_token` (legacy plaintext) into
@@ -187,6 +273,53 @@ mod tests {
         assert!(migrate_legacy_token(&pm, &before).is_none());
         let raw_after = fs::read_to_string(pm.data_dir.join(STORE_FILE)).unwrap();
         assert_eq!(raw_before, raw_after);
+    }
+
+    #[test]
+    fn migrate_cookies_no_file_returns_none() {
+        // No cookies.txt → migration is a no-op, caller falls back to
+        // the credential store (or empty cookies if neither has it).
+        let pm = temp_data_dir();
+        let result = migrate_cookies_from_file(&pm.data_dir.join("cookies.txt"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn migrate_cookies_template_only_file_is_not_migrated() {
+        // The "create template" button writes a scaffold containing only
+        // comments + an empty trailing line. Migration MUST NOT fire on
+        // this — otherwise the first app launch after creating the
+        // template would clobber a perfectly good keyring value.
+        let pm = temp_data_dir();
+        let path = pm.data_dir.join("cookies.txt");
+        fs::write(
+            &path,
+            "# JavDBMagnet cookies.txt\n\
+             # ====\n\
+             # _jdb_session=XXX; cf_clearance=XXX; locale=zh\n\
+             # === 在下面貼上你的 cookie 整行 ===\n\
+             \n",
+        )
+        .unwrap();
+        assert!(migrate_cookies_from_file(&path).is_none());
+        // And the file must still be on disk so the user can edit it.
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn migrate_cookies_refuses_oversized_file() {
+        // > COOKIES_MAX_BYTES — refused. File stays in place so the user
+        // can inspect and shrink it; sidecar gets empty cookies and the
+        // first fetch surfaces cloudflare_block.
+        let pm = temp_data_dir();
+        let path = pm.data_dir.join("cookies.txt");
+        let oversized = "x".repeat((COOKIES_MAX_BYTES + 1) as usize);
+        fs::write(&path, &oversized).unwrap();
+        assert!(migrate_cookies_from_file(&path).is_none());
+        assert!(
+            path.exists(),
+            "oversized file must remain so the user can fix it"
+        );
     }
 }
 

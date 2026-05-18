@@ -908,40 +908,76 @@ const COOKIES_FILE_NAME: &str = "cookies.txt";
 pub struct CookiesStatus {
     pub present: bool,
     pub path: String,
-    /// ISO-8601 UTC string. `None` if the file is missing or the OS
-    /// doesn't give us mtime (e.g. exotic filesystem).
+    /// ISO-8601 UTC string. `None` if the cookies live in the credential
+    /// store, the file is missing, or the OS doesn't give us mtime (e.g.
+    /// exotic filesystem).
     pub modified_iso: Option<String>,
     pub size_bytes: u64,
+    /// Where the cookies actually live.
+    ///
+    /// - `"none"` — nothing configured; UI shows "create template".
+    /// - `"file"` — plaintext `cookies.txt` present (legacy; will be
+    ///   migrated to the credential store on next handshake).
+    /// - `"keyring"` — Windows Credential Manager (post-migration steady state).
+    pub storage: String,
 }
 
-/// Pure helper — takes a data dir path and reports the cookies.txt
-/// status without reading the file contents. Used by both the Tauri
-/// command and the unit tests.
-pub(crate) fn cookies_status_for(data_dir: &std::path::Path) -> CookiesStatus {
+/// Pure helper — reports cookies.txt status WITHOUT reading the file
+/// contents (only `metadata`). Used by both the Tauri command and the
+/// unit tests. The cookie BODY never crosses this boundary.
+///
+/// Reporting precedence:
+///   1. File exists → `storage: "file"` with size + mtime. This is the
+///      transient state after a user just pasted cookies; the next
+///      handshake migrates it to the credential store.
+///   2. `in_keyring == true` → `storage: "keyring"`, `present: true`,
+///      no mtime/size (the OS keyring doesn't expose them).
+///   3. Neither → `storage: "none"`, `present: false`.
+///
+/// `in_keyring` is passed in as a bool so unit tests don't have to touch
+/// the real OS credential store (which would otherwise see real cookies
+/// from a developer machine and break test determinism). The public
+/// [`cookies_status_for`] wrapper queries the keyring for production
+/// callers.
+pub(crate) fn cookies_status_with_keyring(
+    data_dir: &std::path::Path,
+    in_keyring: bool,
+) -> CookiesStatus {
     let path = data_dir.join(COOKIES_FILE_NAME);
     let path_display = path.display().to_string();
-    let meta = match std::fs::metadata(&path) {
-        Ok(m) => m,
-        Err(_) => {
-            return CookiesStatus {
-                present: false,
-                path: path_display,
-                modified_iso: None,
-                size_bytes: 0,
-            };
-        }
-    };
-    let size_bytes = meta.len();
-    let modified_iso = meta
-        .modified()
-        .ok()
-        .map(|st| chrono::DateTime::<chrono::Utc>::from(st).to_rfc3339());
-    CookiesStatus {
-        present: true,
-        path: path_display,
-        modified_iso,
-        size_bytes,
+
+    if let Ok(meta) = std::fs::metadata(&path) {
+        let modified_iso = meta
+            .modified()
+            .ok()
+            .map(|st| chrono::DateTime::<chrono::Utc>::from(st).to_rfc3339());
+        return CookiesStatus {
+            present: true,
+            path: path_display,
+            modified_iso,
+            size_bytes: meta.len(),
+            storage: "file".to_string(),
+        };
     }
+
+    CookiesStatus {
+        present: in_keyring,
+        path: path_display,
+        modified_iso: None,
+        size_bytes: 0,
+        storage: if in_keyring { "keyring".to_string() } else { "none".to_string() },
+    }
+}
+
+pub(crate) fn cookies_status_for(data_dir: &std::path::Path) -> CookiesStatus {
+    // A keyring backend error is treated the same as "no entry": we never
+    // want a transient credential-store failure to hide the fact that the
+    // user can still create a fresh template.
+    let in_keyring = matches!(
+        crate::cookie_store::get_cookies(),
+        Ok(Some(ref s)) if !s.is_empty()
+    );
+    cookies_status_with_keyring(data_dir, in_keyring)
 }
 
 #[tauri::command]
@@ -1068,14 +1104,45 @@ mod tests_m7b {
     }
 
     #[test]
-    fn cookies_status_missing_file() {
+    fn cookies_status_missing_file_and_no_keyring() {
+        // Drive the keyring-injected helper so tests are deterministic on
+        // a developer machine that has a real entry stored.
         let d = temp_dir();
-        let s = cookies_status_for(&d);
+        let s = cookies_status_with_keyring(&d, false);
         assert!(!s.present);
         assert_eq!(s.size_bytes, 0);
         assert!(s.modified_iso.is_none());
+        assert_eq!(s.storage, "none");
         // path is still echoed so the UI can show "expected at ..."
         assert!(s.path.contains("cookies.txt"));
+    }
+
+    #[test]
+    fn cookies_status_missing_file_but_keyring_populated() {
+        // File migrated to the credential store, plaintext removed. The
+        // status must still report present=true so the UI doesn't tell the
+        // user to re-paste cookies they already have.
+        let d = temp_dir();
+        let s = cookies_status_with_keyring(&d, true);
+        assert!(s.present);
+        assert_eq!(s.storage, "keyring");
+        assert!(s.modified_iso.is_none(), "keyring entries have no mtime");
+        assert_eq!(s.size_bytes, 0);
+    }
+
+    #[test]
+    fn cookies_status_file_overrides_keyring() {
+        // If both file and keyring have cookies (e.g. user just pasted
+        // fresh cookies before the next migration), report the file —
+        // that's the user's most recent intent and the next handshake
+        // will migrate it.
+        let d = temp_dir();
+        let path = d.join(COOKIES_FILE_NAME);
+        fs::write(&path, "_jdb_session=new; cf_clearance=fresh\n").unwrap();
+        let s = cookies_status_with_keyring(&d, true);
+        assert!(s.present);
+        assert_eq!(s.storage, "file");
+        assert!(s.size_bytes > 0);
     }
 
     #[test]
@@ -1083,8 +1150,9 @@ mod tests_m7b {
         let d = temp_dir();
         let path = d.join(COOKIES_FILE_NAME);
         fs::write(&path, "# domain\tdummy\tplaceholder=1\n").unwrap();
-        let s = cookies_status_for(&d);
+        let s = cookies_status_with_keyring(&d, false);
         assert!(s.present);
+        assert_eq!(s.storage, "file");
         assert!(s.size_bytes > 0);
         // mtime is best-effort; accept None on exotic filesystems but
         // assert that an OK Some() looks like an ISO-8601 date.
@@ -1102,7 +1170,7 @@ mod tests_m7b {
         let d = temp_dir();
         let path = d.join(COOKIES_FILE_NAME);
         fs::write(&path, "SECRET_COOKIE_VALUE_DO_NOT_LEAK\n").unwrap();
-        let s = cookies_status_for(&d);
+        let s = cookies_status_with_keyring(&d, false);
         let raw = serde_json::to_string(&s).unwrap();
         assert!(
             !raw.contains("SECRET_COOKIE_VALUE_DO_NOT_LEAK"),

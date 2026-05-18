@@ -18,6 +18,12 @@
 | **P2.5** Cargo.toml keyring 三個 OS features | ✅ DONE | working tree, codex job `b4vzcm86b` |
 | **P2.7** npm svelte / devalue bump | ✅ DONE | commit `2a0b5e0` — `npm audit fix` to devalue 5.8.1 + svelte 5.55.7 |
 | **P2.6** glib 0.18.5 transitive | ✅ SUPPRESSED | phantom finding — verified absent from x86_64-pc-windows-msvc target; `.trivyignore` documents rationale |
+| **F-03** cookies.txt → keyring 遷移 | ✅ DONE | new `cookie_store.rs` + `load_cookies` migration in handshake; file becomes ephemeral edit scratchpad |
+| **F-06** `realdebrid.load_env` 隔離 | ✅ DONE | function moved to `legacy/_legacy_env.py`; `realdebrid.py` no longer exports a generic dotenv parser |
+| **F-09 (extension)** `_redact_log_kwargs` headers | ✅ DONE | now redacts `Authorization` / `Proxy-Authorization` / `Cookie` headers, case-insensitive |
+| **build-release UTF-16LE scan** | ✅ DONE | binary secret scan now dual-decodes (ASCII + UTF-16LE) to catch widened Windows API strings |
+| **cookies.txt size cap** | ✅ DONE | `load_handshake_inputs` refuses files > 64 KiB before read |
+| **App.svelte coverage gap** | ✅ CLOSED | grep confirmed no `{@html}`, no token-leaking `console.*`, no `$effect`, no reactive secret expressions |
 | **P2.1** CSP policy | 🟡 DEFERRED | needs interactive WebView testing; not safe for blind codex dispatch |
 
 ### Working tree summary
