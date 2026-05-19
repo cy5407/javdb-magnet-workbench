@@ -6,7 +6,8 @@ JavDB 磁力連結擷取 + Real-Debrid 直連產生工具（Windows 桌面版）
 - **直接貼上 magnet**：已有連結時跳過 JavDB，直接送 Real-Debrid
 - 篩選 / 排序 / 群組去重，一鍵送 RD
 - **待處理清單**：RD 還在處理的 torrent 不卡住流程，可稍後重試
-- 全部 RD 直連一鍵複製到剪貼簿（貼進 IDM / aria2 / 任何下載器）
+- RD 直連既可**一鍵批次複製**全部到剪貼簿（貼進 IDM / aria2 / 任何下載器），也可在每筆完成的 row 內**單獨挑選**任一連結複製（每條 URL 都是可選取的欄位 + 各自的「複製」鈕）
+- 所有動作按鈕都有**點擊回饋**：按下時下沉、成功後 1.2 秒內按鈕變綠並顯示「已X ✓」確認文字
 - 設定面板（檔案策略、大小門檻、超時、主題、UI 縮放）
 - 從**舊版 Python GUI** 一鍵匯入 `.env` / `cookies.txt` / `pending_torrents.json`
 
@@ -60,6 +61,7 @@ JavDB 磁力連結擷取 + Real-Debrid 直連產生工具（Windows 桌面版）
 Remove-Item "$env:APPDATA\JavDBMagnet" -Recurse -Force
 Remove-Item "$env:LOCALAPPDATA\JavDBMagnet" -Recurse -Force
 cmdkey /delete:JavDBMagnet/RD_API_TOKEN
+cmdkey /delete:JavDBMagnet/JAVDB_COOKIES
 ```
 
 ### Windows SmartScreen / Defender 警告
@@ -91,18 +93,26 @@ Token 會存進 **Windows Credential Manager**（target name `JavDBMagnet/RD_API
 
 ### 2. 取得 JavDB cookies
 
-JavDB 需要登入後的 cookie 才能看到磁力連結。app 內有「**建立 cookies.txt 範本**」按鈕可以幫你生一份**附完整教學的範本檔**，不必自己摸索檔案格式 / 編碼 / 必填欄位。
+JavDB 需要登入後的 cookie 才能看到磁力連結。展開「**JavDB Cookies**」區塊後有**兩種**方式設定，**推薦方式 A**（refresh `cf_clearance` 時不必重啟 app）。
 
-1. 展開「**JavDB Cookies**」區塊
-2. 若顯示「✗ 尚未設定 cookies.txt」→ 按「**建立 cookies.txt 範本**」（此按鈕僅在 cookies.txt 不存在時出現）
-3. 按「**打開資料目錄**」會跳出 `%APPDATA%\JavDBMagnet\`，用記事本打開剛建立的 `cookies.txt`
-4. 範本內已寫好兩種取得方式的步驟（F12 → Network → Request Headers 那條最直接），照做複製
-5. 把整行 cookie 內容貼到範本檔最後一行（**存檔時記得選 UTF-8**），覆蓋掉 `_jdb_session=XXX; cf_clearance=XXX; locale=zh` 那行
-6. 回到 app 按「**重新整理**」→ 看到 `✓ 已找到 cookies.txt` 即可
+兩種方式都同樣會把 cookie **加密儲存到 Windows Credential Manager**（target `JavDBMagnet/JAVDB_COOKIES`），絕不長期落在純文字檔。
 
-cookies 路徑會是：`%APPDATA%\JavDBMagnet\cookies.txt`
+#### 方式 A：直接貼上（推薦）
 
-> ⚠ **`cf_clearance` 約幾小時後過期**，看到 Cloudflare 阻擋時重新取一次即可。詳見 [troubleshooting/cloudflare.md](docs/troubleshooting/cloudflare.md)。
+1. 展開「**JavDB Cookies**」區塊，按「**貼上新 cookies**」
+2. 瀏覽器 DevTools → Network → 任一個 JavDB 請求 → Request Headers → 找 `Cookie:` 那行 → **不含「Cookie: 」前綴**整段複製
+3. 貼到出現的 textarea，按「**儲存到認證管理員**」
+4. 看到 `✓ cookies 已加密儲存` = 成功；sidecar **即時更新**，可以馬上開始抓 JavDB，**不必重啟**
+
+#### 方式 B：編輯 cookies.txt 範本（第一次設定 / 喜歡用檔案）
+
+1. 若顯示「✗ 尚未設定 cookies」→ 按「**建立 cookies.txt 範本**」（此按鈕僅在尚未設定時出現）
+2. 按「**打開資料目錄**」會跳出 `%APPDATA%\JavDBMagnet\`，用記事本打開剛建立的 `cookies.txt`
+3. 範本內已寫好兩種取得方式的步驟（F12 → Network → Request Headers 那條最直接），照做複製
+4. 把整行 cookie 內容貼到範本檔最後一行（**存檔時記得選 UTF-8**），覆蓋掉 `_jdb_session=XXX; cf_clearance=XXX; locale=zh` 那行
+5. 回到 app 按「**重新整理 / 套用變更**」→ 看到 `✓ cookies 已加密儲存` 即會自動把範本檔內容加密寫入 Credential Manager 並刪除明文檔
+
+> ⚠ **`cf_clearance` 約幾小時後過期**，看到 Cloudflare 阻擋時用方式 A 重貼一次最快（不必重啟）。詳見 [troubleshooting/cloudflare.md](docs/troubleshooting/cloudflare.md)。
 >
 > 範本檔以 UTF-8（**不含 BOM**）寫入，避免 Cloudflare 的 cookie parser 因 BOM 失敗。
 
@@ -117,10 +127,11 @@ cookies 路徑會是：`%APPDATA%\JavDBMagnet\cookies.txt`
 | 內容 | 路徑 |
 |---|---|
 | Settings | `%APPDATA%\JavDBMagnet\settings.json` |
-| Cookies | `%APPDATA%\JavDBMagnet\cookies.txt` |
-| Pending torrents | `%APPDATA%\JavDBMagnet\pending_torrents.json` |
+| JavDB Cookies | Windows Credential Manager（**非檔案**，target `JavDBMagnet/JAVDB_COOKIES`） |
+| Cookies 範本（過渡用） | `%APPDATA%\JavDBMagnet\cookies.txt`（只在方式 B 流程暫存；migration 後自動刪除） |
+| Pending torrents | `%APPDATA%\JavDBMagnet\pending_torrents.json`（**不含 magnet 文字**） |
 | Logs（含 sidecar debug.log） | `%LOCALAPPDATA%\JavDBMagnet\logs\` |
-| RD Token | Windows Credential Manager（**非檔案**） |
+| RD Token | Windows Credential Manager（**非檔案**，target `JavDBMagnet/RD_API_TOKEN`） |
 
 app 內「JavDB Cookies」區塊有「**打開資料目錄**」與「**打開 logs 目錄**」按鈕，不必手敲路徑。
 
@@ -176,6 +187,7 @@ Repo 的 `.gitignore` 已擋下以上路徑，但若你的工作目錄外另有�
 | 規則 | 機制 |
 |---|---|
 | RD token 絕不寫純文字檔 | Windows Credential Manager（keyring crate），`settings.json` 的 `rd.api_token` 永遠空字串 |
+| JavDB cookies 絕不長期落純文字 | Windows Credential Manager（target `JavDBMagnet/JAVDB_COOKIES`）；`cookies.txt` 只是過渡用範本檔，下次 app 啟動 / 按「重新整理」後自動加密寫回 keyring 並刪除明文 |
 | 完整 magnet 不外洩到 frontend / settings / pending JSON / log | sidecar 用 `handle_id` 引用；只在 Rust transient String（剪貼簿寫入時）與 RD HTTP body 短暫存在 |
 | `pending_torrents.json` 不含 magnet 文字 | 由 Rust `entries_have_no_magnet_field` 單元測試守住 |
 | `debug.log` 不含 BTIH hash | `realdebrid.py::_request` 對 `data["magnet"]` 永遠記 `<redacted>` |
