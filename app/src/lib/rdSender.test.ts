@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  collectDownloadLinksFromRow,
   rdErrorMessage,
   retryPending,
   sendBatch,
@@ -406,5 +407,84 @@ describe("default Tauri invoke wrappers", () => {
     expect(args).toMatchObject({ torrentId: "tid-1", strategy: "largest" });
     expect(events).toHaveLength(1);
     expect(events[0].result.kind).toBe("missing");
+  });
+});
+
+describe("collectDownloadLinksFromRow", () => {
+  const link = (download: string, filename = "f.mp4"): RdSendProgress["links"][number] => ({
+    original: "magnet:?xt=urn:btih:abc",
+    download,
+    filename,
+    filesize: 0,
+    streamable: 0,
+  });
+
+  const row = (overrides: Partial<RdSendProgress> = {}): RdSendProgress => ({
+    handle_id: "h-1",
+    code: "ABC-001",
+    status: "completed",
+    links: [],
+    error_code: null,
+    ...overrides,
+  });
+
+  it("returns all download URLs for a completed row, in original order", () => {
+    const out = collectDownloadLinksFromRow(
+      row({
+        links: [
+          link("https://rd.example/a"),
+          link("https://rd.example/b"),
+          link("https://rd.example/c"),
+        ],
+      }),
+    );
+    expect(out).toEqual([
+      "https://rd.example/a",
+      "https://rd.example/b",
+      "https://rd.example/c",
+    ]);
+  });
+
+  it("filters out links whose download is empty / whitespace-only", () => {
+    const out = collectDownloadLinksFromRow(
+      row({
+        links: [
+          link("https://rd.example/a"),
+          link(""),
+          link("   "),
+          link("https://rd.example/d"),
+        ],
+      }),
+    );
+    expect(out).toEqual(["https://rd.example/a", "https://rd.example/d"]);
+  });
+
+  it("returns [] for a non-completed row even if links field is populated", () => {
+    // Defensive: in_pending / error rows should never leak links into a copy
+    // action — the UI must not surface stale link state from a prior attempt.
+    expect(
+      collectDownloadLinksFromRow(
+        row({ status: "in_pending", links: [link("https://rd.example/leaked")] }),
+      ),
+    ).toEqual([]);
+    expect(
+      collectDownloadLinksFromRow(
+        row({ status: "error", links: [link("https://rd.example/leaked")] }),
+      ),
+    ).toEqual([]);
+    expect(
+      collectDownloadLinksFromRow(
+        row({ status: "sending", links: [link("https://rd.example/leaked")] }),
+      ),
+    ).toEqual([]);
+    expect(
+      collectDownloadLinksFromRow(
+        row({ status: "pending", links: [link("https://rd.example/leaked")] }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("returns [] when completed row has no links at all", () => {
+    expect(collectDownloadLinksFromRow(row({ links: [] }))).toEqual([]);
   });
 });

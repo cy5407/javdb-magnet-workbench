@@ -52,6 +52,19 @@ export interface RdSendBatchOptions {
 }
 
 /**
+ * Pure extractor: given one progress row, return the list of RD direct
+ * download URLs that should land on the clipboard for THIS row. Returns
+ * `[]` for any non-completed status so callers can wire up a per-row
+ * "copy" affordance without having to re-check status at the call site.
+ */
+export function collectDownloadLinksFromRow(row: RdSendProgress): string[] {
+  if (row.status !== "completed") return [];
+  return row.links
+    .map((l) => l.download)
+    .filter((d): d is string => typeof d === "string" && d.trim().length > 0);
+}
+
+/**
  * Stable sort by `completed_at` ascending. Rows missing `completed_at` are
  * placed using `missingCompletedAtFallback` as their sort key — caller MUST
  * pass this explicitly so the "missing row" position is always an

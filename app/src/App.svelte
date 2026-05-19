@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { createFlashController } from "./lib/flashAction";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openExternal } from "@tauri-apps/plugin-shell";
   import {
@@ -16,6 +17,7 @@
     validateSettingsDraft,
   } from "./lib/settingsValidation";
   import {
+    collectDownloadLinksFromRow,
     rdErrorMessage,
     retryPending,
     sendBatch,
@@ -218,6 +220,7 @@
     try {
       const resp = await invoke<PingResponse>("sidecar_ping");
       pingMessage = `回應正常 — 已執行 ${resp.uptime_seconds} 秒，request_id ${resp.request_id}`;
+      flash.flash("ping-sidecar");
     } catch (e) {
       pingMessage = `錯誤：${e}`;
     }
@@ -361,6 +364,7 @@
           ? fragments.join("；") + "。"
           : "沒有可加入的磁力連結。",
       };
+      if (newRows.length > 0) flash.flash("magnet-register");
     } catch (e) {
       registerStatus = { kind: "error", text: `加入失敗：${e}` };
     } finally {
@@ -372,6 +376,7 @@
     try {
       await invoke("copy_magnet", { handleId: handle_id });
       statusMessage = `已複製 ${label} 的磁力連結`;
+      flash.flash(`magnet-copy-${handle_id}`);
     } catch (e) {
       statusMessage = `複製失敗：${e}`;
     }
@@ -400,6 +405,7 @@
         result.unknown > 0
           ? `已複製 ${result.copied} 個，另有 ${result.unknown} 個過期`
           : `已複製 ${result.copied} 個磁力連結`;
+      flash.flash("magnet-copy-visible");
     } catch (e) {
       statusMessage = `批次複製失敗：${e}`;
     }
@@ -479,6 +485,7 @@
     } else {
       statusMessage = "結果已清空";
     }
+    flash.flash("scrape-clear");
   }
 
   // ---- derived counts for status bar ---------------------------------
@@ -508,6 +515,7 @@
       });
       rdUser = u;
       rdMessage = `測試成功：${u.username || "(無 username)"} / ${u.type} / 點數 ${u.points}`;
+      flash.flash("rd-test-token");
     } catch (e) {
       rdUser = null;
       const code = e instanceof Error ? e.message : String(e);
@@ -526,6 +534,7 @@
       rdTokenInput = "";
       rdShowToken = false;
       rdMessage = "Token 已儲存到系統憑證管理員";
+      flash.flash("rd-save-token");
       // Refresh user info from saved token (no token sent over IPC).
       try {
         rdUser = await invoke<RdUserInfo>("rd_check_user");
@@ -546,6 +555,7 @@
       rdUser = null;
       rdTokenInput = "";
       rdMessage = "Token 已清除";
+      flash.flash("rd-clear-token");
     } catch (e) {
       const code = e instanceof Error ? e.message : String(e);
       rdMessage = `清除失敗：${rdErrorMessage(code)}`;
@@ -561,6 +571,7 @@
     try {
       rdUser = await invoke<RdUserInfo>("rd_check_user");
       rdMessage = `已連線：${rdUser.username || "(無 username)"} / ${rdUser.type}`;
+      flash.flash("rd-refresh-user");
     } catch (e) {
       const code = e instanceof Error ? e.message : String(e);
       rdMessage = `查詢失敗：${rdErrorMessage(code)}`;
@@ -664,6 +675,11 @@
     rdSendAbort?.abort();
   }
 
+  // Reactive controller for all button post-action confirmation flashes.
+  // Logic + 1.2s timer + debounce-on-re-click live in flashAction.ts and are
+  // unit-tested there; this file only wires keys to templates and call sites.
+  const flash = createFlashController();
+
   async function copyRdDownloads() {
     const lines: string[] = [];
     const completedRows = sortCompletedRowsByCompletionTime(
@@ -685,6 +701,47 @@
         { links: lines },
       );
       rdMessage = `已複製 ${result.copied} 條 RD 下載連結`;
+      flash.flash("rd-bulk");
+    } catch (e) {
+      rdMessage = `複製失敗：${e}`;
+    }
+  }
+
+  /** Copy ALL download URLs for one completed row. */
+  async function copyRdRow(row: RdSendProgress): Promise<void> {
+    const lines = collectDownloadLinksFromRow(row);
+    if (lines.length === 0) {
+      rdMessage = `${row.code} 沒有可複製的下載連結`;
+      return;
+    }
+    try {
+      const result = await invoke<CopyRdLinksBulkResult>(
+        "copy_rd_links_bulk",
+        { links: lines },
+      );
+      rdMessage = `已複製 ${row.code} 的 ${result.copied} 條下載連結`;
+      flash.flash(`rd-row-${row.handle_id}`);
+    } catch (e) {
+      rdMessage = `複製失敗：${e}`;
+    }
+  }
+
+  /** Copy a SINGLE download URL (one file inside a row). */
+  async function copyRdSingleLink(rowKey: string, link: string, linkIndex: number): Promise<void> {
+    if (!link || !link.trim()) {
+      rdMessage = "此檔案沒有可複製的下載連結";
+      return;
+    }
+    try {
+      const result = await invoke<CopyRdLinksBulkResult>(
+        "copy_rd_links_bulk",
+        { links: [link] },
+      );
+      rdMessage =
+        result.copied > 0
+          ? "已複製 1 條下載連結"
+          : "複製失敗：連結為空";
+      if (result.copied > 0) flash.flash(`rd-link-${rowKey}-${linkIndex}`);
     } catch (e) {
       rdMessage = `複製失敗：${e}`;
     }
@@ -702,6 +759,7 @@
         kind: "info",
         text: `已重新載入本機紀錄（${pendingEntries.length} 筆）。需要查 RD 端最新狀態請按「全部重試」。`,
       };
+      flash.flash("pending-refresh");
     } catch (e) {
       pendingMessage = { kind: "error", text: `讀取待處理清單失敗：${e}` };
     }
@@ -849,6 +907,7 @@
       legacyPreview = await invoke<LegacyImportPreview>("preview_legacy_import", {
         sourceDir: dir,
       });
+      flash.flash("legacy-preview");
     } catch (e) {
       legacyError = `預覽失敗：${e}`;
     } finally {
@@ -867,6 +926,7 @@
       // scaffold is present, this is a cheap status read with no side
       // effects.
       cookiesStatus = await invoke<CookiesStatus>("migrate_cookies_now");
+      flash.flash("cookies-refresh");
     } catch (e) {
       cookiesError = `更新 cookies 狀態失敗：${e}`;
       try {
@@ -906,6 +966,7 @@
         kind: "ok",
         text: "cookies 已加密儲存到 Credential Manager，sidecar 已即時更新（不必重啟 app）。",
       };
+      flash.flash("cookies-save");
     } catch (e) {
       const code = e instanceof Error ? e.message : String(e);
       const friendly =
@@ -954,6 +1015,7 @@
           ? "已建立新 cookies.txt 範本：編輯填入新 cookie 後，重啟 app 即會自動加密寫回 Credential Manager 並刪除明文檔。"
           : "已建立 cookies.txt 範本，請按「打開資料目錄」編輯並填入 cookie。填好後重啟 app 即會自動加密儲存。",
       };
+      flash.flash("cookies-template");
     } catch (e) {
       cookiesMessage = { kind: "error", text: `建立範本失敗：${e}` };
     }
@@ -1026,6 +1088,7 @@
       };
       settingsMessage = "設定已儲存";
       settingsMessageKind = "ok";
+      flash.flash("settings-save");
     } catch (e) {
       settingsMessage = `儲存失敗：${e}`;
       settingsMessageKind = "error";
@@ -1084,6 +1147,7 @@
       if (legacyReport.cookies_imported) {
         await refreshCookiesStatus();
       }
+      flash.flash("legacy-apply");
     } catch (e) {
       legacyError = `匯入失敗：${e}`;
     } finally {
@@ -1110,6 +1174,7 @@
       await invoke("pending_clear");
       pendingEntries = [];
       pendingMessage = { kind: "ok", text: "待處理清單已清空" };
+      flash.flash("pending-clear");
     } catch (e) {
       pendingMessage = { kind: "error", text: `清空失敗：${e}` };
     }
@@ -1159,7 +1224,12 @@
   <section>
     <h2>Sidecar</h2>
     <div class="row">
-      <button onclick={pingSidecar}>Ping Sidecar</button>
+      <button
+        onclick={pingSidecar}
+        class:flash-ok={flash.keys.has("ping-sidecar")}
+      >
+        {flash.keys.has("ping-sidecar") ? "✓ Pong" : "Ping Sidecar"}
+      </button>
       {#if pingMessage}
         <span class="ping">{pingMessage}</span>
       {/if}
@@ -1175,8 +1245,18 @@
           : "✗ 未設定"}
       </span>
       {#if rdHasToken}
-        <button onclick={rdRefreshUser}>查詢帳號</button>
-        <button onclick={rdClearToken}>清除 Token</button>
+        <button
+          onclick={rdRefreshUser}
+          class:flash-ok={flash.keys.has("rd-refresh-user")}
+        >
+          {flash.keys.has("rd-refresh-user") ? "已更新 ✓" : "查詢帳號"}
+        </button>
+        <button
+          onclick={rdClearToken}
+          class:flash-ok={flash.keys.has("rd-clear-token")}
+        >
+          {flash.keys.has("rd-clear-token") ? "已清除 ✓" : "清除 Token"}
+        </button>
       {/if}
     </div>
     {#if rdUser}
@@ -1219,11 +1299,19 @@
           <input type="checkbox" bind:checked={rdShowToken} />
           顯示
         </label>
-        <button onclick={rdTestToken} disabled={!rdTokenInput.trim()}>
-          測試連線
+        <button
+          onclick={rdTestToken}
+          disabled={!rdTokenInput.trim()}
+          class:flash-ok={flash.keys.has("rd-test-token")}
+        >
+          {flash.keys.has("rd-test-token") ? "已測試 ✓" : "測試連線"}
         </button>
-        <button onclick={rdSaveToken} disabled={!rdTokenInput.trim()}>
-          儲存
+        <button
+          onclick={rdSaveToken}
+          disabled={!rdTokenInput.trim()}
+          class:flash-ok={flash.keys.has("rd-save-token")}
+        >
+          {flash.keys.has("rd-save-token") ? "已儲存 ✓" : "儲存"}
         </button>
       </div>
     </div>
@@ -1256,14 +1344,23 @@
           spellcheck="false"
           disabled={legacyBusy}
         />
-        <button onclick={previewLegacyImport} disabled={legacyBusy || !legacyPath.trim()}>
-          {legacyBusy ? "處理中…" : "預覽"}
+        <button
+          onclick={previewLegacyImport}
+          disabled={legacyBusy || !legacyPath.trim()}
+          class:flash-ok={flash.keys.has("legacy-preview")}
+        >
+          {legacyBusy
+            ? "處理中…"
+            : flash.keys.has("legacy-preview")
+              ? "已預覽 ✓"
+              : "預覽"}
         </button>
         <button
           onclick={applyLegacyImportConfirmed}
           disabled={legacyBusy || !legacyPreview || !legacyPreview.source_dir_valid}
+          class:flash-ok={flash.keys.has("legacy-apply")}
         >
-          匯入
+          {flash.keys.has("legacy-apply") ? "已匯入 ✓" : "匯入"}
         </button>
       </div>
       {#if legacyError}
@@ -1456,8 +1553,16 @@
       </fieldset>
 
       <div class="row">
-        <button onclick={saveSettings} disabled={!settingsValid || settingsSaving}>
-          {settingsSaving ? "儲存中…" : "儲存設定"}
+        <button
+          onclick={saveSettings}
+          disabled={!settingsValid || settingsSaving}
+          class:flash-ok={flash.keys.has("settings-save")}
+        >
+          {settingsSaving
+            ? "儲存中…"
+            : flash.keys.has("settings-save")
+              ? "已儲存 ✓"
+              : "儲存設定"}
         </button>
         <button onclick={revertSettingsDraft} disabled={settingsSaving}>還原</button>
       </div>
@@ -1527,14 +1632,24 @@
         <p class="inline-msg" data-kind={cookiesMessage.kind}>{cookiesMessage.text}</p>
       {/if}
       <div class="row">
-        <button onclick={refreshCookiesStatus}>重新整理 / 套用變更</button>
+        <button
+          onclick={refreshCookiesStatus}
+          class:flash-ok={flash.keys.has("cookies-refresh")}
+        >
+          {flash.keys.has("cookies-refresh") ? "已重整 ✓" : "重新整理 / 套用變更"}
+        </button>
         <button onclick={openDataDir}>打開資料目錄</button>
         <button onclick={openLogsDir}>打開 logs 目錄</button>
         <button onclick={toggleCookiesPaste} disabled={cookiesSaving}>
           {cookiesPasteOpen ? "取消輸入" : "貼上新 cookies"}
         </button>
         {#if cookiesStatus && cookiesStatus.storage !== "file"}
-          <button onclick={createCookiesTemplate}>建立 cookies.txt 範本</button>
+          <button
+            onclick={createCookiesTemplate}
+            class:flash-ok={flash.keys.has("cookies-template")}
+          >
+            {flash.keys.has("cookies-template") ? "已建立 ✓" : "建立 cookies.txt 範本"}
+          </button>
         {/if}
       </div>
       {#if cookiesPasteOpen}
@@ -1562,8 +1677,13 @@
             <button
               onclick={saveCookies}
               disabled={cookiesSaving || !cookiesPasteInput.trim()}
+              class:flash-ok={flash.keys.has("cookies-save")}
             >
-              {cookiesSaving ? "儲存中…" : "儲存到認證管理員"}
+              {cookiesSaving
+                ? "儲存中…"
+                : flash.keys.has("cookies-save")
+                  ? "已儲存 ✓"
+                  : "儲存到認證管理員"}
             </button>
             <button onclick={toggleCookiesPaste} disabled={cookiesSaving}>
               取消
@@ -1592,8 +1712,14 @@
       </button>
       <button onclick={cancelScrape} disabled={!isScraping}>取消</button>
       {#if groups.length > 0}
-        <button onclick={copyVisible} disabled={isScraping || visibleMagnets === 0}>
-          複製可見磁力（{visibleMagnets}）
+        <button
+          onclick={copyVisible}
+          disabled={isScraping || visibleMagnets === 0}
+          class:flash-ok={flash.keys.has("magnet-copy-visible")}
+        >
+          {flash.keys.has("magnet-copy-visible")
+            ? "已複製 ✓"
+            : `複製可見磁力（${visibleMagnets}）`}
         </button>
         <button
           onclick={sendVisibleToRd}
@@ -1602,7 +1728,12 @@
         >
           送出目前可見 {visibleMagnets} 筆到 RD
         </button>
-        <button onclick={clearResults}>清空結果</button>
+        <button
+          onclick={clearResults}
+          class:flash-ok={flash.keys.has("scrape-clear")}
+        >
+          {flash.keys.has("scrape-clear") ? "已清空 ✓" : "清空結果"}
+        </button>
       {/if}
     </div>
     {#if groups.length > 0 && !rdHasToken}
@@ -1693,8 +1824,16 @@
     ></textarea>
 
     <div class="row">
-      <button onclick={registerPastedMagnets} disabled={isRegistering}>
-        {isRegistering ? "加入中…" : "加入結果清單"}
+      <button
+        onclick={registerPastedMagnets}
+        disabled={isRegistering}
+        class:flash-ok={flash.keys.has("magnet-register")}
+      >
+        {isRegistering
+          ? "加入中…"
+          : flash.keys.has("magnet-register")
+            ? "已加入 ✓"
+            : "加入結果清單"}
       </button>
       <span class="muted small">
         加入後可用下方「結果」區塊內的篩選 / 送 RD / 複製。
@@ -1794,8 +1933,11 @@
                         <td>
                           <button
                             onclick={() => copyOne(m.handle_id, m.name || g.result!.code)}
+                            class:flash-ok={flash.keys.has(`magnet-copy-${m.handle_id}`)}
                           >
-                            複製
+                            {flash.keys.has(`magnet-copy-${m.handle_id}`)
+                              ? "已複製 ✓"
+                              : "複製"}
                           </button>
                         </td>
                       </tr>
@@ -1818,17 +1960,20 @@
         <span class="ok">✓ 完成 {rdCompletedCount}</span>
         <span class="muted">⏳ 待處理 {rdPendingCount}</span>
         <span class="err">✗ 錯誤 {rdErrorCount}</span>
-        <span class="muted">直連：{rdDownloadLinkCount}</span>
+        <span class="muted">下載連結：{rdDownloadLinkCount}</span>
       </div>
       <div class="row">
         {#if isRdSending}
           <button onclick={cancelRdSend}>取消</button>
         {/if}
         <button
+          class:flash-ok={flash.keys.has("rd-bulk")}
           onclick={copyRdDownloads}
           disabled={isRdSending || rdDownloadLinkCount === 0}
         >
-          複製 {rdDownloadLinkCount} 條下載直連
+          {flash.keys.has("rd-bulk")
+            ? "已複製 ✓"
+            : `複製 ${rdDownloadLinkCount} 條下載連結`}
         </button>
         <span class="muted small">可貼到下載器，每行一個 URL</span>
       </div>
@@ -1860,14 +2005,52 @@
               </td>
               <td>
                 {#if row.status === "completed"}
+                  {@const rowLinks = collectDownloadLinksFromRow(row)}
+                  {#if rowLinks.length > 1}
+                    <div class="row-bulk-copy">
+                      <button
+                        class="small"
+                        class:flash-ok={flash.keys.has(`rd-row-${row.handle_id}`)}
+                        onclick={() => copyRdRow(row)}
+                      >
+                        {flash.keys.has(`rd-row-${row.handle_id}`)
+                          ? "已複製 ✓"
+                          : `複製此筆 ${rowLinks.length} 條`}
+                      </button>
+                    </div>
+                  {/if}
                   <ul class="links">
-                    {#each row.links as link}
-                      <li class="mono small">
-                        {link.filename}
-                        {#if link.filesize > 0}
-                          <span class="muted">
-                            （{(link.filesize / 1024 / 1024 / 1024).toFixed(2)} GB）
-                          </span>
+                    {#each row.links as link, i}
+                      <li class="link-item">
+                        <div class="link-meta mono small">
+                          {link.filename}
+                          {#if link.filesize > 0}
+                            <span class="muted">
+                              （{(link.filesize / 1024 / 1024 / 1024).toFixed(2)} GB）
+                            </span>
+                          {/if}
+                        </div>
+                        {#if link.download}
+                          <div class="link-row">
+                            <input
+                              type="text"
+                              class="link-url mono small"
+                              readonly
+                              value={link.download}
+                              onfocus={(e) => (e.currentTarget as HTMLInputElement).select()}
+                              onclick={(e) => (e.currentTarget as HTMLInputElement).select()}
+                            />
+                            <button
+                              class="small"
+                              class:flash-ok={flash.keys.has(`rd-link-${row.handle_id}-${i}`)}
+                              onclick={() => copyRdSingleLink(row.handle_id, link.download, i)}
+                              aria-label={`複製 ${link.filename} 的下載連結`}
+                            >
+                              {flash.keys.has(`rd-link-${row.handle_id}-${i}`)
+                                ? "已複製 ✓"
+                                : "複製"}
+                            </button>
+                          </div>
                         {/if}
                       </li>
                     {/each}
@@ -1908,11 +2091,19 @@
         {#if isRetryingPending}
           <button onclick={cancelRetry}>取消</button>
         {/if}
-        <button onclick={refreshPending} disabled={isRetryingPending}>
-          重讀本機紀錄
+        <button
+          onclick={refreshPending}
+          disabled={isRetryingPending}
+          class:flash-ok={flash.keys.has("pending-refresh")}
+        >
+          {flash.keys.has("pending-refresh") ? "已重讀 ✓" : "重讀本機紀錄"}
         </button>
-        <button onclick={clearAllPending} disabled={isRetryingPending}>
-          全部清空
+        <button
+          onclick={clearAllPending}
+          disabled={isRetryingPending}
+          class:flash-ok={flash.keys.has("pending-clear")}
+        >
+          {flash.keys.has("pending-clear") ? "已清空 ✓" : "全部清空"}
         </button>
       </div>
 
@@ -1998,15 +2189,31 @@
     color: var(--color-fg);
     cursor: pointer;
     font: inherit;
+    transition: transform 70ms ease, box-shadow 70ms ease, background-color 120ms ease;
   }
 
   button:hover:not(:disabled) {
     background: var(--color-button-bg-hover);
   }
 
+  button:active:not(:disabled) {
+    transform: translateY(1px);
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.18);
+  }
+
   button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  /* Brief post-copy confirmation: green tint + pulse. The button text
+     itself is swapped to "已X ✓" from script for ~1.2s — see flash controller.
+     Uses a translucent green so it reads correctly in both light + dark. */
+  button.flash-ok {
+    background: rgba(46, 204, 113, 0.22);
+    border-color: #2ecc71;
+    color: #2ecc71;
+    font-weight: 600;
   }
 
   .status,
@@ -2172,6 +2379,43 @@
     list-style: none;
     margin: 0;
     padding: 0;
+  }
+
+  .link-item {
+    margin-bottom: 0.5rem;
+  }
+
+  .link-item:last-child {
+    margin-bottom: 0;
+  }
+
+  .link-meta {
+    margin-bottom: 0.15rem;
+  }
+
+  .link-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .link-url {
+    flex: 1;
+    min-width: 0;
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-button-bg);
+    color: var(--color-fg);
+  }
+
+  .link-url:focus {
+    outline: 1px solid #2ecc71;
+    outline-offset: -1px;
+  }
+
+  .row-bulk-copy {
+    margin-bottom: 0.4rem;
   }
 
   .status-ok {
