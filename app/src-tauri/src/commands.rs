@@ -1504,6 +1504,53 @@ mod tests_cookies_e2e {
     }
 
     #[test]
+    fn goal_1_oversized_template_migrates_just_the_cookie_line() {
+        // Regression for the real-user bug: a cookies.txt that's the template
+        // scaffold + one real cookie line at the bottom is ~2.5 KiB total
+        // (the template's Chinese instructions alone are ~1.8 KiB). Windows
+        // Credential Manager rejects generic-credential blobs that large, so
+        // writing the raw file content fails — silently when launched from
+        // Explorer because stderr has nowhere to go. After the
+        // `extract_cookie_lines` filter, only the real cookie line is
+        // written, which is well within the Windows blob cap.
+        let _sb = KeyringSandbox::new();
+        let d = temp_dir();
+        let path = d.join(COOKIES_FILE_NAME);
+        let real_cookies =
+            "_jdb_session=regress_session; cf_clearance=regress_cf; locale=zh";
+        // Reproduce the structure the production template generator emits:
+        // a wall of `#`-prefixed comment lines, then the user's pasted line.
+        let mut bloat = String::new();
+        for i in 0..120 {
+            bloat.push_str(&format!(
+                "# line {i:03} 把你的 JavDB 登入 cookie 貼到本檔最後一行\n",
+            ));
+        }
+        bloat.push_str(real_cookies);
+        bloat.push('\n');
+        assert!(
+            bloat.len() > 1500,
+            "fixture must exceed the conservative Windows cap to exercise the bug",
+        );
+        fs::write(&path, &bloat).unwrap();
+
+        let migrated = crate::migrate_cookies_from_file(&path)
+            .expect("migration must succeed despite an oversized raw file");
+        assert_eq!(
+            migrated, real_cookies,
+            "migration must store only the cookie pairs, not the comments",
+        );
+        assert!(
+            !path.exists(),
+            "file must be removed after a successful migration",
+        );
+        let stored = crate::cookie_store::get_cookies()
+            .expect("keyring read")
+            .expect("keyring must hold the migrated cookie pairs");
+        assert_eq!(stored, real_cookies);
+    }
+
+    #[test]
     fn goal_1_template_only_file_leaves_keyring_untouched() {
         // Symmetric guarantee: a freshly-created template (no real cookies
         // yet) MUST NOT migrate. Otherwise users would lose their good

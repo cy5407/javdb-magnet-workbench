@@ -109,6 +109,31 @@ pub fn file_has_real_cookies(content: &str) -> bool {
         .any(|line| line.contains('='))
 }
 
+/// Pull the actual cookie pairs out of a cookies.txt that may also contain
+/// the template scaffold's comment headers.
+///
+/// Windows Credential Manager caps generic-credential blobs at roughly
+/// 2.5 KiB — a real-world cookies.txt with all of the template's Chinese
+/// instructions is ~2.5 KiB by itself, so writing the raw file content
+/// to the keyring deterministically fails on real user installs (silently,
+/// because `eprintln!` from a window-mode exe goes nowhere visible).
+/// We avoid the cliff entirely by storing ONLY the lines that look like
+/// cookie pairs (non-empty, non-comment, contains `=`), joined with the
+/// header-style `"; "` separator so `parse_cookie_string` on the sidecar
+/// side sees the same shape it would from a fresh `Cookie:` header paste.
+///
+/// Returns an empty string if no real cookie lines are present (caller
+/// should already have gated on [`file_has_real_cookies`], but the empty
+/// fallback keeps the contract clean).
+pub fn extract_cookie_lines(content: &str) -> String {
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#') && line.contains('='))
+        .collect::<Vec<&str>>()
+        .join("; ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,5 +196,55 @@ mod tests {
         assert!(check_cookies_format(&"a".repeat(COOKIES_MAX_BYTES)).is_ok());
         assert!(check_cookies_format("_jdb_session=abc; cf_clearance=xyz").is_ok());
         assert!(check_cookies_format("").is_ok()); // empty is "clear", not "invalid format"
+    }
+
+    #[test]
+    fn extract_cookie_lines_strips_template_comments() {
+        // The migration's job: a cookies.txt that's mostly the template
+        // scaffold's Chinese instructions PLUS one real cookie line at the
+        // bottom (~2.5 KiB total, over Windows Credential Manager's blob
+        // cap) must reduce down to just the cookie line that fits.
+        let real_paste = "_jdb_session=abc123; cf_clearance=xyz789; locale=zh";
+        let messy = format!(
+            "# JavDBMagnet cookies.txt\n\
+             # ====\n\
+             # 把你的 JavDB 登入 cookie 貼到本檔最後一行\n\
+             #\n\
+             # 範例 (不要直接貼這行):\n\
+             # _jdb_session=XXX; cf_clearance=XXX; locale=zh\n\
+             # === 在下面貼上你的 cookie 整行 ===\n\
+             \n\
+             {real_paste}\n",
+        );
+        assert_eq!(extract_cookie_lines(&messy), real_paste);
+        // And the extracted size is far below the Windows credential cap,
+        // even when the source file is well past it.
+        assert!(extract_cookie_lines(&messy).len() < 256);
+    }
+
+    #[test]
+    fn extract_cookie_lines_joins_multi_line_cookie_blocks() {
+        // A user who pastes one cookie per line (some browsers' "copy as
+        // cookies" output is structured this way) still produces a single
+        // semicolon-separated string the sidecar's parser understands.
+        let content = "_jdb_session=abc\ncf_clearance=xyz\nlocale=zh";
+        assert_eq!(
+            extract_cookie_lines(content),
+            "_jdb_session=abc; cf_clearance=xyz; locale=zh",
+        );
+    }
+
+    #[test]
+    fn extract_cookie_lines_template_only_yields_empty_string() {
+        // Symmetric with `file_has_real_cookies`: a freshly-created
+        // template (no edits yet) has zero real cookie lines, so the
+        // extraction is empty. Caller should never reach this branch in
+        // practice — `file_has_real_cookies` gates the migration first —
+        // but the empty-output contract keeps the function safe to use.
+        let template_only = "# JavDBMagnet cookies.txt\n\
+                             # ====\n\
+                             # _jdb_session=XXX; cf_clearance=XXX\n\
+                             # === 在下面貼上你的 cookie 整行 ===\n\n";
+        assert_eq!(extract_cookie_lines(template_only), "");
     }
 }

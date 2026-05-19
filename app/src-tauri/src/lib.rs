@@ -114,15 +114,27 @@ pub(crate) fn migrate_cookies_from_file(cookies_path: &std::path::Path) -> Optio
         // Leave it in place; nothing to migrate.
         return None;
     }
-    let trimmed = raw.trim().to_string();
+    // Pull just the cookie pairs out of the file — the template's Chinese
+    // comment header alone is ~2 KiB, and Windows Credential Manager caps
+    // generic-credential blobs around 2.5 KiB. Without this extraction step
+    // a real user install reproducibly fails the keyring write, silently
+    // leaves cookies.txt on disk, and the UI stays stuck in `"file"` state.
+    let extracted = cookie_store::extract_cookie_lines(&raw);
+    if extracted.is_empty() {
+        // Belt-and-suspenders: file_has_real_cookies should have caught
+        // this, but if a future refactor desyncs the two checks, refuse
+        // to write an empty string (which delete_cookies would treat as
+        // a clear gesture and wipe a previously-good entry).
+        return None;
+    }
 
-    if let Err(e) = cookie_store::set_cookies(&trimmed) {
+    if let Err(e) = cookie_store::set_cookies(&extracted) {
         eprintln!(
             "[handshake] keyring write for cookies failed ({e}); falling back to file"
         );
         // We still want the sidecar to function this session — return the
         // file value so JavDB fetch works while the user fixes the keyring.
-        return Some(trimmed);
+        return Some(extracted);
     }
 
     if let Err(e) = std::fs::remove_file(cookies_path) {
@@ -132,7 +144,7 @@ pub(crate) fn migrate_cookies_from_file(cookies_path: &std::path::Path) -> Optio
             "[handshake] cookies migrated to keyring but file delete failed: {e}"
         );
     }
-    Some(trimmed)
+    Some(extracted)
 }
 
 /// One-shot migration: pull `settings.rd.api_token` (legacy plaintext) into
