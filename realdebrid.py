@@ -47,6 +47,25 @@ class RealDebrid:
         self._log_torrent_info_summary(result)
         return result
 
+    _SENSITIVE_HEADERS = ("authorization", "proxy-authorization", "cookie")
+
+    @staticmethod
+    def _truncate(value, limit: int = 80) -> str:
+        s = str(value)
+        return s[:limit] + "..." if len(s) > limit else s
+
+    @staticmethod
+    def _redact_data_field(key: str, value) -> str:
+        return "<redacted>" if key == "magnet" else RealDebrid._truncate(value)
+
+    @staticmethod
+    def _redact_header_field(name: str, value) -> str:
+        # case-insensitive match; any header that authenticates the
+        # request gets fully redacted (don't even keep the prefix).
+        if name.lower() in RealDebrid._SENSITIVE_HEADERS:
+            return "<redacted>"
+        return RealDebrid._truncate(value)
+
     @staticmethod
     def _redact_log_kwargs(kwargs: dict) -> dict:
         """產生 debug log 用的 kwargs；magnet / Authorization 全遮蔽，其餘欄位 80 字截斷。
@@ -59,25 +78,9 @@ class RealDebrid:
         """
         log: dict = {}
         if "data" in kwargs:
-            log_data = {}
-            for k, v in kwargs["data"].items():
-                if k == "magnet":
-                    log_data[k] = "<redacted>"
-                    continue
-                s = str(v)
-                log_data[k] = (s[:80] + "...") if len(s) > 80 else s
-            log["data"] = log_data
+            log["data"] = {k: RealDebrid._redact_data_field(k, v) for k, v in kwargs["data"].items()}
         if "headers" in kwargs:
-            log_headers = {}
-            for k, v in kwargs["headers"].items():
-                # case-insensitive match; any header that authenticates the
-                # request gets fully redacted (don't even keep the prefix).
-                if k.lower() in ("authorization", "proxy-authorization", "cookie"):
-                    log_headers[k] = "<redacted>"
-                else:
-                    s = str(v)
-                    log_headers[k] = (s[:80] + "...") if len(s) > 80 else s
-            log["headers"] = log_headers
+            log["headers"] = {k: RealDebrid._redact_header_field(k, v) for k, v in kwargs["headers"].items()}
         return log
 
     def _retry_after_rate_limit(self, resp, method: str, path: str, retry_count: int, kwargs: dict):

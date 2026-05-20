@@ -7,11 +7,15 @@ from pathlib import Path
 errors: list[str] = []
 
 cargo = Path("app/src-tauri/Cargo.toml").read_text(encoding="utf-8")
-# All three features should be present in the keyring line
-keyring_line_pattern = re.compile(
-    r'^\s*keyring\s*=.*features\s*=\s*\[([^\]]*)\]', re.MULTILINE
+# All three features should be present in the keyring line. Parse line-by-line
+# instead of one big regex over the full file — keeps the inner pattern
+# bounded to a single line and avoids the .* + later-anchor shape that
+# SonarCloud flags as polynomial-backtracking (S5852).
+keyring_line = next(
+    (ln for ln in cargo.splitlines() if ln.lstrip().startswith("keyring")),
+    "",
 )
-m = keyring_line_pattern.search(cargo)
+m = re.search(r"features\s*=\s*\[([^\]]*)\]", keyring_line)
 if not m:
     errors.append("Cargo.toml: keyring features array not found")
 else:
