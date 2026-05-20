@@ -527,7 +527,8 @@ class App:
             if log_file is None or not log_file.exists():
                 messagebox.showinfo("日誌", "尚未產生日誌檔")
                 return
-            os.startfile(str(log_file))  # nosec B606 — intentional: open user's log with system default app
+            # intentional: open user's log with the system default app
+            os.startfile(str(log_file))  # nosec B606
         except Exception as e:
             logger.exception("無法開啟 log 檔")
             messagebox.showerror("日誌", f"無法開啟: {e}\n\n路徑: {log_file}")
@@ -1464,11 +1465,13 @@ def _setup_fonts(root: tk.Tk, base_size: int = 10):
         try:
             tkfont.nametofont(name).configure(family=ui_font, size=base_size)
         except Exception:
-            pass  # nosec B110 — Tk named font may not exist on this platform; fall back silently
+            # Tk named font may not exist on this platform; fall back silently.
+            pass  # nosec B110
     try:
         tkfont.nametofont("TkFixedFont").configure(family=mono_font, size=base_size)
     except Exception:
-        pass  # nosec B110 — same as above for the fixed-width font
+        # Same as above for the fixed-width font.
+        pass  # nosec B110
 
     return ui_font, mono_font, base_size
 
@@ -1482,7 +1485,8 @@ def _apply_ttk_font(root: tk.Tk, ui_font: str, base_size: int = 10):
         try:
             style.configure(s, font=(ui_font, base_size))
         except Exception:
-            pass  # nosec B110 — sv-ttk may not define every style; skip missing ones
+            # sv-ttk may not define every style; skip missing ones.
+            pass  # nosec B110
 
 
 if __name__ == "__main__":

@@ -501,7 +501,7 @@ UI_THEME="dark"
 UI_SCALE='1.5'
 RD_MIN_SIZE_MB=700
 "#;
-        let p = parse_env(&env);
+        let p = parse_env(env);
         assert_eq!(p.settings_patch["ui"]["theme"], json!("dark"));
         assert_eq!(p.settings_patch["ui"]["scale"], json!("1.5"));
         assert_eq!(p.settings_patch["rd"]["min_size_mb"], json!(700));
@@ -511,7 +511,7 @@ RD_MIN_SIZE_MB=700
     #[test]
     fn parse_env_warns_on_unknown_and_malformed() {
         let env = "WHATEVER=1\nbroken-line\nRD_FILE_PICK=smart\n";
-        let p = parse_env(&env);
+        let p = parse_env(env);
         assert!(p.warnings.iter().any(|w| w.contains("WHATEVER")));
         assert!(p.warnings.iter().any(|w| w.contains("malformed")));
         assert_eq!(p.settings_patch["rd"]["file_pick"], json!("smart"));

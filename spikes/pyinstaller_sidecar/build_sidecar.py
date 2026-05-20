@@ -18,7 +18,8 @@
 import importlib.metadata
 import re
 import shutil
-import subprocess  # nosec B404 — build script: all subprocess args are literal flags below
+# Build script: all subprocess invocations below use literal argv arrays.
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 
@@ -123,7 +124,8 @@ def build():
         "--hidden-import", "app_logging",
         str(ENTRY),
     ]
-    subprocess.check_call(cmd, cwd=REPO_ROOT)  # nosec B603 — cmd is a literal PyInstaller argv built in this file
+    # cmd is a literal PyInstaller argv built in this file (no user input).
+    subprocess.check_call(cmd, cwd=REPO_ROOT)  # nosec B603
 
 
 def post_build():

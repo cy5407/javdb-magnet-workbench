@@ -203,6 +203,10 @@ fn migrate_legacy_token(path_manager: &PathManager, settings_value: &Value) -> O
     Some(token)
 }
 
+// Test module is declared here (before `pub fn run()` at file end) because
+// the Tauri entry point conventionally sits last. Suppress the clippy lint
+// that prefers tests-at-bottom.
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod tests {
     use super::*;
