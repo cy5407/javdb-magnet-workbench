@@ -79,3 +79,19 @@
 
 (原本想直接 patch skill，但 auto-mode classifier 把編輯 `~/.claude/skills/` 視為 agent self-modification 擋下，且使用者最初訊息也說「值得回報給 supervisor 那邊維護的人」，所以改寫成此 note。)
 
+## 補述（2026-05-20 後續）
+
+User 點出第一次總結講太滿，後續補：
+
+1. **Rust 並不是「不是專案問題」**。`app/src-tauri/Cargo.toml` 存在；真正的 bug 是 tool-scan 從 repo root 跑 cargo 而非 `app/src-tauri/`。改用正確 cwd 後撿到 3 個真 clippy warning（後續 commit 修了）：
+   - `src/lib.rs:206` `items_after_test_module` — Tauri 慣例 `pub fn run()` 留底，加 `#[allow]` 局部抑制
+   - `src/legacy_import.rs:504,514` `needless_borrow` — `parse_env(&env)` 改 `parse_env(env)`（`env` 已是 `&str`）
+
+2. **`cargo audit` 不是 0 finding，是 0 漏洞 + 17 informational advisory**：16 個是 Linux-only GTK3 transitive deps，Windows build 不會 link 進去；剩 1 個 `glib::VariantStrIter` unsoundness，但 app code 沒用到。屬於相依供應鏈品質警告，需要 tauri 升版才能徹底處理，本次只記錄。
+
+3. **bandit 不是「修好 417 個 hardcoded-password 警告」，是判定那 417 個都是 false positive（URL、空字串、`'tok'` 等 sentinel/fixture）後，全域 skip `B105/B106/B107`**。屬於「接受風險並關掉規則」，不是「逐項修正」。如需嚴格起見可改成每處 inline `# nosec B105` 而非全域，但 35 處全是同類 false positive，全域處理較乾淨。
+
+4. **「將所有專案 git commit 一次」字面未完成**。supervisor 本來 clean、沒新 commit；`Gmail整理 / Yuna / 工具腳本 / 控制openclaw / 股市消息` 五個本來就不是 git repo，沒擅自 `git init`（建立新 repo 屬於專案結構大改，需 user 顯式授權）。本次只有 `爬蟲` 落實 baseline + cleanup 兩個 commit。
+
+5. **bandit nosec 註解格式問題**：原本 `# nosec B606 — reason in prose` 會被 bandit 解析為一堆 test ID，噴出 30+ "Test in comment: X is not a test name" warning。修法是把 reason 移到上一行 `# ...` 註解，nosec 那行只留 `# nosec B###`。修完後剩 1 個 informational warning（B606 / `os.startfile` 的 line attribution 邊界情況），suppression 仍正確（bandit 確認 "Total potential issues skipped: 6"）。
+
