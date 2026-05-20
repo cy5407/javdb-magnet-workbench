@@ -144,7 +144,8 @@ export function sortRows(
       cmp = a.name.localeCompare(b.name);
     } else if (column === "tags") {
       cmp = a.tags.join(",").localeCompare(b.tags.join(","));
-    } else if (column === "date") {
+    } else {
+      // SortColumn type ensures the remaining value is "date".
       cmp = a.date.localeCompare(b.date);
     }
     return cmp * dir;

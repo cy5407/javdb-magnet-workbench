@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import IO, Any
 
 ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
+if str(ROOT) not in sys.path:  # pragma: no cover — module-init path tweak, runs once on import
     sys.path.insert(0, str(ROOT))
 
 # Daemon-boundary responsibility: ensure stdout speaks UTF-8 even when the
@@ -886,5 +886,5 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover — script entry guard
     sys.exit(main(sys.argv))

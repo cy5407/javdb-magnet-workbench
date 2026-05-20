@@ -262,6 +262,19 @@ describe("retryPending", () => {
     }
   });
 
+  it("stringifies non-Error throws via String(e)", async () => {
+    const fetcher = vi.fn(async () => {
+      // Bypass the e.message branch by throwing a plain string.
+      throw "raw-rejection";
+    });
+    const events: RdRetryEvent[] = [];
+    await retryPending([entry("A")], (ev) => events.push(ev), { fetcher });
+    expect(events[0].result.kind).toBe("error");
+    if (events[0].result.kind === "error") {
+      expect(events[0].result.error_code).toBe("raw-rejection");
+    }
+  });
+
   it("passes saved strategy to fetcher", async () => {
     const fetcher = vi.fn(
       async (id: string, strategy?: string): Promise<RdCheckOutcome> => ({

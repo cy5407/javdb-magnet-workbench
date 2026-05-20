@@ -89,6 +89,8 @@ export interface ScrapeOptions {
   fetcher?: (url: string) => Promise<FetchResult>;
 }
 
+// Production wrapper around Tauri invoke; unit tests always inject a fake fetcher.
+/* c8 ignore next 2 */
 const defaultFetcher = (url: string): Promise<FetchResult> =>
   invoke<FetchResult>("fetch_javdb", { url });
 

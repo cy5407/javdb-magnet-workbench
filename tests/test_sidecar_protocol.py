@@ -506,6 +506,39 @@ class FetchJavdb(unittest.TestCase):
         # Message must not echo the raised exception text
         self.assertNotIn("secret-leak", resp["error"]["message"])
 
+    def test_is_javdb_host_empty_returns_false(self):
+        # Empty / None hostnames (urlparse on a malformed URL) must be
+        # rejected — never matched against the allowlist.
+        self.assertFalse(sd._is_javdb_host(""))
+
+    def test_fetch_malformed_url_rejected(self):
+        # urllib.parse.urlparse raises ValueError on certain IPv6-like
+        # inputs ("https://["). The handler must convert that into a
+        # bad_request error envelope, not let it bubble up.
+        with mock.patch.object(sd.urllib.parse, "urlparse",
+                               side_effect=ValueError("malformed")):
+            resp = _call(self.state, {"cmd": "fetch_javdb", "request_id": "r1",
+                                      "url": "https://[/v/x"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_fetch_non_403_network_error_passes_through(self):
+        # Errors that don't contain "403" map to the generic network
+        # error code, not cloudflare_block.
+        with mock.patch.object(sd, "create_session",
+                               return_value=(mock.MagicMock(), "mock_engine")), \
+             mock.patch.object(sd, "fetch_magnets") as mock_fetch:
+            mock_fetch.return_value = {
+                "url": "https://javdb.com/v/x",
+                "code": "", "title": "", "error": "HTTP 500 server error",
+                "magnets": [],
+            }
+            resp = _call(self.state, {"cmd": "fetch_javdb", "request_id": "r1",
+                                      "url": "https://javdb.com/v/x"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "network")
+        self.assertIn("HTTP 500", resp["error"]["message"])
+
 
 # ---------------------------------------------------------------------------
 # resolve_magnet / resolve_magnets / forget_magnets
@@ -563,6 +596,19 @@ class ResolveMagnetsPlural(unittest.TestCase):
                                   "handle_ids": "not-a-list"})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_non_string_handle_id_becomes_unknown(self):
+        # If the caller passes a non-string entry (e.g. accidentally an int)
+        # it's coerced to str and reported as unknown — never crashes.
+        resp = _call(self.state, {
+            "cmd": "resolve_magnets", "request_id": "r1",
+            "handle_ids": ["h-1", 42, None, "h-2"],
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(len(resp["magnets"]), 2)
+        # Both non-string entries surface in "unknown" as their str() form.
+        self.assertIn("42", resp["unknown"])
+        self.assertIn("None", resp["unknown"])
 
 
 class ForgetMagnets(unittest.TestCase):
@@ -1526,6 +1572,18 @@ class RegisterMagnets(unittest.TestCase):
         self.assertFalse(second["registered"][0]["deduped"])
         # New handle, distinct from the forgotten one.
         self.assertNotEqual(h_first, h_second)
+
+
+class MainCli(unittest.TestCase):
+    """Cover the argparse + setup_logging + run_daemon wire-up in main()."""
+
+    def test_main_invokes_setup_and_daemon_and_returns_zero(self):
+        with mock.patch.object(sd, "run_daemon") as run_daemon, \
+             mock.patch("app_logging.setup_logging") as setup_logging:
+            rc = sd.main(["sidecar.py", "--daemon"])
+        self.assertEqual(rc, 0)
+        setup_logging.assert_called_once()
+        run_daemon.assert_called_once()
 
 
 if __name__ == "__main__":

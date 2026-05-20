@@ -22,7 +22,7 @@ from pathlib import Path
 
 def app_dir() -> Path:
     """Application install directory (next to the .exe when frozen, else next to source)."""
-    if getattr(sys, "frozen", False):
+    if getattr(sys, "frozen", False):  # pragma: no cover — PyInstaller-only branch
         return Path(sys.executable).parent
     return Path(__file__).parent
 

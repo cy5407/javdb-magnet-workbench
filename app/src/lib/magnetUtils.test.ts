@@ -283,3 +283,73 @@ describe("dedupeByHandleId", () => {
     expect(dedupeByHandleId(rows).map((r) => r.handle_id)).toEqual(["c", "a", "b"]);
   });
 });
+
+describe("coverage gap fillers", () => {
+  // matchesKeyword: keyword found in `size` (not in name/date/tags).
+  it("matchesKeyword finds needle in size", () => {
+    const r = row({ name: "ABC-123", size: "5.67GB, 5個文件", tags: ["x"], date: "2026-01-01" });
+    expect(matchesKeyword(r, "GB")).toBe(true);
+  });
+
+  // filterRows: keyword that matches NO row gets dropped (false branch on L68).
+  it("filterRows drops rows that don't match keyword", () => {
+    const r1 = row({ name: "ABC-001", handle_id: "h1" });
+    const r2 = row({ name: "XYZ-999", handle_id: "h2" });
+    const out = filterRows([r1, r2], { ...defaultFilterState, keyword: "XYZ" });
+    expect(out.map((r) => r.handle_id)).toEqual(["h2"]);
+  });
+
+  // applyGroupPick "smallest": reduce path picks the row with the lowest size.
+  // Order matters — start with the largest so the `<` branch fires twice.
+  it("applyGroupPick smallest returns the smallest row", () => {
+    const big = row({ handle_id: "big", size: "5GB, 5個文件" });
+    const mid = row({ handle_id: "mid", size: "3GB, 3個文件" });
+    const small = row({ handle_id: "small", size: "1GB, 1個文件" });
+    const out = applyGroupPick([big, mid, small], "smallest" as GroupPick);
+    expect(out).toHaveLength(1);
+    expect(out[0].handle_id).toBe("small");
+  });
+
+  // applyGroupPick "fewest_files": non-tie path → pick row with strictly fewer files.
+  it("applyGroupPick fewest_files picks by file count when not tied", () => {
+    const many = row({ handle_id: "many", size: "1GB, 10個文件" });
+    const few = row({ handle_id: "few", size: "1GB, 2個文件" });
+    const out = applyGroupPick([many, few], "fewest_files" as GroupPick);
+    expect(out).toHaveLength(1);
+    expect(out[0].handle_id).toBe("few");
+  });
+
+  // applyGroupPick "fewest_files": file-count tie → break on size (prefer larger).
+  it("applyGroupPick fewest_files breaks ties by larger size", () => {
+    const small = row({ handle_id: "small", size: "1GB, 3個文件" });
+    const large = row({ handle_id: "large", size: "10GB, 3個文件" });
+    const out = applyGroupPick([small, large], "fewest_files" as GroupPick);
+    expect(out).toHaveLength(1);
+    expect(out[0].handle_id).toBe("large");
+  });
+
+  // sortRows "tags" column joins tags with comma and compares.
+  it("sortRows orders by tags string", () => {
+    const a = row({ handle_id: "a", tags: ["b-tag"] });
+    const b = row({ handle_id: "b", tags: ["a-tag"] });
+    const sorted = sortRows([a, b], "tags", "asc");
+    expect(sorted.map((r) => r.handle_id)).toEqual(["b", "a"]);
+  });
+
+  // sortRows "date" column branch.
+  it("sortRows orders by date string", () => {
+    const a = row({ handle_id: "a", date: "2026-05-01" });
+    const b = row({ handle_id: "b", date: "2026-01-15" });
+    const sorted = sortRows([a, b], "date", "asc");
+    expect(sorted.map((r) => r.handle_id)).toEqual(["b", "a"]);
+  });
+
+  // sortRows "code" column shares the name-compare branch with "name" but
+  // exercises a different SortColumn discriminant.
+  it("sortRows orders by code (same path as name)", () => {
+    const a = row({ handle_id: "a", name: "ZZZ-999" });
+    const b = row({ handle_id: "b", name: "AAA-111" });
+    const sorted = sortRows([a, b], "code", "asc");
+    expect(sorted.map((r) => r.handle_id)).toEqual(["b", "a"]);
+  });
+});

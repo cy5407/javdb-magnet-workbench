@@ -225,5 +225,43 @@ class JavdbGuiImportSideEffects(unittest.TestCase):
         self.assertIsNone(app_logging.get_log_file())
 
 
+class FileHandlerOSErrorFallback(unittest.TestCase):
+    """When RotatingFileHandler raises OSError, setup_logging falls back to
+    console-only without crashing. Exercises the 'attach handler returned
+    False' path that fires after a directory was chosen.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        os.environ["JAVDB_LOG_DIR"] = self._tmp
+        # Reset module so setup_logging() actually runs.
+        sys.modules.pop("app_logging", None)
+
+    def tearDown(self):
+        os.environ.pop("JAVDB_LOG_DIR", None)
+        _detach_file_handlers()
+        sys.modules.pop("app_logging", None)
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_oserror_on_handler_open_degrades_to_console_only(self):
+        from unittest.mock import patch
+
+        app_logging = _force_reimport("app_logging")
+        with patch(
+            "app_logging.RotatingFileHandler",
+            side_effect=OSError("simulated open failure"),
+        ):
+            resolved = app_logging.setup_logging()
+        # Path is still computed via the fallback; module shouldn't have raised.
+        self.assertIsInstance(resolved, Path)
+        # No file handler attached on the root logger.
+        root = logging.getLogger()
+        self.assertFalse(
+            any(isinstance(h, logging.FileHandler) for h in root.handlers),
+            "expected console-only fallback, but a FileHandler was attached",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

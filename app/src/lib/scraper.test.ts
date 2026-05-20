@@ -258,4 +258,29 @@ describe("scrapeBatch", () => {
     expect(out[0].status).toBe("ok");
     expect(out[1].status).toBe("ok");
   });
+
+  // Cover the `?? defaultFetcher` / `?? [DELAY...]` / `?? [RETRY...]` right-hand
+  // sides in resolveScrapeOptions. With urls=[] the default fetcher is never
+  // actually invoked (no Tauri runtime needed in vitest), but the option
+  // resolution branch is exercised.
+  it("uses default fetcher/delays/retry when options are omitted", async () => {
+    const out = await scrapeBatch([], () => {});
+    expect(out).toEqual([]);
+  });
+
+  // Cover the catch branch `e instanceof Error ? e.message : String(e)` — the
+  // String(e) side fires only when something non-Error is thrown.
+  it("stringifies non-Error throws in fetcher", async () => {
+    const fetcher = vi.fn(async () => {
+      // Throwing a plain string is legal but bypasses the Error path.
+      throw "raw-string-failure";
+    });
+    const out = await scrapeBatch(
+      ["https://javdb.com/v/A"],
+      () => {},
+      { sleep: noSleep, fetcher, delayRange: [0, 0], retryWaitRange: [0, 0] },
+    );
+    expect(out[0].status).toBe("error");
+    expect(out[0].error).toBe("raw-string-failure");
+  });
 });

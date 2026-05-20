@@ -1,3 +1,15 @@
+[tool.coverage.run]
+# One-shot audit verify scripts are not application code; nothing imports
+# them, so they always show 0% coverage and skew the project metric on
+# SonarCloud. Legacy / spike code is similarly excluded at the Sonar
+# layer (sonar.exclusions), but coverage.py needs an omit entry to keep
+# them out of the coverage.xml report it emits to Sonar.
+omit = [
+    "output/*",
+    "legacy/*",
+    "spikes/*",
+]
+
 [tool.bandit]
 # bandit matches exclude_dirs as a plain substring against the full path
 # (no glob, no regex). Each entry must be unique enough that it can't

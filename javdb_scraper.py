@@ -17,7 +17,7 @@ import re
 try:
     from curl_cffi import requests as cffi_requests
     HAS_CURL_CFFI = True
-except ImportError:
+except ImportError:  # pragma: no cover — env-dependent fallback (curl_cffi missing)
     cffi_requests = None
     HAS_CURL_CFFI = False
 

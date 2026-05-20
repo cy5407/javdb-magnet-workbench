@@ -188,5 +188,54 @@ class RedactsAuthHeadersInDebugLog(unittest.TestCase):
         self.assertEqual(RealDebrid._redact_log_kwargs({"timeout": 30}), {})
 
 
+class LogTorrentInfoSummaryTests(unittest.TestCase):
+    """Cover the debug-only summary emitted after torrent_info responses."""
+
+    def test_dict_without_files_key_does_not_log(self):
+        logger = logging.getLogger("realdebrid")
+        capture = _CaptureHandler()
+        logger.addHandler(capture)
+        try:
+            RealDebrid._log_torrent_info_summary({"status": "downloaded"})
+        finally:
+            logger.removeHandler(capture)
+        self.assertEqual(capture.records, [])
+
+    def test_non_dict_input_does_not_log(self):
+        logger = logging.getLogger("realdebrid")
+        capture = _CaptureHandler()
+        logger.addHandler(capture)
+        try:
+            RealDebrid._log_torrent_info_summary("not-a-dict")
+        finally:
+            logger.removeHandler(capture)
+        self.assertEqual(capture.records, [])
+
+    def test_dict_with_files_logs_status_progress_files_links(self):
+        logger = logging.getLogger("realdebrid")
+        prev_level = logger.level
+        logger.setLevel(logging.DEBUG)
+        capture = _CaptureHandler()
+        capture.setLevel(logging.DEBUG)
+        capture.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(capture)
+        try:
+            RealDebrid._log_torrent_info_summary({
+                "status": "downloaded",
+                "progress": 100,
+                "files": [{"id": 1}, {"id": 2}],
+                "links": ["https://example/dl/1"],
+            })
+        finally:
+            logger.removeHandler(capture)
+            logger.setLevel(prev_level)
+        self.assertEqual(len(capture.records), 1)
+        msg = capture.records[0]
+        self.assertIn("status=downloaded", msg)
+        self.assertIn("progress=100", msg)
+        self.assertIn("files=2", msg)
+        self.assertIn("links=1", msg)
+
+
 if __name__ == "__main__":
     unittest.main()

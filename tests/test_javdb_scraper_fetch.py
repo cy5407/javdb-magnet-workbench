@@ -193,5 +193,41 @@ class FetchMagnetsEdgeCases(unittest.TestCase):
         self.assertTrue(m["magnet"].startswith("magnet:?xt=urn:btih:CAFEBABE"))
 
 
+class CreateSessionTests(unittest.TestCase):
+    """Cover the create_session factory — header set + engine label."""
+
+    def test_returns_session_and_engine_label(self):
+        from javdb_scraper import create_session
+
+        session, engine = create_session()
+        # Engine is one of two known labels depending on curl_cffi availability.
+        self.assertIn(engine, ("curl_cffi", "requests"))
+        # Either branch sets browser-like Accept-Language; if it falls back to
+        # requests it also sets a User-Agent.
+        if engine == "requests":
+            self.assertIn("User-Agent", session.headers)
+            self.assertIn("Chrome", session.headers["User-Agent"])
+        # Common headers are present regardless of engine.
+        self.assertIn("Accept-Language", session.headers)
+        self.assertIn("zh-TW", session.headers["Accept-Language"])
+
+    def test_falls_back_to_requests_when_curl_cffi_missing(self):
+        # When curl_cffi isn't importable (e.g. minimal CI image), the
+        # factory must still return a usable session via stdlib `requests`.
+        # Patch the module flag to simulate the missing-extension branch.
+        import javdb_scraper as js
+
+        with mock.patch.object(js, "HAS_CURL_CFFI", False):
+            session, engine = js.create_session()
+        self.assertEqual(engine, "requests")
+        self.assertIn("User-Agent", session.headers)
+        self.assertIn("Chrome", session.headers["User-Agent"])
+        # Common headers still set in this branch.
+        self.assertIn("Accept-Language", session.headers)
+        self.assertEqual(
+            session.headers["Accept-Encoding"], "gzip, deflate, br"
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
