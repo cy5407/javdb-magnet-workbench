@@ -1,0 +1,18 @@
+[tool.bandit]
+# bandit matches exclude_dirs as a plain substring against the full path
+# (no glob, no regex). Each entry must be unique enough that it can't
+# accidentally hit a real source file — e.g. "build" would match
+# spikes/pyinstaller_sidecar/build_sidecar.py.
+exclude_dirs = [
+    ".claude",
+    ".venv",
+    "venv",
+    ".cargo-check-target",
+    "__pycache__",
+    "node_modules",
+]
+# Token strings flagged as hardcoded passwords (B105/B106/B107) are noise here:
+# tests use fixed fake tokens, sidecar protocol uses literal "rd_no_token" /
+# "RD token not configured" sentinel strings, legacy GUI embeds the
+# real-debrid.com/apitoken URL.
+skips = ["B105", "B106", "B107"]

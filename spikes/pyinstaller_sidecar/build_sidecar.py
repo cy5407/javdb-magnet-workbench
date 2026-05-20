@@ -18,7 +18,7 @@
 import importlib.metadata
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404 — build script: all subprocess args are literal flags below
 import sys
 from pathlib import Path
 
@@ -123,7 +123,7 @@ def build():
         "--hidden-import", "app_logging",
         str(ENTRY),
     ]
-    subprocess.check_call(cmd, cwd=REPO_ROOT)
+    subprocess.check_call(cmd, cwd=REPO_ROOT)  # nosec B603 — cmd is a literal PyInstaller argv built in this file
 
 
 def post_build():
@@ -134,15 +134,15 @@ def post_build():
     size_mb = exe.stat().st_size / 1024 / 1024
     print(f"\n✅ Build complete: {exe}", file=sys.stderr)
     print(f"   Size: {size_mb:.1f} MB", file=sys.stderr)
-    print(f"\nUsage (M3 daemon):", file=sys.stderr)
-    print(f"  Tauri spawns this exe as an externalBin sidecar; the daemon", file=sys.stderr)
-    print(f"  reads JSON-line commands from stdin and writes responses to", file=sys.stderr)
-    print(f"  stdout. See docs/superpowers/specs/2026-05-10-tauri-rewrite-design.md §5.", file=sys.stderr)
-    print(f"\nLog destination:", file=sys.stderr)
-    print(f"  Set $env:JAVDB_LOG_DIR or rely on the "
-          f"%LOCALAPPDATA%\\JavDBMagnet\\logs fallback.", file=sys.stderr)
-    print(f"\nBinary placement:", file=sys.stderr)
-    print(f"  This output IS the Tauri externalBin path:", file=sys.stderr)
+    print("\nUsage (M3 daemon):", file=sys.stderr)
+    print("  Tauri spawns this exe as an externalBin sidecar; the daemon", file=sys.stderr)
+    print("  reads JSON-line commands from stdin and writes responses to", file=sys.stderr)
+    print("  stdout. See docs/superpowers/specs/2026-05-10-tauri-rewrite-design.md §5.", file=sys.stderr)
+    print("\nLog destination:", file=sys.stderr)
+    print("  Set $env:JAVDB_LOG_DIR or rely on the "
+          "%LOCALAPPDATA%\\JavDBMagnet\\logs fallback.", file=sys.stderr)
+    print("\nBinary placement:", file=sys.stderr)
+    print("  This output IS the Tauri externalBin path:", file=sys.stderr)
     print(f"    {exe}", file=sys.stderr)
 
 
