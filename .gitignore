@@ -9,6 +9,7 @@ cookies.txt
 pending_torrents.json
 logs/
 magnet.txt
+output/tool-scan/
 
 # Python
 __pycache__/
