@@ -730,6 +730,8 @@ def cmd_rd_check_pending(state: DaemonState, req: dict) -> dict:
     caller-side pending records DO NOT store the magnet (per security model).
     """
     from realdebrid import RealDebridError
+    if not state.handshake_done:
+        return _err(req, "bad_request", "handshake required before rd_check_pending")
     if not state.rd_token:
         return _err(req, _RD_ERR_NO_TOKEN, _RD_NO_TOKEN_MSG)
     torrent_id = req.get("torrent_id")

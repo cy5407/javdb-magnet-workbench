@@ -1213,6 +1213,7 @@ class RdSendMagnet(unittest.TestCase):
 class RdCheckPending(unittest.TestCase):
     def test_no_token(self):
         state = sd.DaemonState()
+        state.handshake_done = True
         state.rd_token = ""
         resp = _call(state, {"cmd": "rd_check_pending", "request_id": "r",
                               "torrent_id": "ABC"})

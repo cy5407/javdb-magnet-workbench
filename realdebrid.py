@@ -148,8 +148,8 @@ class RealDebrid:
     def delete_torrent(self, torrent_id: str):
         try:
             self._request("DELETE", f"/torrents/delete/{torrent_id}")
-        except RealDebridError:
-            pass
+        except RealDebridError as e:
+            logger.warning(f"delete_torrent 清理失敗: {torrent_id} - {e}")
 
     def unrestrict_link(self, link: str) -> dict:
         return self._request("POST", "/unrestrict/link", data={"link": link})
@@ -446,7 +446,7 @@ class RealDebrid:
                     "filesize": unrestricted.get("filesize", 0),
                     "streamable": unrestricted.get("streamable", 0),
                 })
-                logger.info(f"  ✓ {unrestricted.get('filename', '')} → {unrestricted.get('download', '')}")
+                logger.info(f"  ✓ {unrestricted.get('filename', '')} ({unrestricted.get('filesize', 0)} bytes)")
             except RealDebridError as e:
                 logger.warning(f"  ✗ unrestrict 失敗: {link} - {e}")
                 results.append({"original": link, "error": str(e)})
