@@ -139,6 +139,82 @@ class RequestStatusBranches(unittest.TestCase):
                 self.rd._request("GET", "/anything")
         self.assertIn("502", str(cm.exception))
 
+    def test_non_ok_html_text_not_echoed_in_user_message(self):
+        # SEC-py-rd-01: when RD returns non-JSON (e.g. an HTML error page from
+        # an upstream proxy), the response text MUST NOT bleed into the user-
+        # visible RealDebridError message — that text reaches the IPC error
+        # envelope and would be a log/XSS vector. Fall back to a generic
+        # "API error" string instead.
+        bad = mock.MagicMock()
+        bad.status_code = 502
+        bad.ok = False
+        bad.headers = {}
+        bad.content = b"<html>bad gateway</html>"
+        bad.text = "<html>bad gateway</html>"
+        bad.json.side_effect = ValueError("not json")
+        with mock.patch.object(self.rd.session, "request", return_value=bad):
+            with self.assertRaises(RealDebridError) as cm:
+                self.rd._request("GET", "/anything")
+        msg = str(cm.exception)
+        self.assertIn("502", msg)
+        self.assertNotIn("<html>", msg)
+        self.assertNotIn("bad gateway", msg)
+        self.assertIn("API error", msg)
+
+    def test_oversized_json_error_truncated_to_80_chars(self):
+        # SEC-py-rd-01: even when RD returns a typed json["error"] string,
+        # bound it to 80 chars before placing it in the user-visible message —
+        # an unbounded server-controlled string in the error envelope is a
+        # log-spam / DoS vector.
+        bad = _resp(500,
+                    json_body={"error": "x" * 500},
+                    content=b'{"error":"' + b"x" * 500 + b'"}')
+        with mock.patch.object(self.rd.session, "request", return_value=bad):
+            with self.assertRaises(RealDebridError) as cm:
+                self.rd._request("GET", "/x")
+        msg = str(cm.exception)
+        self.assertIn("500", msg)
+        # Format is "HTTP <code>: <msg>"; the <msg> chunk must be exactly
+        # 80 'x' characters (bounded by the slice).
+        payload = msg.split(": ", 1)[1]
+        self.assertEqual(payload, "x" * 80)
+        self.assertEqual(len(payload), 80)
+
+    def test_3xx_response_rejected_as_redirect(self):
+        # With allow_redirects=False on the request layer, any 3xx that
+        # surfaces is an unexpected upstream redirect — treat it as an error
+        # rather than silently following or returning success.
+        redirect = mock.MagicMock()
+        redirect.status_code = 301
+        # requests.Response.ok is True for 301 (since it's < 400); the guard
+        # must fire before the ok-fast-path runs.
+        redirect.ok = True
+        redirect.headers = {"Location": "https://evil.example/"}
+        redirect.content = b""
+        redirect.json.return_value = {}
+        redirect.text = ""
+        with mock.patch.object(self.rd.session, "request", return_value=redirect):
+            with self.assertRaises(RealDebridError) as cm:
+                self.rd._request("GET", "/x")
+        msg = str(cm.exception)
+        self.assertIn("301", msg)
+        self.assertIn("redirect", msg.lower())
+
+    def test_request_passes_allow_redirects_false(self):
+        # Defense-in-depth: the underlying session.request call must opt out
+        # of redirect-following so Authorization can't be auto-replayed to a
+        # rogue Location host. (requests strips Authorization on cross-host
+        # redirects, but we don't want to depend on that.)
+        captured: dict = {}
+
+        def _capture(*args, **kwargs):
+            captured.update(kwargs)
+            return _resp(200, json_body={}, content=b"{}")
+
+        with mock.patch.object(self.rd.session, "request", side_effect=_capture):
+            self.rd._request("GET", "/x")
+        self.assertIs(captured.get("allow_redirects"), False)
+
     def test_204_returns_none(self):
         # No body — selectFiles and deleteTorrent return 204 No Content.
         nobody = mock.MagicMock()

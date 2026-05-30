@@ -33,7 +33,7 @@ class RealDebrid:
         url = f"{API_BASE}{path}"
         logger.debug(f"→ {method} {path} {self._redact_log_kwargs(kwargs)}")
 
-        resp = self.session.request(method, url, timeout=30, **kwargs)
+        resp = self.session.request(method, url, timeout=30, allow_redirects=False, **kwargs)
         logger.debug(f"← HTTP {resp.status_code} ({len(resp.content)} bytes)")
 
         if resp.status_code == 429:
@@ -102,12 +102,22 @@ class RealDebrid:
         if resp.status_code == 403:
             logger.error("帳號權限不足")
             raise RealDebridError("帳號權限不足（需要 Premium 會員）")
+        if 300 <= resp.status_code < 400:
+            logger.error(f"HTTP {resp.status_code}: unexpected redirect")
+            raise RealDebridError(f"HTTP {resp.status_code}: unexpected redirect")
         if resp.ok:
             return
+        msg = None
         try:
-            msg = resp.json().get("error", resp.text)
+            body = resp.json()
+            if isinstance(body, dict):
+                err = body.get("error")
+                if isinstance(err, str) and err:
+                    msg = err[:80]
         except Exception:
-            msg = resp.text
+            pass
+        if msg is None:
+            msg = "API error"
         logger.error(f"HTTP {resp.status_code}: {msg}")
         raise RealDebridError(f"HTTP {resp.status_code}: {msg}")
 

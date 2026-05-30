@@ -1575,6 +1575,78 @@ class RegisterMagnets(unittest.TestCase):
         self.assertNotEqual(h_first, h_second)
 
 
+class RegisterMagnetLimits(unittest.TestCase):
+    def _state(self):
+        s = sd.DaemonState()
+        s.handshake_done = True   # not strictly required by register_magnets but mirror the realistic state
+        return s
+
+    def test_rejects_too_many_magnets(self):
+        state = self._state()
+        payload = ["magnet:?xt=urn:btih:abc"] * (sd.MAX_REGISTER_MAGNETS + 1)
+        resp = sd.cmd_register_magnets(state, {"request_id": "r", "magnets": payload})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+        self.assertEqual(len(state.magnets), 0)
+
+    def test_drops_oversized_uri_to_invalid(self):
+        state = self._state()
+        long_uri = "magnet:?xt=urn:btih:abc&dn=" + "x" * (sd.MAX_MAGNET_URI_LEN + 10)
+        resp = sd.cmd_register_magnets(state, {"request_id": "r",
+                                               "magnets": [long_uri, "magnet:?xt=urn:btih:def"]})
+        self.assertTrue(resp["ok"])
+        # The good one registers; the long one lands in invalid (possibly truncated)
+        self.assertEqual(len(resp["registered"]), 1)
+        self.assertEqual(len(resp["invalid"]), 1)
+        # Invalid entry should be bounded — never echo the full attacker string
+        self.assertLessEqual(len(resp["invalid"][0]), 64)
+
+
+class FetchJavdbLimits(unittest.TestCase):
+    def _state(self):
+        s = sd.DaemonState()
+        s.handshake_done = True
+        return s
+
+    def test_caps_returned_magnets_to_max_fetch(self):
+        state = self._state()
+        n = sd.MAX_FETCH_MAGNETS + 50
+        magnets = [{"magnet": f"magnet:?xt=urn:btih:{i:040x}",
+                    "name": "", "size": "", "tags": [], "date": ""}
+                   for i in range(n)]
+        fake_result = {"url": "https://javdb.com/v/x", "code": "", "title": "",
+                       "magnets": magnets, "error": ""}
+        with mock.patch.object(sd, "fetch_magnets", return_value=fake_result), \
+             mock.patch.object(sd, "create_session",
+                               return_value=(mock.MagicMock(), "requests")):
+            resp = sd.cmd_fetch_javdb(state, {"request_id": "r",
+                                              "url": "https://javdb.com/v/x"})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["result"]["magnet_count"], sd.MAX_FETCH_MAGNETS)
+        self.assertEqual(len(state.magnets), sd.MAX_FETCH_MAGNETS)
+
+    def test_drops_oversized_uri_from_page(self):
+        state = self._state()
+        short = "magnet:?xt=urn:btih:" + "a" * 40
+        long_ = "magnet:?xt=urn:btih:" + "a" * 40 + "&dn=" + "y" * (sd.MAX_MAGNET_URI_LEN + 100)
+        magnets = [
+            {"magnet": short, "name": "ok", "size": "", "tags": [], "date": ""},
+            {"magnet": long_, "name": "evil", "size": "", "tags": [], "date": ""},
+        ]
+        fake_result = {"url": "https://javdb.com/v/x", "code": "", "title": "",
+                       "magnets": magnets, "error": ""}
+        with mock.patch.object(sd, "fetch_magnets", return_value=fake_result), \
+             mock.patch.object(sd, "create_session",
+                               return_value=(mock.MagicMock(), "requests")):
+            resp = sd.cmd_fetch_javdb(state, {"request_id": "r",
+                                              "url": "https://javdb.com/v/x"})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["result"]["magnet_count"], 1)
+        # state should hold only the short one
+        self.assertEqual(len(state.magnets), 1)
+        self.assertEqual(list(state.magnets.values())[0], short)
+
+
 class MainCli(unittest.TestCase):
     """Cover the argparse + setup_logging + run_daemon wire-up in main()."""
 

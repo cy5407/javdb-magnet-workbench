@@ -144,6 +144,29 @@ class FetchMagnetsHttpError(unittest.TestCase):
         self.assertEqual(result["error"], "HTTP 404")
 
 
+class FetchMagnetsRedirectDefense(unittest.TestCase):
+    """Guards the allow_redirects=False fix from
+    docs/security-audit-2026-05-30.md §2 — a hostile 3xx must not auto-follow
+    and leak cf_clearance / _jdb_session cookies to the redirect target.
+    """
+
+    def test_302_redirect_treated_as_error_not_followed(self):
+        session = mock.MagicMock()
+        session.get.return_value = _resp(302, "")
+        result = fetch_magnets("https://javdb.com/v/x", session, {})
+        self.assertEqual(result["error"], "HTTP 302")
+        self.assertEqual(result["magnets"], [])
+        self.assertEqual(result["code"], "")
+        self.assertEqual(result["title"], "")
+
+    def test_session_get_called_with_allow_redirects_false(self):
+        session = mock.MagicMock()
+        session.get.return_value = _resp(200, _SUCCESS_HTML)
+        fetch_magnets("https://javdb.com/v/x", session, {"sess": "abc"})
+        self.assertEqual(session.get.call_count, 1)
+        self.assertIs(session.get.call_args.kwargs["allow_redirects"], False)
+
+
 class FetchMagnetsEdgeCases(unittest.TestCase):
     def test_empty_html_yields_unknown_title_and_no_magnets(self):
         session = mock.MagicMock()

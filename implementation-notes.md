@@ -95,3 +95,29 @@ User 點出第一次總結講太滿，後續補：
 
 5. **bandit nosec 註解格式問題**：原本 `# nosec B606 — reason in prose` 會被 bandit 解析為一堆 test ID，噴出 30+ "Test in comment: X is not a test name" warning。修法是把 reason 移到上一行 `# ...` 註解，nosec 那行只留 `# nosec B###`。修完後剩 1 個 informational warning（B606 / `os.startfile` 的 line attribution 邊界情況），suppression 仍正確（bandit 確認 "Total potential issues skipped: 6"）。
 
+## [2026-05-30 21:30 → 21:44, 14m] 資安審查修補（`docs/security-audit-2026-05-30.md`）
+
+Workflow `wf_5216b7b9-0f3`：5 個修補並行 → pytest+cargo 驗證 → 5 個對抗式覆核 agents 各自確認。11 agents / 495k tokens / 70 cargo + 289 pytest 全綠。
+
+**Design decisions**
+- **scraper redirect 用 `allow_redirects=False` 而不是逐跳 host 驗證**：三個 audit 建議方案中選最小改動。3xx 直接走既有 `status_code != 200` 分支變 error dict，下游無改動。`create_session()` 沒設 session-wide allow_redirects，所以 per-request 旗標權威（`requests` 與 `curl_cffi` 兩個 session class 同行為）。覆蓋 `javdb_scraper.py:79` 與 `legacy/javdb_magnet_gui.py:153`。
+- **realdebrid 錯誤訊息改為 `json["error"][:80]` 或 `"API error"`，完全不回灌 `resp.text`**：audit §3.1 要求「至少截斷+去控制字元」，直接走最嚴（不放 HTML 進 message）。`json["error"]` 是 RD API 明文字串，留它（截 80 字）以保留可用診斷；`resp.text` 完全丟棄（`realdebrid.py:96-122`）。
+- **3xx guard 必須放在 `resp.ok` 之前**：`requests.Response.ok` 對 301/302 都是 True（status<400），不先排除 3xx 會在 `if resp.ok: return` 那行靜默回 None；配合新的 `allow_redirects=False`（`realdebrid.py:36`），RD API 任何 3xx 都該被當錯誤。
+- **sidecar 上限取 `MAX_FETCH_MAGNETS = MAX_REGISTER_MAGNETS = 1000`、`MAX_MAGNET_URI_LEN = 4096`**（`sidecar/sidecar.py:56-58`）：audit 建議「數千 + 4KB/URI」，1000 已是真實 JavDB detail page（<20 magnets）的 50 倍餘裕；1000×4096 ≈ 4MiB 單次 worst-case，可控。
+- **`pending.rs` 上限 4 MiB**（`app/src-tauri/src/pending.rs:25`）：audit 範圍是 1-4 MiB，選上限。實際 payload 是「dozens × ~400 bytes」，4MiB 留 10,000× 餘裕但仍卡住誤植檔。size check 放在 `fs::read_to_string` 之前，超量檔絕不讀進記憶體。
+- **CSP 套用 audit 字面建議，不加 `style-src 'unsafe-inline'`**（`app/src-tauri/tauri.conf.json:24`）：audit 明文指定 `default-src 'self'; script-src 'self'; object-src 'none'; frame-src 'none'`，有意嚴格。對抗式覆核 agent 點出兩個 runtime 風險：(a) Svelte/Vite inline style 會被擋；(b) Tauri 2 IPC 可能需 `connect-src ipc: http://ipc.localhost`。需人工開 `npm run tauri dev` 看 WebView console 才能定。
+
+**Deviations**
+- **`register_magnets` 的 invalid 條目截斷 64 字**（audit 沒指定具體截斷長）：防止 attacker-controlled 字串在錯誤回傳被原樣反射回前端。短到放不下完整 magnet hash（40+ 字），但能放最常見 prefix，夠診斷。
+- **`fetch_javdb` 對超長 URI 採「靜默 drop」而非加進 invalid**：audit 沒指定。此處因 JavDB 頁面本身已假定為攻擊面，沒必要把 attacker-controlled 字串往外送（會違反 `_err` 訊息該遮蔽的 invariant）。`register_magnets` 走 invalid 是因為那是前端使用者主動貼上，信任邊界不同。
+- **`legacy/javdb_magnet_gui.py:153` 同病鏡像修但沒加測試**：legacy 是 retired GUI，無人 import，測試 import 它會把 tkinter 拖進 CI。audit §2 把 legacy 也列必修，所以原始碼修了。
+
+**Tradeoffs**
+- **CSP 採嚴而非保守**：風險是 runtime UI 可能破，需人工驗。但 audit 寫明此項是「防禦縱深而非當下可利用」，作為起點先收緊，真破再放鬆比反向安全。
+- **未動 P3 hardening 清單**（SEC-rust-commands-02 / sidecar_manager.rs buffer 上限 / legacy_import.rs warning 內含原始 .env 值 / scraper.ts 前端 host 驗證 / build-release.ps1 secret 掃描範圍 …）：本次只動 P1 + P2，P3 留排期。
+
+**Open questions**
+- CSP 是否需追加 `style-src 'unsafe-inline'` 與 `connect-src ipc: http://ipc.localhost`？需先 `npm run tauri dev` 看 WebView console 才能定。如 UI 破，以「最小追加」處理而不是 revert null。
+- `pending.rs` 4 MiB 是否太鬆？dozens × 400 bytes 真實 payload 對應 ~16KiB，實際可緊到 256KiB 仍有 16× 餘裕。本次保守取 audit 上限 4 MiB，後續可拉緊。
+- 對抗式覆核 agent 在 sidecar / pending 修補的 residual_concerns 點出 audit 範圍外的鄰近缺口：(a) sidecar `cmd_resolve_magnets` 對 `handle_ids` 無 cap、`cmd_set_cookies` 完全依賴 Rust 側 cap；(b) cross-call accumulation 仍無上限（N 次 fetch 可累積 1000×N 直到 `forget_magnets`）；(c) Rust `commands.rs:863`、`lib.rs:41/189`、`legacy_import.rs:314/336` 多個讀檔路徑無 size cap。這幾個都是 audit 沒列的鄰近缺口，要不要一併補？
+

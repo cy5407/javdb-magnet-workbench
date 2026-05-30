@@ -76,7 +76,7 @@ def parse_file_count(size_str: str) -> int:
 
 
 def fetch_magnets(url: str, session, cookies: dict) -> dict:
-    resp = session.get(url, cookies=cookies, timeout=30)
+    resp = session.get(url, cookies=cookies, timeout=30, allow_redirects=False)
     if resp.status_code != 200:
         return {"url": url, "error": f"HTTP {resp.status_code}", "code": "", "title": "", "magnets": []}
 

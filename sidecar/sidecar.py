@@ -49,6 +49,14 @@ from javdb_scraper import create_session, fetch_magnets  # noqa: E402
 PROTOCOL_VERSION = 1
 SIDECAR_VERSION = "0.1.0"
 
+# Per-call input limits to prevent attacker-controlled HTML / IPC payloads
+# from ballooning state.magnets. Numbers calibrated to comfortably exceed
+# any legitimate JavDB detail page (rarely >20 magnets/page) while bounding
+# memory: 1000 magnets × 4096 bytes ≈ 4 MiB worst-case per fetch.
+MAX_FETCH_MAGNETS = 1000      # cap on magnets returned by one cmd_fetch_javdb
+MAX_REGISTER_MAGNETS = 1000   # cap on magnets accepted by one cmd_register_magnets
+MAX_MAGNET_URI_LEN = 4096     # cap on a single magnet URI length (bytes)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -358,9 +366,14 @@ def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
         return _err(req, "network", error)
 
     magnets_in = result.get("magnets", []) or []
+    # Bound attacker-controlled count from the parsed page.
+    if len(magnets_in) > MAX_FETCH_MAGNETS:
+        magnets_in = magnets_in[:MAX_FETCH_MAGNETS]
     magnets_out = []
     for m in magnets_in:
         full = m.get("magnet", "")
+        if not isinstance(full, str) or len(full) > MAX_MAGNET_URI_LEN:
+            continue   # silently drop oversized — the page itself is malicious
         # Intern via the reverse table so a magnet that already has a
         # handle (e.g. re-fetch of the same JavDB page, or previously
         # registered by the paste path) keeps its existing handle_id.
@@ -440,6 +453,9 @@ def cmd_register_magnets(state: DaemonState, req: dict) -> dict:
     magnets_in = req.get("magnets")
     if not isinstance(magnets_in, list):
         return _err(req, "bad_request", "magnets must be a list of strings")
+    if len(magnets_in) > MAX_REGISTER_MAGNETS:
+        return _err(req, "bad_request",
+                    f"too many magnets (max {MAX_REGISTER_MAGNETS})")
 
     registered: list[dict] = []
     invalid: list[str] = []
@@ -449,6 +465,9 @@ def cmd_register_magnets(state: DaemonState, req: dict) -> dict:
             invalid.append(str(raw))
             continue
         s = raw.strip()
+        if len(s) > MAX_MAGNET_URI_LEN:
+            invalid.append(s[:64])   # truncate for invalid list so we don't echo full
+            continue
         if not s.startswith("magnet:"):
             invalid.append(s)
             continue

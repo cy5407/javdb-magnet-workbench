@@ -18,6 +18,12 @@ use serde::{Deserialize, Serialize};
 
 const FILE_NAME: &str = "pending_torrents.json";
 
+/// Hard upper bound on pending_torrents.json byte size. A realistic
+/// pending list is dozens of entries × ~400 bytes each; 4 MiB leaves
+/// orders of magnitude of headroom while blocking a tampered or
+/// social-engineered oversized file from being loaded whole.
+const MAX_PENDING_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingEntry {
     /// RD-side torrent identifier — the one stable handle for re-polling.
@@ -87,6 +93,14 @@ pub fn load(data_dir: &Path) -> Result<Vec<PendingEntry>, String> {
     let path = pending_path(data_dir);
     if !path.exists() {
         return Ok(Vec::new());
+    }
+    let metadata = fs::metadata(&path)
+        .map_err(|e| format!("stat {}: {e}", path.display()))?;
+    if metadata.len() > MAX_PENDING_FILE_BYTES {
+        return Err(format!(
+            "{} exceeds max size ({} > {} bytes)",
+            path.display(), metadata.len(), MAX_PENDING_FILE_BYTES
+        ));
     }
     let raw = fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     if raw.trim().is_empty() {
@@ -254,5 +268,29 @@ mod tests {
         add(&d, sample("A")).unwrap();
         clear(&d).unwrap();
         assert!(load(&d).unwrap().is_empty());
+    }
+
+    #[test]
+    fn load_rejects_oversized_file() {
+        let d = temp_dir();
+        let path = pending_path(&d);
+        // Write a file slightly over the limit. Content can be junk; the
+        // guard fires before parse.
+        let body = "x".repeat((MAX_PENDING_FILE_BYTES as usize) + 1024);
+        fs::write(&path, body).unwrap();
+        let err = load(&d).expect_err("oversized file must error");
+        assert!(err.contains("exceeds max size"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn load_accepts_file_just_under_limit() {
+        let d = temp_dir();
+        let path = pending_path(&d);
+        // Build a valid JSON array under the limit. A short array is fine —
+        // we mostly want to confirm the guard doesn't false-positive.
+        let body = "[]";
+        fs::write(&path, body).unwrap();
+        let list = load(&d).expect("under-limit file must load");
+        assert!(list.is_empty());
     }
 }
