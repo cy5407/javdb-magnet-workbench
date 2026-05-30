@@ -69,21 +69,6 @@ function FailExit($msg) {
     Write-Output "[FAIL] $msg"
     exit 1
 }
-function Get-Sha256Hex($path) {
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $stream = [System.IO.File]::OpenRead($path)
-        try {
-            $hash = $sha.ComputeHash($stream)
-            return (($hash | ForEach-Object { $_.ToString("x2") }) -join "").ToUpperInvariant()
-        } finally {
-            $stream.Dispose()
-        }
-    } finally {
-        $sha.Dispose()
-    }
-}
-
 # ---------------------------------------------------------------------------
 # Step 0: Prepare release/ output dir
 # ---------------------------------------------------------------------------
@@ -220,26 +205,24 @@ $StagedFiles | ForEach-Object {
 # ---------------------------------------------------------------------------
 Step "Auditing portable folder (whitelist)"
 $AllowedNames = @('javdbmagnet.exe', 'sidecar.exe', 'README.txt')
+# Explicitly verify none of the forbidden names slipped in even if the
+# whitelist somehow expanded.
+$ForbiddenNames = @('.env','.gitignore','cookies.txt','pending_torrents.json','magnet.txt')
 $StagingViolations = @()
 foreach ($f in $StagedFiles) {
     $rel = $f.FullName.Substring($StagingDir.Length).TrimStart('\','/')
+    $leaf = Split-Path $f.FullName -Leaf
     # No subdirectories allowed.
     if ($rel -match '[\\/]') {
         $StagingViolations += "subdir entry: $rel"
         continue
     }
-    if ($AllowedNames -notcontains (Split-Path $f.FullName -Leaf)) {
+    if ($AllowedNames -notcontains $leaf) {
         $StagingViolations += "unexpected file: $rel"
     }
-}
-# Explicitly verify none of the forbidden names slipped in even if the
-# whitelist somehow expanded.
-$ForbiddenNames = @('.env','.gitignore','cookies.txt','pending_torrents.json','magnet.txt')
-foreach ($f in $StagedFiles) {
-    $name = Split-Path $f.FullName -Leaf
-    if ($ForbiddenNames -contains $name) { $StagingViolations += "forbidden: $name" }
-    if ($name -like '.env.*' -or $name -like '*.log' -or $name -like '*.token' -or $name -like '*.spec') {
-        $StagingViolations += "forbidden pattern: $name"
+    if ($ForbiddenNames -contains $leaf) { $StagingViolations += "forbidden: $leaf" }
+    if ($leaf -like '.env.*' -or $leaf -like '*.log' -or $leaf -like '*.token' -or $leaf -like '*.spec') {
+        $StagingViolations += "forbidden pattern: $leaf"
     }
 }
 if ($StagingViolations.Count -gt 0) {
@@ -410,7 +393,7 @@ $HashTargets = @(
 )
 $Hashes = @{}
 foreach ($t in $HashTargets) {
-    $h = Get-Sha256Hex $t.path
+    $h = ((Get-FileHash -Path $t.path -Algorithm SHA256).Hash)
     $size = (Get-Item $t.path).Length
     $Hashes[$t.label] = @{ path = $t.path; sha256 = $h; bytes = $size }
     Write-Host ("    {0,-13} {1}  ({2:N0} bytes)  {3}" -f $t.label, $h, $size, (Split-Path $t.path -Leaf)) -ForegroundColor Gray

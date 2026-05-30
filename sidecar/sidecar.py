@@ -601,16 +601,19 @@ def _resolve_strategy(state: DaemonState, override: str | None) -> str:
 
 
 def _resolve_int_setting(state: DaemonState, key: str, override, default: int) -> int:
-    if isinstance(override, int) and override > 0:
-        return override
-    if isinstance(override, str) and override.isdigit():
-        return int(override)
+    def coerce(v):
+        if isinstance(v, int) and v > 0:
+            return v
+        if isinstance(v, str) and v.isdigit():
+            return int(v)
+        return None
+    result = coerce(override)
+    if result is not None:
+        return result
     rd_settings = (state.settings or {}).get("rd") or {}
-    v = rd_settings.get(key)
-    if isinstance(v, int) and v > 0:
-        return v
-    if isinstance(v, str) and v.isdigit():
-        return int(v)
+    result = coerce(rd_settings.get(key))
+    if result is not None:
+        return result
     return default
 
 

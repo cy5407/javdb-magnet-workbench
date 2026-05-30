@@ -46,7 +46,7 @@ nothing imports it cyclically. Each lib file is a leaf that pairs with `types.ts
 | `scraper.ts` | `isRateLimitError`, `randomDelayMs`, `parseUrlBatch`, `parseMagnetBatch`, `scrapeBatch` | `SleepFn`, `ScrapeProgressEvent`, `ScrapeOptions` |
 | `rdSender.ts` | `sendBatch`, `retryPending`, `rdErrorMessage` | `RdSendOptions`, `RdSendItem`, `RdSendBatchEvent`, `RdSendBatchOptions`, `RdRetryEvent`, `RdRetryOptions` |
 | `settingsValidation.ts` | `FILE_PICK_VALUES`, `THEME_VALUES`, `SCALE_PRESETS`, `validateMinSizeMb`, `validateCacheWaitSeconds`, `validateWaitTimeoutSeconds`, `validateScale`, `validateFilePick`, `validateTheme`, `validateSettingsDraft` | `FilePickValue`, `ThemeValue` |
-| `types.ts` | `defaultFilterState` | `Theme`, `PathInfo`, `UiSettings`, `RdSettings`, `Settings`, `MagnetRow`, `FetchResult`, `PingResponse`, `CopyBulkResult`, `CopyRdLinksBulkResult`, `LegacyImportPreview`, `CookiesStatus`, `LegacyImportReport`, `ScrapedGroup`, `GroupPick`, `FilterState`, `SortColumn`, `SortDirection`, `SortState`, `RdUserInfo`, `RdLink`, `RdSendOutcome`, `RdCheckOutcome`, `PendingEntry`, `RdSendProgress` |
+| `types.ts` | `defaultFilterState` | `Theme`, `PathInfo`, `UiSettings`, `RdSettings`, `Settings`, `MagnetRow`, `FetchResult`, `PingResponse`, `CopyBulkResult`, `CopyRdLinksBulkResult`, `LegacyImportPreview`, `CookiesStatus`, `LegacyImportReport`, `ScrapedGroup`, `GroupPick`, `FilterState`, `SortColumn`, `SortDirection`, `RdUserInfo`, `RdLink`, `RdSendOutcome`, `RdCheckOutcome`, `PendingEntry`, `RdSendProgress` |
 
 ### 1.4 Bridge to Rust
 
@@ -217,9 +217,9 @@ Note: `"code"` and `"name"` are sorted identically (both compare `row.name`) —
 
 #### `type SortDirection = "asc" | "desc"` *(types.ts:152)*
 
-#### `interface SortState` *(types.ts:154-157)*
-- `column: SortColumn | null` (null = unsorted, preserve input order)
-- `direction: SortDirection`
+> App holds sort state as two independent reactive vars (`sortColumn: SortColumn | null`,
+> `sortDirection: SortDirection`) rather than a combined struct, so there is no exported
+> `SortState` interface.
 
 ### 2.5 Real-Debrid types
 

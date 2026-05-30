@@ -60,14 +60,7 @@ pub async fn copy_magnet(
     let resp = sidecar
         .request("resolve_magnet", json!({ "handle_id": handle_id }))
         .await?;
-    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-        let code = resp
-            .get("error")
-            .and_then(|e| e.get("code"))
-            .and_then(|c| c.as_str())
-            .unwrap_or("unknown");
-        return Err(code.to_string());
-    }
+    ensure_ok(&resp)?;
     let magnet = resp
         .get("magnet")
         .and_then(|m| m.as_str())
@@ -123,9 +116,7 @@ pub async fn register_magnets(
     let resp = sidecar
         .request("register_magnets", json!({ "magnets": magnets }))
         .await?;
-    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-        return Err(_err_code(&resp));
-    }
+    ensure_ok(&resp)?;
 
     let registered = resp
         .get("registered")
@@ -266,6 +257,25 @@ fn _err_code(resp: &Value) -> String {
         .to_string()
 }
 
+/// Guard for the standard `{"ok": bool, ...}` sidecar response shape.
+/// Returns `Ok(())` when `ok == true`, otherwise propagates the sidecar's
+/// error code via [`_err_code`]. Error string is byte-identical to the
+/// inlined `return Err(_err_code(&resp))` it replaces.
+fn ensure_ok(resp: &Value) -> Result<(), String> {
+    if resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(_err_code(resp))
+    }
+}
+
+/// Read a string field off a sidecar response with the codebase's standard
+/// fallback (`""` when missing or not a string). Mirrors the inlined
+/// `resp.get(key).and_then(|s| s.as_str()).unwrap_or("").to_string()` chain.
+fn str_field(resp: &Value, key: &str) -> String {
+    resp.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RdUserInfo {
     #[serde(default)]
@@ -302,9 +312,7 @@ pub async fn rd_test_token(
     let resp = sidecar
         .request("rd_user", json!({ "token": token }))
         .await?;
-    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-        return Err(_err_code(&resp));
-    }
+    ensure_ok(&resp)?;
     let user = resp.get("user").cloned().unwrap_or(Value::Null);
     let info: RdUserInfo = serde_json::from_value(user).map_err(|e| e.to_string())?;
     Ok(info)
@@ -331,9 +339,7 @@ pub async fn rd_save_token(
         json!({ "token": token })
     };
     let resp = sidecar.request("rd_set_token", payload).await?;
-    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-        return Err(_err_code(&resp));
-    }
+    ensure_ok(&resp)?;
     // The local `token` String drops here; the only persisted copy is in
     // the credential store and the sidecar's in-memory state.
     Ok(())
@@ -345,9 +351,7 @@ pub async fn rd_clear_token(sidecar: State<'_, SidecarManager>) -> Result<(), St
     let resp = sidecar
         .request("rd_set_token", json!({ "token": Value::Null }))
         .await?;
-    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-        return Err(_err_code(&resp));
-    }
+    ensure_ok(&resp)?;
     Ok(())
 }
 
@@ -357,15 +361,13 @@ pub async fn rd_clear_token(sidecar: State<'_, SidecarManager>) -> Result<(), St
 #[tauri::command]
 pub async fn rd_check_user(sidecar: State<'_, SidecarManager>) -> Result<RdUserInfo, String> {
     let resp = sidecar.request("rd_user", Value::Null).await?;
-    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-        return Err(_err_code(&resp));
-    }
+    ensure_ok(&resp)?;
     let user = resp.get("user").cloned().unwrap_or(Value::Null);
     let info: RdUserInfo = serde_json::from_value(user).map_err(|e| e.to_string())?;
     Ok(info)
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 pub struct RdSendOptions {
     pub strategy: Option<String>,
     pub min_size_mb: Option<u32>,
@@ -414,13 +416,7 @@ pub async fn rd_send_magnet(
     handle_id: String,
     options: Option<RdSendOptions>,
 ) -> Result<RdSendOutcome, String> {
-    let opts = options.unwrap_or(RdSendOptions {
-        strategy: None,
-        min_size_mb: None,
-        cache_wait: None,
-        code: None,
-        size_label: None,
-    });
+    let opts = options.unwrap_or_default();
 
     let mut payload = json!({ "handle_id": handle_id });
     if let Some(s) = &opts.strategy {
@@ -434,24 +430,14 @@ pub async fn rd_send_magnet(
     }
 
     let resp = sidecar.request("rd_send_magnet", payload).await?;
-    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-        return Err(_err_code(&resp));
-    }
+    ensure_ok(&resp)?;
 
     let status = resp
         .get("status")
         .and_then(|s| s.as_str())
         .unwrap_or("");
-    let torrent_id = resp
-        .get("torrent_id")
-        .and_then(|s| s.as_str())
-        .unwrap_or("")
-        .to_string();
-    let name = resp
-        .get("name")
-        .and_then(|s| s.as_str())
-        .unwrap_or("")
-        .to_string();
+    let torrent_id = str_field(&resp, "torrent_id");
+    let name = str_field(&resp, "name");
 
     if status == "completed" {
         let links_val = resp.get("links").cloned().unwrap_or(json!([]));
@@ -466,11 +452,7 @@ pub async fn rd_send_magnet(
 
     // Pending: persist to disk so the frontend can rebuild its retry
     // queue on next launch.
-    let rd_status = resp
-        .get("rd_status")
-        .and_then(|s| s.as_str())
-        .unwrap_or("")
-        .to_string();
+    let rd_status = str_field(&resp, "rd_status");
     let progress = resp
         .get("progress")
         .and_then(|n| n.as_f64())
@@ -534,19 +516,13 @@ pub async fn rd_check_pending(
         payload["strategy"] = json!(s);
     }
     let resp = sidecar.request("rd_check_pending", payload).await?;
-    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-        return Err(_err_code(&resp));
-    }
+    ensure_ok(&resp)?;
 
     let status = resp.get("status").and_then(|s| s.as_str()).unwrap_or("");
     if status == "completed" {
         // Persisted entry no longer needed.
         pending::remove(&path_manager.data_dir, &torrent_id)?;
-        let name = resp
-            .get("name")
-            .and_then(|s| s.as_str())
-            .unwrap_or("")
-            .to_string();
+        let name = str_field(&resp, "name");
         let links_val = resp.get("links").cloned().unwrap_or(json!([]));
         let links: Vec<RdLink> =
             serde_json::from_value(links_val).map_err(|e| e.to_string())?;
@@ -562,16 +538,8 @@ pub async fn rd_check_pending(
     }
 
     // pending — refresh persisted snapshot
-    let name = resp
-        .get("name")
-        .and_then(|s| s.as_str())
-        .unwrap_or("")
-        .to_string();
-    let rd_status = resp
-        .get("rd_status")
-        .and_then(|s| s.as_str())
-        .unwrap_or("")
-        .to_string();
+    let name = str_field(&resp, "name");
+    let rd_status = str_field(&resp, "rd_status");
     let progress = resp
         .get("progress")
         .and_then(|n| n.as_f64())
@@ -1083,9 +1051,7 @@ async fn push_cookies_to_sidecar(
     let resp = sidecar
         .request("set_cookies", json!({ "cookies": value }))
         .await?;
-    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-        return Err(_err_code(&resp));
-    }
+    ensure_ok(&resp)?;
     Ok(())
 }
 
@@ -1134,17 +1100,11 @@ pub async fn update_sidecar_settings(
     settings: Value,
 ) -> Result<(), String> {
     let mut sanitized = settings;
-    if let Some(rd) = sanitized.get_mut("rd").and_then(Value::as_object_mut) {
-        if let Some(t) = rd.get_mut("api_token") {
-            *t = Value::String(String::new());
-        }
-    }
+    blank_rd_api_token(&mut sanitized);
     let resp = sidecar
         .request("update_settings", json!({ "settings": sanitized }))
         .await?;
-    if !resp.get("ok").and_then(Value::as_bool).unwrap_or(false) {
-        return Err(_err_code(&resp));
-    }
+    ensure_ok(&resp)?;
     Ok(())
 }
 

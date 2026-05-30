@@ -87,6 +87,18 @@ export function filterRows(
  *
  * Empty input → empty output. Returns a NEW array.
  */
+/**
+ * Single-best pick via a comparator. The comparator returns true when
+ * `cur` is strictly better than `acc`, so leftmost-on-tie is preserved
+ * (matches the original `>`/`<` reduce semantics).
+ */
+function pickBy(
+  rows: MagnetRow[],
+  isBetter: (cur: MagnetRow, acc: MagnetRow) => boolean,
+): MagnetRow[] {
+  return [rows.reduce((acc, cur) => (isBetter(cur, acc) ? cur : acc))];
+}
+
 export function applyGroupPick(
   rows: MagnetRow[],
   pick: GroupPick,
@@ -95,32 +107,22 @@ export function applyGroupPick(
   if (pick === "all") return rows.slice();
 
   if (pick === "largest") {
-    return [
-      rows.reduce(
-        (best, r) => (parseSizeGb(r.size) > parseSizeGb(best.size) ? r : best),
-        rows[0],
-      ),
-    ];
+    return pickBy(rows, (a, b) => parseSizeGb(a.size) > parseSizeGb(b.size));
   }
   if (pick === "smallest") {
-    return [
-      rows.reduce(
-        (best, r) => (parseSizeGb(r.size) < parseSizeGb(best.size) ? r : best),
-        rows[0],
-      ),
-    ];
+    return pickBy(rows, (a, b) => parseSizeGb(a.size) < parseSizeGb(b.size));
   }
   if (pick === "fewest_files") {
-    return [
-      rows.reduce((best, r) => {
-        const rc = parseFileCount(r.size);
-        const bc = parseFileCount(best.size);
-        if (rc !== bc) return rc < bc ? r : best;
-        // tie-break: prefer larger file size (more likely to be the main video)
-        return parseSizeGb(r.size) > parseSizeGb(best.size) ? r : best;
-      }, rows[0]),
-    ];
+    return pickBy(rows, (a, b) => {
+      const ac = parseFileCount(a.size);
+      const bc = parseFileCount(b.size);
+      if (ac !== bc) return ac < bc;
+      // tie-break: prefer larger file size (more likely to be the main video)
+      return parseSizeGb(a.size) > parseSizeGb(b.size);
+    });
   }
+  // Defensive fallback for runtime-only `pick` values (e.g. older
+  // settings file with an unknown enum). Test-only path today.
   return rows.slice();
 }
 

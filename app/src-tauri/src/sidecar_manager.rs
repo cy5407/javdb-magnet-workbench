@@ -197,10 +197,7 @@ impl SidecarManager {
         let hello = manager
             .request("hello", json!({ "protocol_version": PROTOCOL_VERSION }))
             .await?;
-        if !hello.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-            let msg = error_message(&hello).unwrap_or("hello failed");
-            return Err(format!("sidecar hello failed: {msg}"));
-        }
+        require_ok(&hello, "hello")?;
 
         // handshake
         let handshake_body = json!({
@@ -210,10 +207,7 @@ impl SidecarManager {
             "paths": paths,
         });
         let handshake = manager.request("handshake", handshake_body).await?;
-        if !handshake.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-            let msg = error_message(&handshake).unwrap_or("handshake failed");
-            return Err(format!("sidecar handshake failed: {msg}"));
-        }
+        require_ok(&handshake, "handshake")?;
 
         Ok(manager)
     }
@@ -289,6 +283,18 @@ fn error_message(resp: &Value) -> Option<&str> {
     resp.get("error")
         .and_then(|e| e.get("message"))
         .and_then(|m| m.as_str())
+}
+
+/// Returns `Ok(())` if `resp.ok == true`, else an error formatted as
+/// `"sidecar {what} failed: {msg}"` where `msg` is `error.message` or
+/// `"{what} failed"` as a fallback.
+fn require_ok(resp: &Value, what: &str) -> Result<(), String> {
+    if resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Ok(());
+    }
+    let fallback = format!("{what} failed");
+    let msg = error_message(resp).unwrap_or(&fallback);
+    Err(format!("sidecar {what} failed: {msg}"))
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@
     scrapeBatch,
     type ScrapeProgressEvent,
   } from "./lib/scraper";
+  import { errText } from "./lib/errText";
   import { dedupeByHandleId, processGroupRows } from "./lib/magnetUtils";
   import {
     FILE_PICK_VALUES,
@@ -387,15 +388,8 @@
     // Dedupe across groups in case the UI happens to render the same
     // handle in two cards — clipboard should never contain duplicate
     // magnet URIs even if the sidecar would silently coalesce them.
-    const seen = new Set<string>();
-    const ids: string[] = [];
-    for (const g of groups) {
-      for (const m of processedRows(g)) {
-        if (seen.has(m.handle_id)) continue;
-        seen.add(m.handle_id);
-        ids.push(m.handle_id);
-      }
-    }
+    const visible = groups.flatMap((g) => processedRows(g));
+    const ids = dedupeByHandleId(visible).map((m) => m.handle_id);
     if (ids.length === 0) return;
     try {
       const result = await invoke<CopyBulkResult>("copy_magnets_bulk", {
@@ -499,11 +493,8 @@
   // `buildVisibleSendItems` / `copyVisible` will actually do after
   // their handle_id dedupe.
   let visibleMagnets = $derived.by(() => {
-    const seen = new Set<string>();
-    for (const g of groups) {
-      for (const m of processedRows(g)) seen.add(m.handle_id);
-    }
-    return seen.size;
+    const visible = groups.flatMap((g) => processedRows(g));
+    return dedupeByHandleId(visible).length;
   });
 
   // ---- M5: Real-Debrid handlers --------------------------------------
@@ -518,7 +509,7 @@
       flash.flash("rd-test-token");
     } catch (e) {
       rdUser = null;
-      const code = e instanceof Error ? e.message : String(e);
+      const code = errText(e);
       rdMessage = `測試失敗：${rdErrorMessage(code)}`;
     }
   }
@@ -539,11 +530,11 @@
       try {
         rdUser = await invoke<RdUserInfo>("rd_check_user");
       } catch (e) {
-        const code = e instanceof Error ? e.message : String(e);
+        const code = errText(e);
         rdMessage = `Token 已儲存，但驗證失敗：${rdErrorMessage(code)}`;
       }
     } catch (e) {
-      const code = e instanceof Error ? e.message : String(e);
+      const code = errText(e);
       rdMessage = `儲存失敗：${rdErrorMessage(code)}`;
     }
   }
@@ -557,7 +548,7 @@
       rdMessage = "Token 已清除";
       flash.flash("rd-clear-token");
     } catch (e) {
-      const code = e instanceof Error ? e.message : String(e);
+      const code = errText(e);
       rdMessage = `清除失敗：${rdErrorMessage(code)}`;
     }
   }
@@ -573,7 +564,7 @@
       rdMessage = `已連線：${rdUser.username || "(無 username)"} / ${rdUser.type}`;
       flash.flash("rd-refresh-user");
     } catch (e) {
-      const code = e instanceof Error ? e.message : String(e);
+      const code = errText(e);
       rdMessage = `查詢失敗：${rdErrorMessage(code)}`;
     }
   }
@@ -780,6 +771,15 @@
     let errorCount = 0;
     const errorCodes: string[] = [];
 
+    // Reconcile the corresponding "送至 Real-Debrid 進度" row when a
+    // pending entry resolves to completed/missing. torrent_id is unique
+    // per row, so this patches at most one entry.
+    const patchRowByTorrentId = (id: string, patch: Partial<RdSendProgress>) => {
+      rdSendProgress = rdSendProgress.map((r) =>
+        r.torrent_id === id ? { ...r, ...patch } : r,
+      );
+    };
+
     try {
       await retryPending(
         pendingEntries,
@@ -789,41 +789,24 @@
             for (const l of ev.result.links) {
               if (l.download) completedLinks.push(l.download);
             }
-            // Reconcile the corresponding "送至 Real-Debrid 進度" row:
-            // its status is "in_pending" with empty links; flip to
-            // "completed" + attach the freshly-fetched links so the
-            // 直連 N counter and the row label both update without
-            // requiring a manual refresh / re-send.
-            for (let i = 0; i < rdSendProgress.length; i++) {
-              if (rdSendProgress[i].torrent_id === ev.torrent_id) {
-                rdSendProgress[i] = {
-                  ...rdSendProgress[i],
-                  status: "completed",
-                  links: ev.result.links,
-                  error_code: null,
-                  completed_at: new Date().toISOString(),
-                };
-                break;
-              }
-            }
+            // Flip row from "in_pending" → "completed" + attach links so
+            // 直連 N counter and row label update without a manual refresh.
+            patchRowByTorrentId(ev.torrent_id, {
+              status: "completed",
+              links: ev.result.links,
+              error_code: null,
+              completed_at: new Date().toISOString(),
+            });
           } else if (ev.result.kind === "pending") {
             stillPendingCount += 1;
           } else if (ev.result.kind === "missing") {
             missingCount += 1;
-            // Same reconciliation: mark the originating row as error
-            // with a clear code so users don't think it's still
-            // queued forever.
-            for (let i = 0; i < rdSendProgress.length; i++) {
-              if (rdSendProgress[i].torrent_id === ev.torrent_id) {
-                rdSendProgress[i] = {
-                  ...rdSendProgress[i],
-                  status: "error",
-                  links: [],
-                  error_code: "rd_torrent_missing",
-                };
-                break;
-              }
-            }
+            // Mark row as error so users don't think it's still queued forever.
+            patchRowByTorrentId(ev.torrent_id, {
+              status: "error",
+              links: [],
+              error_code: "rd_torrent_missing",
+            });
           } else {
             errorCount += 1;
             errorCodes.push(ev.result.error_code);
@@ -968,7 +951,7 @@
       };
       flash.flash("cookies-save");
     } catch (e) {
-      const code = e instanceof Error ? e.message : String(e);
+      const code = errText(e);
       const friendly =
         code === "cookies_empty"
           ? "cookies 為空"
@@ -1033,19 +1016,24 @@
   );
   let settingsValid = $derived(Object.keys(settingsErrors).length === 0);
 
+  // Deep-ish clone of `settings` for the editor draft. The `api_token`
+  // is always blanked — backend re-blanks it on save, but we don't want
+  // the draft to even appear to carry one.
+  function freshSettingsDraft(s: Settings): Settings {
+    return {
+      version: s.version,
+      ui: { ...s.ui },
+      rd: { ...s.rd, api_token: "" },
+    };
+  }
+
   function openSettingsEditor() {
     if (!settings) {
       settingsMessage = "設定尚未載入";
       settingsMessageKind = "error";
       return;
     }
-    // Deep-ish clone so editing the draft doesn't mutate the loaded
-    // copy until save.
-    settingsDraft = {
-      version: settings.version,
-      ui: { ...settings.ui },
-      rd: { ...settings.rd, api_token: "" },
-    };
+    settingsDraft = freshSettingsDraft(settings);
     settingsShown = true;
     settingsMessage = "";
   }
@@ -1081,11 +1069,7 @@
       theme = settings.ui.theme as Theme;
       applyTheme(theme);
       applyScale(settings.ui.scale);
-      settingsDraft = {
-        version: settings.version,
-        ui: { ...settings.ui },
-        rd: { ...settings.rd, api_token: "" },
-      };
+      settingsDraft = freshSettingsDraft(settings);
       settingsMessage = "設定已儲存";
       settingsMessageKind = "ok";
       flash.flash("settings-save");
@@ -1099,11 +1083,7 @@
 
   function revertSettingsDraft() {
     if (!settings) return;
-    settingsDraft = {
-      version: settings.version,
-      ui: { ...settings.ui },
-      rd: { ...settings.rd, api_token: "" },
-    };
+    settingsDraft = freshSettingsDraft(settings);
     settingsMessage = "已還原為已儲存值";
     settingsMessageKind = "info";
   }

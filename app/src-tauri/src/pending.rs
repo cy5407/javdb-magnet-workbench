@@ -156,17 +156,10 @@ pub fn update_status(
     progress: f64,
 ) -> Result<Vec<PendingEntry>, String> {
     let mut list = load(data_dir)?;
-    let mut changed = false;
-    for entry in list.iter_mut() {
-        if entry.torrent_id == torrent_id {
-            entry.last_rd_status = rd_status.to_string();
-            entry.last_progress = progress;
-            entry.last_checked_at = Some(Utc::now().to_rfc3339());
-            changed = true;
-            break;
-        }
-    }
-    if changed {
+    if let Some(entry) = list.iter_mut().find(|e| e.torrent_id == torrent_id) {
+        entry.last_rd_status = rd_status.to_string();
+        entry.last_progress = progress;
+        entry.last_checked_at = Some(Utc::now().to_rfc3339());
         save(data_dir, &list)?;
     }
     Ok(list)

@@ -158,11 +158,6 @@ export const defaultFilterState = (): FilterState => ({
 export type SortColumn = "code" | "size" | "tags" | "date" | "name";
 export type SortDirection = "asc" | "desc";
 
-export interface SortState {
-  column: SortColumn | null;
-  direction: SortDirection;
-}
-
 // ---------------------------------------------------------------------------
 // M5: Real-Debrid integration
 // ---------------------------------------------------------------------------

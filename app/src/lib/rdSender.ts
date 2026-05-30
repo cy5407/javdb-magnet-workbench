@@ -12,6 +12,7 @@
 // language-agnostic.
 
 import { invoke } from "@tauri-apps/api/core";
+import { errText } from "./errText";
 import type {
   PendingEntry,
   RdCheckOutcome,
@@ -158,7 +159,7 @@ export async function sendBatch(
         };
       }
     } catch (e) {
-      const code = e instanceof Error ? e.message : String(e);
+      const code = errText(e);
       next = { ...rows[i], status: "error", links: [], error_code: code };
     }
 
@@ -235,7 +236,7 @@ export async function retryPending(
         };
       }
     } catch (e) {
-      const code = e instanceof Error ? e.message : String(e);
+      const code = errText(e);
       event = {
         index: i + 1,
         total: entries.length,

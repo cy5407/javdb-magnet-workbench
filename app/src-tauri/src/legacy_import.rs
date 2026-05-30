@@ -217,22 +217,17 @@ pub fn sanitize_pending_entry(raw: &Value) -> Option<PendingEntry> {
     }
 
     let pick_str = |k1: &str, k2: Option<&str>| -> String {
-        let v = obj.get(k1).and_then(Value::as_str);
-        let v = match (v, k2) {
-            (Some(s), _) => Some(s),
-            (None, Some(k)) => obj.get(k).and_then(Value::as_str),
-            (None, None) => None,
-        };
-        v.unwrap_or("").to_string()
+        obj.get(k1)
+            .and_then(Value::as_str)
+            .or_else(|| k2.and_then(|k| obj.get(k).and_then(Value::as_str)))
+            .unwrap_or("")
+            .to_string()
     };
     let pick_f64 = |k1: &str, k2: Option<&str>| -> f64 {
-        let v = obj.get(k1).and_then(Value::as_f64);
-        let v = match (v, k2) {
-            (Some(n), _) => Some(n),
-            (None, Some(k)) => obj.get(k).and_then(Value::as_f64),
-            (None, None) => None,
-        };
-        v.unwrap_or(0.0)
+        obj.get(k1)
+            .and_then(Value::as_f64)
+            .or_else(|| k2.and_then(|k| obj.get(k).and_then(Value::as_f64)))
+            .unwrap_or(0.0)
     };
 
     let code = pick_str("code", None);

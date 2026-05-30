@@ -9,6 +9,7 @@
 //   - Reports progress per-url via onProgress so the UI can update i/N.
 
 import { invoke } from "@tauri-apps/api/core";
+import { errText } from "./errText";
 import type { FetchResult, ScrapedGroup } from "./types";
 
 const DELAY_MIN_MS = 3000;
@@ -171,7 +172,7 @@ async function fetchGroupWithRetry(
       group.error = null;
       return;
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const message = errText(e);
       const canRetry =
         attempt === 0 &&
         isRateLimitError(message) &&

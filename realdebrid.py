@@ -108,13 +108,14 @@ class RealDebrid:
         if resp.ok:
             return
         msg = None
+        # JSON parse / type errors are intentional fall-through to generic "API error".
         try:
             body = resp.json()
             if isinstance(body, dict):
                 err = body.get("error")
                 if isinstance(err, str) and err:
                     msg = err[:80]
-        except Exception:
+        except Exception:  # nosec B110
             pass
         if msg is None:
             msg = "API error"
@@ -345,6 +346,14 @@ class RealDebrid:
             self.delete_torrent(torrent_id)
             raise RealDebridError("下載失敗")
 
+    @staticmethod
+    def _format_picked_names(files: list[dict], picked: list[int]) -> str:
+        picked_set = set(picked)
+        return ", ".join(
+            f"{Path(f['path']).name} ({f['bytes'] / 1024**3:.2f}GB)"
+            for f in files if f["id"] in picked_set
+        )
+
     def _select_files_during_wait(
         self, torrent_id: str, info: dict, strategy: str, magnet: str,
         log: Callable[[str], None],
@@ -360,10 +369,7 @@ class RealDebrid:
         if not picked:
             self.delete_torrent(torrent_id)
             raise RealDebridError("沒有可選的檔案")
-        picked_files = [f for f in files if f["id"] in picked]
-        picked_names = ", ".join(
-            f"{Path(f['path']).name} ({f['bytes'] / 1024**3:.2f}GB)" for f in picked_files
-        )
+        picked_names = self._format_picked_names(files, picked)
         log(f"選擇檔案 (策略={strategy}): {picked_names}")
         self.select_files(torrent_id, picked)
 
@@ -414,10 +420,7 @@ class RealDebrid:
             files = info.get("files", [])
             picked = self.pick_files(files, strategy, magnet=magnet)
             if picked:
-                picked_files = [f for f in files if f["id"] in picked]
-                picked_names = ", ".join(
-                    f"{Path(f['path']).name} ({f['bytes'] / 1024**3:.2f}GB)" for f in picked_files
-                )
+                picked_names = self._format_picked_names(files, picked)
                 logger.info(f"重試時補選檔案 (策略={strategy}): {picked_names}")
                 self.select_files(torrent_id, picked)
                 # 立刻再查一次
