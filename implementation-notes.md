@@ -95,6 +95,16 @@ User 點出第一次總結講太滿，後續補：
 
 5. **bandit nosec 註解格式問題**：原本 `# nosec B606 — reason in prose` 會被 bandit 解析為一堆 test ID，噴出 30+ "Test in comment: X is not a test name" warning。修法是把 reason 移到上一行 `# ...` 註解，nosec 那行只留 `# nosec B###`。修完後剩 1 個 informational warning（B606 / `os.startfile` 的 line attribution 邊界情況），suppression 仍正確（bandit 確認 "Total potential issues skipped: 6"）。
 
+## [2026-06-01] `docs/Task.md` 與 Codex `tool-scan` skill 準備
+
+**Design decisions**
+- **任務檔放在 `docs/Task.md` 而不是新建 `doc/`**：repo 既有文件目錄是 `docs/`，沒有 `doc/`。使用既有目錄避免新增平行文件根目錄。
+- **把 Claude 全域 `tool-scan` 複製到 Codex 全域 skill**：`C:\Users\cy5407\.codex\skills` 沒有 `tool-scan`，`C:\Users\cy5407\.claude\skills\tool-scan` 有 `SKILL.md` 與 `run_tool_scan.py`。已只複製這兩個必要檔案到 `C:\Users\cy5407\.codex\skills\tool-scan`，不帶 `__pycache__`。
+- **搬移後把 skill 內路徑改成 Codex 路徑**：`SKILL.md` 與 `run_tool_scan.py` 的使用範例從 `~/.claude/skills/tool-scan/run_tool_scan.py` 改成 `~/.codex/skills/tool-scan/run_tool_scan.py`，避免 Codex skill 仍依賴 Claude 目錄。
+
+**Tradeoffs**
+- **Task.md 採 P1/P2/P3 分層**：把已驗證會讓 `npm run check` 失敗或 runtime contract 破裂的項目列 P1；把使用者可見契約衝突列 P2；把小型 race/hardening 列 P3，避免下一輪把低風險項目和阻塞項混在一起。
+
 ## [2026-05-30 21:30 → 21:44, 14m] 資安審查修補（`docs/security-audit-2026-05-30.md`）
 
 Workflow `wf_5216b7b9-0f3`：5 個修補並行 → pytest+cargo 驗證 → 5 個對抗式覆核 agents 各自確認。11 agents / 495k tokens / 70 cargo + 289 pytest 全綠。
@@ -120,4 +130,3 @@ Workflow `wf_5216b7b9-0f3`：5 個修補並行 → pytest+cargo 驗證 → 5 個
 - CSP 是否需追加 `style-src 'unsafe-inline'` 與 `connect-src ipc: http://ipc.localhost`？需先 `npm run tauri dev` 看 WebView console 才能定。如 UI 破，以「最小追加」處理而不是 revert null。
 - `pending.rs` 4 MiB 是否太鬆？dozens × 400 bytes 真實 payload 對應 ~16KiB，實際可緊到 256KiB 仍有 16× 餘裕。本次保守取 audit 上限 4 MiB，後續可拉緊。
 - 對抗式覆核 agent 在 sidecar / pending 修補的 residual_concerns 點出 audit 範圍外的鄰近缺口：(a) sidecar `cmd_resolve_magnets` 對 `handle_ids` 無 cap、`cmd_set_cookies` 完全依賴 Rust 側 cap；(b) cross-call accumulation 仍無上限（N 次 fetch 可累積 1000×N 直到 `forget_magnets`）；(c) Rust `commands.rs:863`、`lib.rs:41/189`、`legacy_import.rs:314/336` 多個讀檔路徑無 size cap。這幾個都是 audit 沒列的鄰近缺口，要不要一併補？
-
