@@ -574,12 +574,12 @@ Type alias for the test-injectable sleep function.
 
 #### `parseUrlBatch(raw: string): string[]` *(scraper.ts:72)*
 
-**Purpose**: Normalize a multi-line textarea into a deduped, trimmed list of HTTP(S) URLs.
+**Purpose**: Normalize a multi-line textarea into a deduped, trimmed list of HTTPS URLs.
 
 **Contract**:
 - Params: `raw: string` — textarea contents (may contain `\r\n` or `\n`). Falsy → `[]`.
 - Returns: `string[]` — order-preserving dedupe; drops blank lines, `#`-prefixed comment lines,
-  and any line not starting with `http://` or `https://` (case-insensitive).
+  and any line not starting with `https://` (case-insensitive).
 - Side effects: none.
 - Errors: none.
 - Async: no.

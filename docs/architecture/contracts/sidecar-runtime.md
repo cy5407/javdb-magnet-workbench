@@ -244,7 +244,7 @@ Produced by `_err`:
 **Purpose**: Scrape one JavDB URL and intern returned magnets.
 
 **Contract**:
-- Params: `url` must be an `http://` or `https://` string.
+- Params: `url` must be a `https://` string.
 - Returns: success with `result.engine`, `url`, `code`, `title`, `magnet_count`, `magnets[]`; or errors `bad_request`, `cloudflare_block`, `network`.
 - Preconditions: `state.handshake_done` must be true.
 - Side effects: creates an HTTP session, performs network I/O, may add handles to `state.magnets` / `state.magnet_to_handle`.

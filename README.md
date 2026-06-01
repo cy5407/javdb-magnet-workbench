@@ -157,7 +157,8 @@ Repo 的 `.gitignore` 已擋下以上路徑，但若你的工作目錄外另有�
 匯入規則（防止 token / magnet 落地的安全保證）：
 
 - `.env` 內 `RD_API_TOKEN` → Windows Credential Manager（**不**寫入 settings.json）
-- `.env` 其他設定（`RD_FILE_PICK`、`RD_MIN_SIZE_MB`、`RD_WAIT_TIMEOUT`、`RD_CACHE_WAIT`、`UI_SCALE`、`UI_THEME`）→ settings.json
+- `.env` 其他設定（`RD_FILE_PICK`、`RD_MIN_SIZE_MB`、`RD_CACHE_WAIT`、`UI_SCALE`、`UI_THEME`）→ settings.json
+- legacy `.env` 若仍有 `RD_WAIT_TIMEOUT`，匯入時會忽略並產生 warning；它不會寫進 settings.json。
 - `cookies.txt` → 複製到 app 資料目錄
 - `pending_torrents.json` → 匯入並**自動移除 magnet 欄位**，依 torrent_id 去重
 
@@ -174,7 +175,6 @@ Repo 的 `.gitignore` 已擋下以上路徑，但若你的工作目錄外另有�
 | `file_pick` | `smart` | RD 端檔案選擇策略：smart / largest / video / all |
 | `min_size_mb` | `500` | 小於此值的影片視為廣告/雜訊跳過 |
 | `cache_wait_seconds` | `15` | 等 RD 判定快取的秒數（最小 5、最大 300） |
-| `wait_timeout_seconds` | `300` | 整體 RD 處理超時（最小 30） |
 | `theme` | `light` | `light` / `dark` |
 | `scale` | `auto` | UI 縮放：`auto` 或 0.5–3.0；4K 螢幕建議 1.5–2.0 |
 
