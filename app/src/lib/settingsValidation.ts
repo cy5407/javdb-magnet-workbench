@@ -56,14 +56,6 @@ export function validateCacheWaitSeconds(value: number): string | null {
   return null;
 }
 
-/** wait_timeout_seconds: integer, at least 30. */
-export function validateWaitTimeoutSeconds(value: number): string | null {
-  if (!Number.isFinite(value)) return "必須是數字";
-  if (!Number.isInteger(value)) return "必須是整數";
-  if (value < 30) return "最小為 30 秒（未快取的磁力會比較久）";
-  return null;
-}
-
 /** scale: literal "auto" or a decimal in [0.5, 3.0]. */
 export function validateScale(value: string): string | null {
   if (typeof value !== "string") return "必須是字串";
@@ -99,7 +91,6 @@ export function validateTheme(value: string): string | null {
  *   - "rd.file_pick"
  *   - "rd.min_size_mb"
  *   - "rd.cache_wait_seconds"
- *   - "rd.wait_timeout_seconds"
  *   - "ui.theme"
  *   - "ui.scale"
  * Empty map means draft is valid.
@@ -112,8 +103,6 @@ export function validateSettingsDraft(draft: Settings): Record<string, string> {
   if (mn) errs["rd.min_size_mb"] = mn;
   const cw = validateCacheWaitSeconds(draft.rd.cache_wait_seconds);
   if (cw) errs["rd.cache_wait_seconds"] = cw;
-  const wt = validateWaitTimeoutSeconds(draft.rd.wait_timeout_seconds);
-  if (wt) errs["rd.wait_timeout_seconds"] = wt;
   const th = validateTheme(draft.ui.theme);
   if (th) errs["ui.theme"] = th;
   const sc = validateScale(draft.ui.scale);

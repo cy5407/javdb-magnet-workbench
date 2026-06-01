@@ -130,3 +130,12 @@ Workflow `wf_5216b7b9-0f3`：5 個修補並行 → pytest+cargo 驗證 → 5 個
 - CSP 是否需追加 `style-src 'unsafe-inline'` 與 `connect-src ipc: http://ipc.localhost`？需先 `npm run tauri dev` 看 WebView console 才能定。如 UI 破，以「最小追加」處理而不是 revert null。
 - `pending.rs` 4 MiB 是否太鬆？dozens × 400 bytes 真實 payload 對應 ~16KiB，實際可緊到 256KiB 仍有 16× 餘裕。本次保守取 audit 上限 4 MiB，後續可拉緊。
 - 對抗式覆核 agent 在 sidecar / pending 修補的 residual_concerns 點出 audit 範圍外的鄰近缺口：(a) sidecar `cmd_resolve_magnets` 對 `handle_ids` 無 cap、`cmd_set_cookies` 完全依賴 Rust 側 cap；(b) cross-call accumulation 仍無上限（N 次 fetch 可累積 1000×N 直到 `forget_magnets`）；(c) Rust `commands.rs:863`、`lib.rs:41/189`、`legacy_import.rs:314/336` 多個讀檔路徑無 size cap。這幾個都是 audit 沒列的鄰近缺口，要不要一併補？
+
+---
+
+# [2026-06-01] `docs/Task.md` P1/P2/P3 修補
+
+## Design decisions
+
+- **RD unrestrict 失敗 entry 由 Python 補完整 payload，Rust/TS 只把 `error` 加成 optional**：跨語言契約由產生端明確輸出 `download=""`、`filename=""`、`filesize=0`、`streamable=0`，避免 Rust deserialize 靠 default 吞掉 Python 欄位缺漏；optional `error` 保留前端可顯示的診斷。
+- **移除 `wait_timeout_seconds` 死設定，保留 `cache_wait_seconds` 作唯一等待值**：現有 Rust `sidecar_manager`、Python `RealDebrid.process_magnet`、前端 `rdSender` 都以 `cache_wait` 作實際等待與 timeout 預算來源；把第二個等待欄位接到 IPC timeout 只會產生兩個語意重疊但行為不同的旋鈕，所以改為從 UI/validation/types/Rust settings/legacy import 移除，legacy `RD_WAIT_TIMEOUT` 僅回 warning。

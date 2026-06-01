@@ -6,7 +6,6 @@ import {
   validateScale,
   validateSettingsDraft,
   validateTheme,
-  validateWaitTimeoutSeconds,
 } from "./settingsValidation";
 import type { Settings } from "./types";
 
@@ -18,7 +17,6 @@ const draft = (over: Partial<Settings> = {}): Settings => ({
     file_pick: "smart",
     min_size_mb: 500,
     cache_wait_seconds: 15,
-    wait_timeout_seconds: 300,
     ...(over.rd ?? {}),
   },
 });
@@ -63,24 +61,6 @@ describe("validateCacheWaitSeconds", () => {
   it("rejects NaN / Infinity (not finite)", () => {
     expect(validateCacheWaitSeconds(NaN)).toMatch(/數字/);
     expect(validateCacheWaitSeconds(Infinity)).toMatch(/數字/);
-  });
-});
-
-describe("validateWaitTimeoutSeconds", () => {
-  it("rejects 29 (below floor)", () => {
-    expect(validateWaitTimeoutSeconds(29)).toMatch(/30/);
-  });
-  it("accepts 30", () => {
-    expect(validateWaitTimeoutSeconds(30)).toBeNull();
-  });
-  it("accepts 300", () => {
-    expect(validateWaitTimeoutSeconds(300)).toBeNull();
-  });
-  it("rejects NaN (not finite)", () => {
-    expect(validateWaitTimeoutSeconds(NaN)).toMatch(/數字/);
-  });
-  it("rejects non-integer", () => {
-    expect(validateWaitTimeoutSeconds(60.5)).toMatch(/整數/);
   });
 });
 
@@ -147,7 +127,6 @@ describe("validateSettingsDraft", () => {
         file_pick: "weird",
         min_size_mb: -1,
         cache_wait_seconds: 1,
-        wait_timeout_seconds: 1,
       },
     } as unknown as Partial<Settings>);
     const errs = validateSettingsDraft(bad);
@@ -155,7 +134,6 @@ describe("validateSettingsDraft", () => {
       "rd.cache_wait_seconds",
       "rd.file_pick",
       "rd.min_size_mb",
-      "rd.wait_timeout_seconds",
       "ui.scale",
       "ui.theme",
     ]);
@@ -165,7 +143,7 @@ describe("validateSettingsDraft", () => {
     // a value. If something put a value in, validateSettingsDraft
     // should still not flag it (the Rust side will clear it).
     const odd = draft({ rd: { api_token: "leaked", file_pick: "smart",
-      min_size_mb: 0, cache_wait_seconds: 5, wait_timeout_seconds: 30 } });
+      min_size_mb: 0, cache_wait_seconds: 5 } });
     expect(validateSettingsDraft(odd)).toEqual({});
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyScrapeProgressForRun,
   isRateLimitError,
   parseMagnetBatch,
   parseUrlBatch,
@@ -25,13 +26,14 @@ const fakeResult = (url: string, n = 1): FetchResult => ({
 });
 
 describe("parseUrlBatch", () => {
-  it("trims, dedupes, drops blanks/comments/non-http", () => {
+  it("trims, dedupes, drops blanks/comments/non-https", () => {
     const raw = [
       "https://javdb.com/v/A",
       "  https://javdb.com/v/B",
       "",
       "# this is a comment",
       "https://javdb.com/v/A", // dup
+      "http://javdb.com/v/plaintext",
       "ftp://nope",
       "javascript:alert(1)",
       "https://javdb.com/v/C",
@@ -46,6 +48,12 @@ describe("parseUrlBatch", () => {
   it("empty input → []", () => {
     expect(parseUrlBatch("")).toEqual([]);
     expect(parseUrlBatch("   \n  \n")).toEqual([]);
+  });
+
+  it("drops http URLs before they reach the HTTPS-only sidecar command", () => {
+    expect(parseUrlBatch("http://javdb.com/v/A\nhttps://javdb.com/v/B")).toEqual([
+      "https://javdb.com/v/B",
+    ]);
   });
 });
 
@@ -102,6 +110,40 @@ describe("randomDelayMs", () => {
       expect(v).toBeGreaterThanOrEqual(100);
       expect(v).toBeLessThanOrEqual(200);
     }
+  });
+});
+
+describe("applyScrapeProgressForRun", () => {
+  it("applies progress only for the active run", () => {
+    const original = {
+      groups: [],
+      scrapeProgress: { done: 0, total: 0 },
+    };
+    const group = {
+      url: "https://javdb.com/v/A",
+      status: "ok" as const,
+      result: fakeResult("https://javdb.com/v/A"),
+      error: null,
+      finished_at: "2026-06-01T00:00:00.000Z",
+    };
+
+    const applied = applyScrapeProgressForRun(
+      original,
+      { index: 1, total: 1, group },
+      7,
+      7,
+    );
+    expect(applied.groups).toEqual([group]);
+    expect(applied.scrapeProgress).toEqual({ done: 1, total: 1 });
+
+    const stale = applyScrapeProgressForRun(
+      { groups: [], scrapeProgress: { done: 0, total: 0 } },
+      { index: 1, total: 1, group },
+      8,
+      7,
+    );
+    expect(stale.groups).toEqual([]);
+    expect(stale.scrapeProgress).toEqual({ done: 0, total: 0 });
   });
 });
 
@@ -168,6 +210,35 @@ describe("scrapeBatch", () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(out[0].status).toBe("error");
     expect(out[0].error).toContain("429");
+  });
+
+  it("aborting during retry backoff prevents the retry request", async () => {
+    const ctrl = new AbortController();
+    const sleep = vi.fn(async () => {
+      ctrl.abort();
+    });
+    const progress = vi.fn();
+    const fetcher = vi.fn(async () => {
+      throw new Error("HTTP 429");
+    });
+
+    const out = await scrapeBatch(
+      ["https://javdb.com/v/A"],
+      progress,
+      {
+        sleep,
+        fetcher,
+        delayRange: [0, 0],
+        retryWaitRange: [10, 10],
+        signal: ctrl.signal,
+      },
+    );
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(out[0].status).toBe("pending");
+    expect(out[0].finished_at).toBeNull();
+    expect(progress).not.toHaveBeenCalled();
   });
 
   it("AbortSignal stops further URLs", async () => {

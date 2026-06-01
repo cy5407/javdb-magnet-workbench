@@ -43,9 +43,9 @@ nothing imports it cyclically. Each lib file is a leaf that pairs with `types.ts
 | Module | Runtime exports | Type-only exports |
 |--------|-----------------|-------------------|
 | `magnetUtils.ts` | `parseSizeGb`, `parseFileCount`, `matchesKeyword`, `isHd`, `filterRows`, `applyGroupPick`, `sortRows`, `processGroupRows`, `dedupeByHandleId` | — |
-| `scraper.ts` | `isRateLimitError`, `randomDelayMs`, `parseUrlBatch`, `parseMagnetBatch`, `scrapeBatch` | `SleepFn`, `ScrapeProgressEvent`, `ScrapeOptions` |
+| `scraper.ts` | `isRateLimitError`, `randomDelayMs`, `parseUrlBatch`, `parseMagnetBatch`, `applyScrapeProgressForRun`, `scrapeBatch` | `SleepFn`, `ScrapeProgressEvent`, `ScrapeUiSnapshot`, `ScrapeOptions` |
 | `rdSender.ts` | `sendBatch`, `retryPending`, `rdErrorMessage` | `RdSendOptions`, `RdSendItem`, `RdSendBatchEvent`, `RdSendBatchOptions`, `RdRetryEvent`, `RdRetryOptions` |
-| `settingsValidation.ts` | `FILE_PICK_VALUES`, `THEME_VALUES`, `SCALE_PRESETS`, `validateMinSizeMb`, `validateCacheWaitSeconds`, `validateWaitTimeoutSeconds`, `validateScale`, `validateFilePick`, `validateTheme`, `validateSettingsDraft` | `FilePickValue`, `ThemeValue` |
+| `settingsValidation.ts` | `FILE_PICK_VALUES`, `THEME_VALUES`, `SCALE_PRESETS`, `validateMinSizeMb`, `validateCacheWaitSeconds`, `validateScale`, `validateFilePick`, `validateTheme`, `validateSettingsDraft` | `FilePickValue`, `ThemeValue` |
 | `types.ts` | `defaultFilterState` | `Theme`, `PathInfo`, `UiSettings`, `RdSettings`, `Settings`, `MagnetRow`, `FetchResult`, `PingResponse`, `CopyBulkResult`, `CopyRdLinksBulkResult`, `LegacyImportPreview`, `CookiesStatus`, `LegacyImportReport`, `ScrapedGroup`, `GroupPick`, `FilterState`, `SortColumn`, `SortDirection`, `RdUserInfo`, `RdLink`, `RdSendOutcome`, `RdCheckOutcome`, `PendingEntry`, `RdSendProgress` |
 
 ### 1.4 Bridge to Rust
@@ -110,7 +110,7 @@ Mirrors Rust `UiSettings`.
 - `api_token: string` — write-only from the frontend perspective; Rust returns `""` here (the
   on-disk file uses an encrypted store; the WebView never sees plaintext on read-back).
 - `file_pick: string` — one of `FILE_PICK_VALUES`.
-- `min_size_mb: number`, `cache_wait_seconds: number`, `wait_timeout_seconds: number`.
+- `min_size_mb: number`, `cache_wait_seconds: number`.
 
 Mirrors Rust `RdSettings`. Validation rules: see [settingsValidation.ts](app/src/lib/settingsValidation.ts).
 
@@ -862,17 +862,6 @@ checks identical to `validateMinSizeMb`.
 
 ---
 
-#### `validateWaitTimeoutSeconds(value: number): string | null` *(settingsValidation.ts:51)*
-
-**Purpose**: Integer ≥ 30 check for `rd.wait_timeout_seconds`. Error string at 30 boundary:
-`「最小為 30 秒（未快取的磁力會比較久）」`.
-
-**Calls**: `Number.isFinite`, `Number.isInteger`.
-
-**Called by**: `validateSettingsDraft`, `settingsValidation.test.ts`.
-
----
-
 #### `validateScale(value: string): string | null` *(settingsValidation.ts:59)*
 
 **Purpose**: Validate `ui.scale` — must be `"auto"` (literal) OR a decimal in `[0.5, 3.0]`.
@@ -923,14 +912,14 @@ map means the draft is valid.
 **Contract**:
 - Params: `draft: Settings` — the full editor state.
 - Returns: `Record<string, string>` — keys are stable UI ids: `"rd.file_pick"`,
-  `"rd.min_size_mb"`, `"rd.cache_wait_seconds"`, `"rd.wait_timeout_seconds"`, `"ui.theme"`,
+  `"rd.min_size_mb"`, `"rd.cache_wait_seconds"`, `"ui.theme"`,
   `"ui.scale"`. Missing key = that field is valid.
 - Note: `rd.api_token` is **not** validated here (the field is intentionally write-only and
   may be empty meaning "leave as-is"; the Rust side handles its semantics).
 - Side effects: none. Errors: none. Async: no.
 
 **Calls**: `validateFilePick`, `validateMinSizeMb`, `validateCacheWaitSeconds`,
-`validateWaitTimeoutSeconds`, `validateTheme`, `validateScale`.
+`validateTheme`, `validateScale`.
 
 **Called by**:
 - `App.svelte` line 898 (derived state controlling the Save button) — search

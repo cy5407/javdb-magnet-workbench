@@ -462,5 +462,12 @@ class RealDebrid:
                 logger.info(f"  ✓ {unrestricted.get('filename', '')} ({unrestricted.get('filesize', 0)} bytes)")
             except RealDebridError as e:
                 logger.warning(f"  ✗ unrestrict 失敗: {link} - {e}")
-                results.append({"original": link, "error": str(e)})
+                results.append({
+                    "original": link,
+                    "download": "",
+                    "filename": "",
+                    "filesize": 0,
+                    "streamable": 0,
+                    "error": str(e),
+                })
         return results

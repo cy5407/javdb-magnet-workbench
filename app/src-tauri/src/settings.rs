@@ -33,7 +33,6 @@ pub struct RdSettings {
     pub file_pick: String,
     pub min_size_mb: u32,
     pub cache_wait_seconds: u32,
-    pub wait_timeout_seconds: u32,
 }
 
 impl Default for RdSettings {
@@ -43,7 +42,6 @@ impl Default for RdSettings {
             file_pick: "smart".to_string(),
             min_size_mb: 500,
             cache_wait_seconds: 15,
-            wait_timeout_seconds: 300,
         }
     }
 }

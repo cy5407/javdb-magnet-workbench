@@ -85,10 +85,12 @@ pub struct ParsedEnv {
 /// - `RD_API_TOKEN`           → `ParsedEnv.token` (NOT in settings_patch)
 /// - `RD_FILE_PICK`           → `settings_patch.rd.file_pick`
 /// - `RD_MIN_SIZE_MB`         → `settings_patch.rd.min_size_mb`
-/// - `RD_WAIT_TIMEOUT`        → `settings_patch.rd.wait_timeout_seconds`
 /// - `RD_CACHE_WAIT`          → `settings_patch.rd.cache_wait_seconds`
 /// - `UI_SCALE`               → `settings_patch.ui.scale`
 /// - `UI_THEME`               → `settings_patch.ui.theme`
+///
+/// `RD_WAIT_TIMEOUT` is intentionally not imported. The Tauri app now uses
+/// `RD_CACHE_WAIT` / `cache_wait_seconds` as the only Real-Debrid wait budget.
 pub fn parse_env(content: &str) -> ParsedEnv {
     let mut out = ParsedEnv::default();
     let mut rd = Map::new();
@@ -151,9 +153,11 @@ fn dispatch_env_entry(
     match key {
         "RD_API_TOKEN" => assign_token(key, unquoted, out),
         "RD_FILE_PICK" => assign_str_setting(key, unquoted, "file_pick", rd, out),
-        "RD_MIN_SIZE_MB" => assign_u64_setting(key, unquoted, "min_size_mb", rd, out),
-        "RD_WAIT_TIMEOUT" => assign_u64_setting(key, unquoted, "wait_timeout_seconds", rd, out),
-        "RD_CACHE_WAIT" => assign_u64_setting(key, unquoted, "cache_wait_seconds", rd, out),
+        "RD_MIN_SIZE_MB" => assign_u32_setting(key, unquoted, "min_size_mb", rd, out),
+        "RD_WAIT_TIMEOUT" => out
+            .warnings
+            .push("ignored deprecated key: RD_WAIT_TIMEOUT".to_string()),
+        "RD_CACHE_WAIT" => assign_u32_setting(key, unquoted, "cache_wait_seconds", rd, out),
         "UI_SCALE" => assign_str_setting(key, unquoted, "scale", ui, out),
         "UI_THEME" => assign_str_setting(key, unquoted, "theme", ui, out),
         other => {
@@ -184,21 +188,21 @@ fn assign_str_setting(
     out.recognized_keys.push(env_key.to_string());
 }
 
-fn assign_u64_setting(
+fn assign_u32_setting(
     env_key: &str,
     value: &str,
     target_key: &str,
     bucket: &mut Map<String, Value>,
     out: &mut ParsedEnv,
 ) {
-    match value.parse::<u64>() {
+    match value.parse::<u32>() {
         Ok(n) => {
             bucket.insert(target_key.into(), json!(n));
             out.recognized_keys.push(env_key.to_string());
         }
         Err(_) => out
             .warnings
-            .push(format!("{env_key} not a non-negative integer: {value}")),
+            .push(format!("{env_key} not a u32 non-negative integer")),
     }
 }
 
@@ -518,10 +522,33 @@ RD_MIN_SIZE_MB=700
         let p = parse_env(env);
         assert!(p.warnings.iter().any(|w| w.contains("RD_MIN_SIZE_MB")));
         assert!(p.warnings.iter().any(|w| w.contains("RD_CACHE_WAIT")));
+        assert!(!p.warnings.iter().any(|w| w.contains("abc")));
+        assert!(!p.warnings.iter().any(|w| w.contains("-5")));
         // Neither numeric key landed in patch.
         let raw = serde_json::to_string(&p.settings_patch).unwrap();
         assert!(!raw.contains("min_size_mb"), "{raw}");
         assert!(!raw.contains("cache_wait_seconds"), "{raw}");
+    }
+
+    #[test]
+    fn parse_env_rejects_u32_overflow_numeric_values() {
+        let env = "RD_CACHE_WAIT=99999999999\nRD_MIN_SIZE_MB=123\n";
+        let p = parse_env(env);
+        assert_eq!(p.settings_patch["rd"]["min_size_mb"], json!(123));
+        let raw = serde_json::to_string(&p.settings_patch).unwrap();
+        assert!(!raw.contains("cache_wait_seconds"), "{raw}");
+        assert!(p.warnings.iter().any(|w| w.contains("RD_CACHE_WAIT")));
+        assert!(!p.warnings.iter().any(|w| w.contains("99999999999")));
+    }
+
+    #[test]
+    fn parse_env_ignores_deprecated_wait_timeout() {
+        let p = parse_env("RD_WAIT_TIMEOUT=60\nRD_CACHE_WAIT=20\n");
+        assert_eq!(p.settings_patch["rd"]["cache_wait_seconds"], json!(20));
+        let raw = serde_json::to_string(&p.settings_patch).unwrap();
+        assert!(!raw.contains("wait_timeout_seconds"), "{raw}");
+        assert!(p.warnings.iter().any(|w| w.contains("RD_WAIT_TIMEOUT")));
+        assert!(!p.warnings.iter().any(|w| w.contains("60")));
     }
 
     #[test]
@@ -669,7 +696,7 @@ RD_MIN_SIZE_MB=700
             "version": 1,
             "ui": {"theme": "light", "scale": "auto"},
             "rd": {"api_token": "OLD_LEAK", "file_pick": "smart", "min_size_mb": 500,
-                   "cache_wait_seconds": 15, "wait_timeout_seconds": 300},
+                   "cache_wait_seconds": 15},
         });
         let mut patch = Map::new();
         let mut rd = Map::new();

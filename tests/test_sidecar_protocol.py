@@ -44,11 +44,17 @@ class RedactMagnet(unittest.TestCase):
         self.assertEqual(sd.redact_magnet(full),
                          "magnet:?xt=urn:btih:01234567...")
 
+    def test_uppercase_scheme_redacted_to_canonical_scheme(self):
+        full = "MAGNET:?xt=urn:btih:ABCDEF0123456789&dn=test"
+        self.assertEqual(sd.redact_magnet(full),
+                         "magnet:?xt=urn:btih:ABCDEF01...")
+
     def test_empty_returns_empty(self):
         self.assertEqual(sd.redact_magnet(""), "")
 
     def test_non_btih_magnet(self):
         self.assertEqual(sd.redact_magnet("magnet:?xt=urn:other"), "magnet:...")
+        self.assertEqual(sd.redact_magnet("MAGNET:?xt=urn:other"), "magnet:...")
 
     def test_not_a_magnet(self):
         self.assertEqual(sd.redact_magnet("https://example.com"), "<not-a-magnet>")
@@ -1600,6 +1606,27 @@ class RegisterMagnetLimits(unittest.TestCase):
         self.assertEqual(len(resp["invalid"]), 1)
         # Invalid entry should be bounded — never echo the full attacker string
         self.assertLessEqual(len(resp["invalid"][0]), 64)
+
+    def test_accepts_uppercase_magnet_scheme(self):
+        state = self._state()
+        magnet = (
+            "MAGNET:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+            "&dn=SNOS-192"
+        )
+        resp = sd.cmd_register_magnets(state, {
+            "request_id": "r",
+            "magnets": [magnet],
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["invalid"], [])
+        self.assertEqual(len(resp["registered"]), 1)
+        handle_id = resp["registered"][0]["handle_id"]
+        self.assertEqual(state.magnets[handle_id], magnet)
+        self.assertEqual(resp["registered"][0]["name"], "SNOS-192")
+        self.assertEqual(
+            resp["registered"][0]["magnet_redacted"],
+            "magnet:?xt=urn:btih:ABCDEF01...",
+        )
 
 
 class FetchJavdbLimits(unittest.TestCase):

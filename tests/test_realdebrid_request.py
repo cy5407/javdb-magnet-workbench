@@ -416,7 +416,8 @@ class CollectLinks(unittest.TestCase):
         self.assertEqual(out, [])
 
     def test_unrestrict_failure_recorded_as_error_entry(self):
-        # First link succeeds, second raises → second slot gets {"original", "error"}.
+        # First link succeeds, second raises → second slot preserves the
+        # cross-language RdLink shape and carries an error string.
         good = {"download": "https://dl/ok", "filename": "ok.mp4",
                 "filesize": 1, "streamable": 0}
         info = {"links": ["https://l/a", "https://l/b"]}
@@ -426,8 +427,11 @@ class CollectLinks(unittest.TestCase):
         self.assertEqual(len(out), 2)
         self.assertEqual(out[0]["download"], "https://dl/ok")
         self.assertEqual(out[1]["original"], "https://l/b")
+        self.assertEqual(out[1]["download"], "")
+        self.assertEqual(out[1]["filename"], "")
+        self.assertEqual(out[1]["filesize"], 0)
+        self.assertEqual(out[1]["streamable"], 0)
         self.assertIn("503", out[1]["error"])
-        self.assertNotIn("download", out[1])  # error entries don't carry download
 
 
 # ---------------------------------------------------------------------------

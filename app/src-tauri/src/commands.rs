@@ -162,10 +162,22 @@ pub async fn copy_magnets_bulk(
     let resp = sidecar
         .request("resolve_magnets", json!({ "handle_ids": handle_ids }))
         .await?;
-    if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-        return Err("resolve_magnets failed".to_string());
-    }
+    let (lines, unknown) = resolved_magnets_from_response(&resp)?;
+    let copied = lines.len();
 
+    if !lines.is_empty() {
+        let joined = lines.join("\n");
+        app.clipboard()
+            .write_text(joined)
+            .map_err(|e| e.to_string())?;
+    }
+    // `lines` and `joined` drop here; never returned, never logged.
+
+    Ok(CopyBulkResult { copied, unknown })
+}
+
+fn resolved_magnets_from_response(resp: &Value) -> Result<(Vec<String>, usize), String> {
+    ensure_ok(resp)?;
     let magnets_arr = resp
         .get("magnets")
         .and_then(|m| m.as_array())
@@ -181,18 +193,7 @@ pub async fn copy_magnets_bulk(
         .iter()
         .filter_map(|m| m.get("magnet").and_then(|s| s.as_str()).map(String::from))
         .collect();
-    let copied = lines.len();
-    let unknown = unknown_arr.len();
-
-    if !lines.is_empty() {
-        let joined = lines.join("\n");
-        app.clipboard()
-            .write_text(joined)
-            .map_err(|e| e.to_string())?;
-    }
-    // `lines` and `joined` drop here; never returned, never logged.
-
-    Ok(CopyBulkResult { copied, unknown })
+    Ok((lines, unknown_arr.len()))
 }
 
 /// Result of `copy_rd_links_bulk`. Only `copied` is exposed — Rust filters
@@ -387,6 +388,8 @@ pub struct RdLink {
     pub filesize: i64,
     #[serde(default)]
     pub streamable: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1144,6 +1147,55 @@ fn open_in_explorer(p: &std::path::Path) -> Result<(), String> {
             "open_in_explorer not implemented for this OS: {}",
             p.display()
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests_task_contracts {
+    use super::*;
+
+    #[test]
+    fn rd_link_deserializes_completed_payload_with_error_entry() {
+        let links: Vec<RdLink> = serde_json::from_value(json!([
+            {
+                "original": "https://l/ok",
+                "download": "https://dl/ok",
+                "filename": "ok.mp4",
+                "filesize": 123,
+                "streamable": 1
+            },
+            {
+                "original": "https://l/fail",
+                "download": "",
+                "filename": "",
+                "filesize": 0,
+                "streamable": 0,
+                "error": "HTTP 503: gone"
+            }
+        ]))
+        .unwrap();
+
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].download, "https://dl/ok");
+        assert_eq!(links[1].download, "");
+        assert_eq!(links[1].filename, "");
+        assert_eq!(links[1].filesize, 0);
+        assert_eq!(links[1].streamable, 0);
+        assert_eq!(links[1].error.as_deref(), Some("HTTP 503: gone"));
+    }
+
+    #[test]
+    fn resolved_magnets_response_preserves_sidecar_error_code() {
+        let resp = json!({
+            "ok": false,
+            "error": {
+                "code": "unknown_handle",
+                "message": "missing handle"
+            }
+        });
+
+        let err = resolved_magnets_from_response(&resp).unwrap_err();
+        assert_eq!(err, "unknown_handle");
     }
 }
 

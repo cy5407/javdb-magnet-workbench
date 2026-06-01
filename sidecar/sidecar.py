@@ -66,7 +66,8 @@ MAX_MAGNET_URI_LEN = 4096     # cap on a single magnet URI length (bytes)
 # linear (Sonar flags unbounded `+` on `[a-fA-F0-9]` as polynomial
 # backtracking) while still covering both.
 _REDACT_MAGNET_RX = re.compile(
-    r"^(magnet:\?xt=urn:btih:)([a-fA-F0-9]{1,128})"
+    r"^magnet:\?xt=urn:btih:([a-fA-F0-9]{1,128})",
+    re.IGNORECASE,
 )
 
 
@@ -76,8 +77,8 @@ def redact_magnet(uri: str) -> str:
         return ""
     m = _REDACT_MAGNET_RX.match(uri)
     if m:
-        return f"{m.group(1)}{m.group(2)[:8]}..."
-    return "magnet:..." if uri.startswith("magnet:") else "<not-a-magnet>"
+        return f"magnet:?xt=urn:btih:{m.group(1)[:8]}..."
+    return "magnet:..." if uri.lower().startswith("magnet:") else "<not-a-magnet>"
 
 
 def extract_magnet_dn(uri: str) -> str:
@@ -468,7 +469,7 @@ def cmd_register_magnets(state: DaemonState, req: dict) -> dict:
         if len(s) > MAX_MAGNET_URI_LEN:
             invalid.append(s[:64])   # truncate for invalid list so we don't echo full
             continue
-        if not s.startswith("magnet:"):
+        if not s.lower().startswith("magnet:"):
             invalid.append(s)
             continue
 
@@ -585,9 +586,11 @@ def _rd_client(state: DaemonState, token_override: str | None = None,
         raise RealDebridError("RD_API_TOKEN not configured")
     if min_size_mb is None:
         rd_settings = (state.settings or {}).get("rd") or {}
-        try:
-            min_size_mb = int(rd_settings.get("min_size_mb", 500))
-        except (TypeError, ValueError):
+        min_size_mb = _coerce_int_setting(
+            rd_settings.get("min_size_mb"),
+            min_value=0,
+        )
+        if min_size_mb is None:
             min_size_mb = 500
     return RealDebrid(token, min_size_mb=min_size_mb)
 
@@ -600,18 +603,29 @@ def _resolve_strategy(state: DaemonState, override: str | None) -> str:
     return s if isinstance(s, str) and s else "smart"
 
 
-def _resolve_int_setting(state: DaemonState, key: str, override, default: int) -> int:
-    def coerce(v):
-        if isinstance(v, int) and v > 0:
-            return v
-        if isinstance(v, str) and v.isdigit():
-            return int(v)
-        return None
-    result = coerce(override)
+def _coerce_int_setting(value, *, min_value: int) -> int | None:
+    if type(value) is int and value >= min_value:
+        return value
+    if isinstance(value, str) and value.isdigit():
+        parsed = int(value)
+        if parsed >= min_value:
+            return parsed
+    return None
+
+
+def _resolve_int_setting(
+    state: DaemonState,
+    key: str,
+    override,
+    default: int,
+    *,
+    min_value: int = 1,
+) -> int:
+    result = _coerce_int_setting(override, min_value=min_value)
     if result is not None:
         return result
     rd_settings = (state.settings or {}).get("rd") or {}
-    result = coerce(rd_settings.get(key))
+    result = _coerce_int_setting(rd_settings.get(key), min_value=min_value)
     if result is not None:
         return result
     return default
@@ -716,8 +730,12 @@ def cmd_rd_send_magnet(state: DaemonState, req: dict) -> dict:
         return _err(req, "unknown_handle", "magnet handle not in current session")
 
     strategy = _resolve_strategy(state, req.get("strategy"))
-    cache_wait = _resolve_int_setting(state, "cache_wait_seconds", req.get("cache_wait"), 15)
-    min_size_mb = _resolve_int_setting(state, "min_size_mb", req.get("min_size_mb"), 500)
+    cache_wait = _resolve_int_setting(
+        state, "cache_wait_seconds", req.get("cache_wait"), 15, min_value=1,
+    )
+    min_size_mb = _resolve_int_setting(
+        state, "min_size_mb", req.get("min_size_mb"), 500, min_value=0,
+    )
 
     try:
         client = _rd_client(state, min_size_mb=min_size_mb)

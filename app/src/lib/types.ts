@@ -24,7 +24,6 @@ export interface RdSettings {
   file_pick: string;
   min_size_mb: number;
   cache_wait_seconds: number;
-  wait_timeout_seconds: number;
 }
 
 export interface Settings {
@@ -175,6 +174,7 @@ export interface RdLink {
   filename: string;
   filesize: number;
   streamable: number;
+  error?: string;
 }
 
 /** Result of `rd_send_magnet`. Discriminated union on `status`. */

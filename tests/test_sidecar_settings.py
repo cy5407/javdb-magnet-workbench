@@ -183,6 +183,14 @@ class ResolveIntSetting(unittest.TestCase):
             30,
         )
 
+    def test_min_size_zero_override_allowed(self):
+        state = sd.DaemonState()
+        state.settings = {"rd": {"min_size_mb": 500}}
+        self.assertEqual(
+            sd._resolve_int_setting(state, "min_size_mb", 0, 500, min_value=0),
+            0,
+        )
+
     def test_negative_override_ignored(self):
         state = sd.DaemonState()
         self.assertEqual(
@@ -213,12 +221,32 @@ class ResolveIntSetting(unittest.TestCase):
             750,
         )
 
-    def test_setting_zero_falls_back_to_default(self):
+    def test_min_size_setting_zero_used(self):
         state = sd.DaemonState()
         state.settings = {"rd": {"min_size_mb": 0}}
         self.assertEqual(
-            sd._resolve_int_setting(state, "min_size_mb", None, 500),
+            sd._resolve_int_setting(state, "min_size_mb", None, 500, min_value=0),
+            0,
+        )
+
+    def test_cache_wait_setting_zero_falls_back_to_default(self):
+        state = sd.DaemonState()
+        state.settings = {"rd": {"cache_wait_seconds": 0}}
+        self.assertEqual(
+            sd._resolve_int_setting(state, "cache_wait_seconds", None, 15),
+            15,
+        )
+
+    def test_bool_values_are_not_treated_as_ints(self):
+        state = sd.DaemonState()
+        state.settings = {"rd": {"min_size_mb": True, "cache_wait_seconds": False}}
+        self.assertEqual(
+            sd._resolve_int_setting(state, "min_size_mb", False, 500, min_value=0),
             500,
+        )
+        self.assertEqual(
+            sd._resolve_int_setting(state, "cache_wait_seconds", True, 15),
+            15,
         )
 
     def test_missing_setting_returns_default(self):
@@ -325,6 +353,20 @@ class RdClientFactory(unittest.TestCase):
         sd._rd_client(state)
         self.assertEqual(self.constructed[-1][1], 500)
 
+    def test_min_size_mb_settings_zero_is_preserved(self):
+        state = sd.DaemonState()
+        state.rd_token = "tok"
+        state.settings = {"rd": {"min_size_mb": 0}}
+        sd._rd_client(state)
+        self.assertEqual(self.constructed[-1][1], 0)
+
+    def test_min_size_mb_bool_setting_falls_back_to_500(self):
+        state = sd.DaemonState()
+        state.rd_token = "tok"
+        state.settings = {"rd": {"min_size_mb": True}}
+        sd._rd_client(state)
+        self.assertEqual(self.constructed[-1][1], 500)
+
     def test_no_token_raises_rd_error(self):
         state = sd.DaemonState()
         # state.rd_token = "" (default)
@@ -403,6 +445,18 @@ class RdSendMagnetSettingsWiring(unittest.TestCase):
         pm_kwargs = fake.process_magnet.call_args.kwargs
         self.assertEqual(pm_kwargs["strategy"], "video")
         self.assertEqual(pm_kwargs["cache_wait"], 3)
+
+    def test_min_size_zero_setting_is_passed_to_rd_client(self):
+        state = self._state_with_magnet(
+            settings={"rd": {"file_pick": "smart",
+                             "cache_wait_seconds": 20,
+                             "min_size_mb": 0}},
+        )
+        fake = self._stub_client()
+        with mock.patch.object(sd, "_rd_client", return_value=fake) as m:
+            sd.dispatch(state, {"cmd": "rd_send_magnet", "request_id": "r",
+                                "handle_id": "h-1"})
+        self.assertEqual(m.call_args.kwargs["min_size_mb"], 0)
 
     def test_unexpected_exception_redacted(self):
         # A non-RealDebridError that escapes _rd_client / process_magnet

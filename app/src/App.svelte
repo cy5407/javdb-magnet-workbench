@@ -4,6 +4,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open as openExternal } from "@tauri-apps/plugin-shell";
   import {
+    applyScrapeProgressForRun,
     parseMagnetBatch,
     parseUrlBatch,
     scrapeBatch,
@@ -70,6 +71,7 @@
   });
   let isScraping = $state(false);
   let scrapeAbort: AbortController | null = null;
+  let scrapeRunId = 0;
 
   // M4b — filter / sort / collapse state
   let filter = $state<FilterState>(defaultFilterState());
@@ -246,27 +248,41 @@
     }));
     scrapeProgress = { done: 0, total: urls.length };
     isScraping = true;
-    scrapeAbort = new AbortController();
+    const runId = ++scrapeRunId;
+    const controller = new AbortController();
+    scrapeAbort = controller;
 
     try {
       await scrapeBatch(
         urls,
         (ev: ScrapeProgressEvent) => {
-          // Replace the slot with the settled group so Svelte 5 fine-grained
-          // reactivity picks up the change.
-          groups[ev.index - 1] = ev.group;
-          scrapeProgress = { done: ev.index, total: ev.total };
+          const current = { groups, scrapeProgress };
+          const next = applyScrapeProgressForRun(
+            current,
+            ev,
+            scrapeRunId,
+            runId,
+          );
+          if (next !== current) {
+            groups = next.groups;
+            scrapeProgress = next.scrapeProgress;
+          }
         },
-        { signal: scrapeAbort.signal },
+        { signal: controller.signal },
       );
     } finally {
-      isScraping = false;
-      scrapeAbort = null;
+      if (scrapeRunId === runId) {
+        isScraping = false;
+        scrapeAbort = null;
+      }
     }
   }
 
   function cancelScrape() {
     scrapeAbort?.abort();
+    scrapeRunId += 1;
+    isScraping = false;
+    scrapeAbort = null;
   }
 
   /**
@@ -454,6 +470,9 @@
     if (isScraping) {
       scrapeAbort?.abort();
     }
+    scrapeRunId += 1;
+    isScraping = false;
+    scrapeAbort = null;
     // Snapshot handle ids before nuking the array so the sidecar can drop them.
     const ids: string[] = [];
     for (const g of groups) {
@@ -1482,21 +1501,6 @@
             />
             {#if settingsErrors["rd.cache_wait_seconds"]}
               <span class="err small">{settingsErrors["rd.cache_wait_seconds"]}</span>
-            {/if}
-          </label>
-        </div>
-        <div class="row stack">
-          <label class="grow" for="set-wait-timeout">
-            最長等待秒數（wait_timeout_seconds；≥ 30）
-            <input
-              id="set-wait-timeout"
-              type="number"
-              min="30"
-              step="1"
-              bind:value={settingsDraft.rd.wait_timeout_seconds}
-            />
-            {#if settingsErrors["rd.wait_timeout_seconds"]}
-              <span class="err small">{settingsErrors["rd.wait_timeout_seconds"]}</span>
             {/if}
           </label>
         </div>

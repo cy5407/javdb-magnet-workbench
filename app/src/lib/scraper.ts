@@ -78,6 +78,26 @@ export interface ScrapeProgressEvent {
   group: ScrapedGroup;
 }
 
+export interface ScrapeUiSnapshot {
+  groups: ScrapedGroup[];
+  scrapeProgress: { done: number; total: number };
+}
+
+export function applyScrapeProgressForRun(
+  state: ScrapeUiSnapshot,
+  ev: ScrapeProgressEvent,
+  activeRunId: number,
+  eventRunId: number,
+): ScrapeUiSnapshot {
+  if (activeRunId !== eventRunId) return state;
+  const groups = state.groups.slice();
+  groups[ev.index - 1] = ev.group;
+  return {
+    groups,
+    scrapeProgress: { done: ev.index, total: ev.total },
+  };
+}
+
 export interface ScrapeOptions {
   /** Abort flag the caller can flip to stop after the in-flight request */
   signal?: AbortSignal;
@@ -97,7 +117,7 @@ const defaultFetcher = (url: string): Promise<FetchResult> =>
 
 /**
  * Normalize whatever the user pasted into the textarea into a deduped,
- * trimmed list of URL strings. Empty lines, comment lines (`#`),
+ * trimmed list of HTTPS URL strings. Empty lines, comment lines (`#`),
  * and obvious garbage are dropped.
  */
 export function parseUrlBatch(raw: string): string[] {
@@ -108,7 +128,7 @@ export function parseUrlBatch(raw: string): string[] {
     const trimmed = line.trim();
     if (!trimmed) continue;
     if (trimmed.startsWith("#")) continue;
-    if (!/^https?:\/\//i.test(trimmed)) continue;
+    if (!/^https:\/\//i.test(trimmed)) continue;
     if (seen.has(trimmed)) continue;
     seen.add(trimmed);
     out.push(trimmed);
@@ -163,14 +183,14 @@ function resolveScrapeOptions(opts: ScrapeOptions): ResolvedScrapeOptions {
 async function fetchGroupWithRetry(
   group: ScrapedGroup,
   resolved: ResolvedScrapeOptions,
-): Promise<void> {
+): Promise<boolean> {
   // attempt 0 = first try; attempt 1 = single retry after rate-limit
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       group.result = await resolved.fetcher(group.url);
       group.status = "ok";
       group.error = null;
-      return;
+      return true;
     } catch (e) {
       const message = errText(e);
       const canRetry =
@@ -180,11 +200,17 @@ async function fetchGroupWithRetry(
       if (!canRetry) {
         group.error = message;
         group.status = "error";
-        return;
+        return true;
       }
       await resolved.sleep(randomDelayMs(...resolved.retryWaitRange));
+      if (resolved.signal?.aborted) {
+        group.status = "pending";
+        group.error = null;
+        return false;
+      }
     }
   }
+  return true;
 }
 
 /**
@@ -216,7 +242,8 @@ export async function scrapeBatch(
 
     const group = groups[i];
     group.status = "fetching";
-    await fetchGroupWithRetry(group, resolved);
+    const settled = await fetchGroupWithRetry(group, resolved);
+    if (!settled) break;
     group.finished_at = new Date().toISOString();
     onProgress({ index: i + 1, total: groups.length, group });
   }

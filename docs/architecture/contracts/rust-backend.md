@@ -928,15 +928,15 @@ DTO. `token` and `settings_patch` are structurally separate — by construction 
 **Recognized keys**:
 - `RD_API_TOKEN` → `token` (never patch).
 - `RD_FILE_PICK` → `settings_patch.rd.file_pick`.
-- `RD_MIN_SIZE_MB` → `settings_patch.rd.min_size_mb` (u64; warning on parse fail).
-- `RD_WAIT_TIMEOUT` → `settings_patch.rd.wait_timeout_seconds` (u64).
-- `RD_CACHE_WAIT` → `settings_patch.rd.cache_wait_seconds` (u64).
+- `RD_MIN_SIZE_MB` → `settings_patch.rd.min_size_mb` (u32; warning on parse fail).
+- `RD_WAIT_TIMEOUT` → warning only; no settings patch because `cache_wait_seconds` is the only RD wait budget.
+- `RD_CACHE_WAIT` → `settings_patch.rd.cache_wait_seconds` (u32).
 - `UI_SCALE` → `settings_patch.ui.scale`.
 - `UI_THEME` → `settings_patch.ui.theme`.
 
 Quote stripping: matched `"..."` or `'...'` pairs.
 
-**Calls**: only stdlib `str::lines`, `str::split_once`, `str::parse::<u64>`, `serde_json::Map::insert`.
+**Calls**: only stdlib `str::lines`, `str::split_once`, `str::parse::<u32>`, `serde_json::Map::insert`.
 
 **Called by**:
 - `preview` ([legacy_import.rs:320](app/src-tauri/src/legacy_import.rs:320)).
@@ -1349,9 +1349,9 @@ Trivial: `data_dir.join("pending_torrents.json")`. Called by `load`, `save`, `te
 
 DTO. `Default`: `theme="light"`, `scale="auto"`.
 
-### `pub struct RdSettings { api_token, file_pick, min_size_mb, cache_wait_seconds, wait_timeout_seconds }`  *(settings.rs:31)*
+### `pub struct RdSettings { api_token, file_pick, min_size_mb, cache_wait_seconds }`  *(settings.rs:31)*
 
-DTO. `Default`: empty token, `file_pick="smart"`, `min_size_mb=500`, `cache_wait_seconds=15`, `wait_timeout_seconds=300`.
+DTO. `Default`: empty token, `file_pick="smart"`, `min_size_mb=500`, `cache_wait_seconds=15`.
 
 ### `fn default_version() -> u32`  *(settings.rs:51)*
 

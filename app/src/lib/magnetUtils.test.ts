@@ -295,7 +295,7 @@ describe("coverage gap fillers", () => {
   it("filterRows drops rows that don't match keyword", () => {
     const r1 = row({ name: "ABC-001", handle_id: "h1" });
     const r2 = row({ name: "XYZ-999", handle_id: "h2" });
-    const out = filterRows([r1, r2], { ...defaultFilterState, keyword: "XYZ" });
+    const out = filterRows([r1, r2], { ...defaultFilterState(), keyword: "XYZ" });
     expect(out.map((r) => r.handle_id)).toEqual(["h2"]);
   });
 
