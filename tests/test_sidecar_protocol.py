@@ -1536,6 +1536,24 @@ class RegisterMagnets(unittest.TestCase):
         )
         self.assertTrue(second["registered"][0]["deduped"])
 
+    def test_same_btih_different_scheme_case_dedupes(self):
+        state = sd.DaemonState()
+        h = "dddddddddddddddddddddddddddddddddddddddd"
+        first = _call(state, {
+            "cmd": "register_magnets", "request_id": "1",
+            "magnets": [f"magnet:?xt=urn:btih:{h}&dn=lower"],
+        })
+        second = _call(state, {
+            "cmd": "register_magnets", "request_id": "2",
+            "magnets": [f"MAGNET:?xt=urn:btih:{h.upper()}&dn=upper"],
+        })
+        self.assertEqual(
+            first["registered"][0]["handle_id"],
+            second["registered"][0]["handle_id"],
+        )
+        self.assertTrue(second["registered"][0]["deduped"])
+        self.assertEqual(len(state.magnets), 1)
+
     def test_dedupe_key_falls_back_when_no_btih(self):
         """No parseable BTIH → fall back to the trimmed full string so
         dedupe still works conservatively. Caller may legitimately

@@ -189,11 +189,18 @@ fn resolved_magnets_from_response(resp: &Value) -> Result<(Vec<String>, usize), 
         .cloned()
         .unwrap_or_default();
 
+    let mut malformed = 0usize;
     let lines: Vec<String> = magnets_arr
         .iter()
-        .filter_map(|m| m.get("magnet").and_then(|s| s.as_str()).map(String::from))
+        .filter_map(|m| match m.get("magnet").and_then(|s| s.as_str()) {
+            Some(s) if !s.trim().is_empty() => Some(String::from(s)),
+            _ => {
+                malformed += 1;
+                None
+            }
+        })
         .collect();
-    Ok((lines, unknown_arr.len()))
+    Ok((lines, unknown_arr.len() + malformed))
 }
 
 /// Result of `copy_rd_links_bulk`. Only `copied` is exposed — Rust filters
@@ -1196,6 +1203,24 @@ mod tests_task_contracts {
 
         let err = resolved_magnets_from_response(&resp).unwrap_err();
         assert_eq!(err, "unknown_handle");
+    }
+
+    #[test]
+    fn resolved_magnets_counts_malformed_entries_as_unknown() {
+        let resp = json!({
+            "ok": true,
+            "magnets": [
+                {"handle_id": "h-1", "magnet": "magnet:?xt=urn:btih:aaa"},
+                {"handle_id": "h-2"},
+                {"handle_id": "h-3", "magnet": 42},
+                {"handle_id": "h-4", "magnet": "   "}
+            ],
+            "unknown": ["h-stale"]
+        });
+
+        let (lines, unknown) = resolved_magnets_from_response(&resp).unwrap();
+        assert_eq!(lines, vec!["magnet:?xt=urn:btih:aaa".to_string()]);
+        assert_eq!(unknown, 4);
     }
 }
 
