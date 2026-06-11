@@ -11,7 +11,7 @@
     type ScrapeProgressEvent,
   } from "./lib/scraper";
   import { errText } from "./lib/errText";
-  import { dedupeByHandleId, processGroupRows } from "./lib/magnetUtils";
+  import { dedupeByHandleId, isManualGroup, processGroupRows } from "./lib/magnetUtils";
   import {
     FILE_PICK_VALUES,
     SCALE_PRESETS,
@@ -55,6 +55,7 @@
   let theme = $state<Theme>("light");
   let settings = $state<Settings | null>(null);
   let statusMessage = $state("");
+  let activeTab = $state<"search" | "select" | "rd" | "settings">("search");
 
   // M4a — batch scrape state
   let urlBatch = $state("https://javdb.com/v/RkX3Rp\n");
@@ -82,6 +83,7 @@
   let sortDirection = $state<SortDirection>("asc");
   /** Per-group collapsed flag keyed by URL. Default = expanded. */
   let collapsed = $state<Record<string, boolean>>({});
+  let selectedHandles = $state<Record<string, boolean>>({});
 
   let pingMessage = $state("");
 
@@ -238,14 +240,19 @@
     }
 
     // Initialize the result slots so the UI can render placeholders before
-    // any fetch completes.
-    groups = urls.map((url) => ({
-      url,
-      status: "pending" as const,
-      result: null,
-      error: null,
-      finished_at: null,
-    }));
+    // any fetch completes. Manual (pasted) groups survive the scrape and
+    // ride at the array TAIL — applyScrapeProgressForRun writes results by
+    // index (groups[ev.index - 1]), so the URL slots MUST occupy the head.
+    groups = [
+      ...urls.map((url) => ({
+        url,
+        status: "pending" as const,
+        result: null,
+        error: null,
+        finished_at: null,
+      })),
+      ...groups.filter(isManualGroup),
+    ];
     scrapeProgress = { done: 0, total: urls.length };
     isScraping = true;
     const runId = ++scrapeRunId;
@@ -266,6 +273,9 @@
           if (next !== current) {
             groups = next.groups;
             scrapeProgress = next.scrapeProgress;
+            for (const g of groups) {
+              if (g.result) rememberSelectableRows(g.result.magnets);
+            }
           }
         },
         { signal: controller.signal },
@@ -312,24 +322,26 @@
         invalid: string[];
       }>("register_magnets", { magnets });
 
-      // Build the set of handle_ids already shown in any existing group
-      // so we can skip rows whose sidecar handle is reused from a prior
-      // scrape / paste — they'd otherwise appear twice in the UI and
-      // double-bill RD on send.
-      const existingHandleIds = new Set<string>();
+      // Skip only handles already pasted into a manual group (or repeated
+      // within this batch) so the same magnet isn't rendered as two manual
+      // rows. A handle that also lives in a WEB group is NOT skipped: the
+      // pasted magnet is an explicit instruction and must stay visible even
+      // when filters hide or replace its web twin. dedupeByHandleId() on
+      // the send/copy paths still guarantees RD is invoked once per handle.
+      const manualHandleIds = new Set<string>();
       for (const g of groups) {
-        if (g.result) {
-          for (const m of g.result.magnets) existingHandleIds.add(m.handle_id);
-        }
+        if (!isManualGroup(g) || !g.result) continue;
+        for (const m of g.result.magnets) manualHandleIds.add(m.handle_id);
       }
 
       const newRows: MagnetRow[] = [];
       let skippedExisting = 0;
       for (const r of resp.registered) {
-        if (r.deduped && existingHandleIds.has(r.handle_id)) {
+        if (manualHandleIds.has(r.handle_id)) {
           skippedExisting += 1;
           continue;
         }
+        manualHandleIds.add(r.handle_id);
         newRows.push({
           handle_id: r.handle_id,
           // Use the `dn=` extract returned by sidecar so this row
@@ -345,6 +357,7 @@
       }
 
       if (newRows.length > 0) {
+        rememberSelectableRows(newRows);
         // Synthetic group: unique URL key uses a timestamp so multiple
         // paste batches don't collide. UI shows "(直接貼上)" instead of
         // a JavDB URL.
@@ -373,7 +386,7 @@
       const fragments: string[] = [];
       if (newRows.length > 0) fragments.push(`已加入 ${newRows.length} 筆到下方結果清單`);
       if (skippedExisting > 0)
-        fragments.push(`已跳過 ${skippedExisting} 筆已存在於現有群組的磁力`);
+        fragments.push(`已跳過 ${skippedExisting} 筆重複的手貼磁力`);
       if (invalidCount > 0) fragments.push(`忽略 ${invalidCount} 個無效輸入`);
       registerStatus = {
         kind: newRows.length > 0 ? "ok" : "info",
@@ -399,13 +412,11 @@
     }
   }
 
-  async function copyVisible() {
-    // Collect handle_ids from VISIBLE rows (after filter + group pick + sort).
-    // Dedupe across groups in case the UI happens to render the same
-    // handle in two cards — clipboard should never contain duplicate
-    // magnet URIs even if the sidecar would silently coalesce them.
-    const visible = groups.flatMap((g) => processedRows(g));
-    const ids = dedupeByHandleId(visible).map((m) => m.handle_id);
+  async function copySelected() {
+    const selected = dedupeByHandleId(allSelectableRows).filter((m) =>
+      selectedHandles[m.handle_id],
+    );
+    const ids = selected.map((m) => m.handle_id);
     if (ids.length === 0) return;
     try {
       const result = await invoke<CopyBulkResult>("copy_magnets_bulk", {
@@ -415,7 +426,7 @@
         result.unknown > 0
           ? `已複製 ${result.copied} 個，另有 ${result.unknown} 個過期`
           : `已複製 ${result.copied} 個磁力連結`;
-      flash.flash("magnet-copy-visible");
+      flash.flash("magnet-copy-selected");
     } catch (e) {
       statusMessage = `批次複製失敗：${e}`;
     }
@@ -438,6 +449,32 @@
   function sortIndicator(col: SortColumn): string {
     if (sortColumn !== col) return "";
     return sortDirection === "asc" ? " ▲" : " ▼";
+  }
+
+  function rememberSelectableRows(rows: MagnetRow[]) {
+    for (const m of rows) {
+      if (!(m.handle_id in selectedHandles)) {
+        selectedHandles[m.handle_id] = true;
+      }
+    }
+  }
+
+  function setRowSelected(handleId: string, selected: boolean) {
+    selectedHandles[handleId] = selected;
+  }
+
+  function setRowsSelected(rows: MagnetRow[], selected: boolean) {
+    for (const m of rows) {
+      selectedHandles[m.handle_id] = selected;
+    }
+  }
+
+  function selectedInRows(rows: MagnetRow[]): number {
+    return dedupeByHandleId(rows).filter((m) => selectedHandles[m.handle_id]).length;
+  }
+
+  function rowSelected(handleId: string): boolean {
+    return selectedHandles[handleId] === true;
   }
 
   function commitMinSize() {
@@ -466,6 +503,8 @@
     collapsed[url] = !collapsed[url];
   }
 
+  // Clears web AND manual groups alike. This is intentionally the ONLY
+  // path that removes manual (pasted) groups — startScrape preserves them.
   async function clearResults() {
     if (isScraping) {
       scrapeAbort?.abort();
@@ -483,6 +522,7 @@
     groups = [];
     scrapeProgress = { done: 0, total: 0 };
     collapsed = {};
+    selectedHandles = {};
     if (ids.length > 0) {
       try {
         const forgotten = await invoke<number>("forget_magnets", {
@@ -502,18 +542,52 @@
   }
 
   // ---- derived counts for status bar ---------------------------------
-  let okCount = $derived(groups.filter((g) => g.status === "ok").length);
-  let errCount = $derived(groups.filter((g) => g.status === "error").length);
+  // Scrape status counters cover WEB groups only: manual (pasted) groups
+  // are not part of a batch-scrape run and would inflate ✓/磁力 counts
+  // (e.g. "✓ 3" after scraping 2 URLs).
+  let webGroups = $derived(groups.filter((g) => !isManualGroup(g)));
+  let okCount = $derived(webGroups.filter((g) => g.status === "ok").length);
+  let errCount = $derived(webGroups.filter((g) => g.status === "error").length);
   let totalRawMagnets = $derived(
-    groups.reduce((acc, g) => acc + (g.result?.magnet_count ?? 0), 0),
+    webGroups.reduce((acc, g) => acc + (g.result?.magnet_count ?? 0), 0),
+  );
+  // Visible rows per source, BEFORE handle dedupe. Rendered row count and
+  // unique handle count differ when the same BTIH is visible in both a
+  // web group and a manual group — the send-button breakdown surfaces
+  // that gap as「重複 N 已合併」.
+  let webVisibleRows = $derived(webGroups.flatMap((g) => processedRows(g)));
+  let manualVisibleRows = $derived(
+    groups.filter(isManualGroup).flatMap((g) => processedRows(g)),
   );
   // Counts unique handle_ids across all visible (filtered/sorted/grouped)
-  // rows, so the action-row button labels match what
-  // `buildVisibleSendItems` / `copyVisible` will actually do after
-  // their handle_id dedupe.
-  let visibleMagnets = $derived.by(() => {
-    const visible = groups.flatMap((g) => processedRows(g));
-    return dedupeByHandleId(visible).length;
+  // rows. This still drives the scrape/selection screen status, but RD
+  // send now uses explicit checkbox selection instead of visibility.
+  let visibleMagnets = $derived(
+    dedupeByHandleId([...webVisibleRows, ...manualVisibleRows]).length,
+  );
+  // Web-only unique handles for the scrape status bar, so「磁力：X / Y」
+  // keeps numerator and denominator in the same (web) universe — the
+  // global visibleMagnets includes manual rows that totalRawMagnets
+  // deliberately excludes, which could render X > Y.
+  let webVisibleMagnets = $derived(dedupeByHandleId(webVisibleRows).length);
+  let allSelectableRows = $derived(
+    groups.flatMap((g) => g.result?.magnets ?? []),
+  );
+  let selectableMagnets = $derived(dedupeByHandleId(allSelectableRows).length);
+  let selectedMagnets = $derived(
+    dedupeByHandleId(allSelectableRows).filter((m) => selectedHandles[m.handle_id]).length,
+  );
+  let sendButtonLabel = $derived.by(() => {
+    if (manualVisibleRows.length === 0) {
+      return `送出已勾選 ${selectedMagnets} 筆到 RD`;
+    }
+    const selectedWeb = dedupeByHandleId(webGroups.flatMap((g) => g.result?.magnets ?? []))
+      .filter((m) => selectedHandles[m.handle_id]).length;
+    const selectedManual = dedupeByHandleId(groups.filter(isManualGroup).flatMap((g) => g.result?.magnets ?? []))
+      .filter((m) => selectedHandles[m.handle_id]).length;
+    const dup = selectedWeb + selectedManual - selectedMagnets;
+    const dupPart = dup > 0 ? `，重複 ${dup} 已合併` : "";
+    return `送出已勾選 ${selectedMagnets} 筆到 RD（網頁 ${selectedWeb}＋手貼 ${selectedManual}${dupPart}）`;
   });
 
   // ---- M5: Real-Debrid handlers --------------------------------------
@@ -588,11 +662,24 @@
     }
   }
 
-  /** Build the send-to-RD batch from the currently visible (filtered+sorted+
-   * group-picked) rows. Dedupes by `handle_id` so a magnet that
-   * happens to be rendered in two groups (e.g. JavDB re-fetch landing
-   * on the same sidecar handle) is sent to RD exactly once. The
-   * `code` of the first occurrence wins.
+  /** Build the send-to-RD batch from the explicitly checked rows of ALL
+   * groups — web and manual alike. Filters and sort only affect what is
+   * displayed in the selection tab; they do not silently mutate the send
+   * batch after a user has checked a row.
+   *
+   * Contract:
+   *   - SELECTION: every checked handle_id in any group is sent; a
+   *     handle present in two groups (same BTIH pasted manually AND
+   *     scraped from a JavDB page, or a JavDB re-fetch landing on the
+   *     same sidecar handle) is sent to RD exactly once.
+   *   - METADATA on duplicates: the FIRST occurrence wins, and group
+   *     order is deliberately web-first (startScrape keeps URL slots at
+   *     the array head, manual groups at the tail). JavDB rows carry the
+   *     canonical 番號 and a real size_label, while a manual row's
+   *     `name` is the dn= extract — possibly empty or publisher noise.
+   *     code/size_label are persisted into pending_torrents.json when a
+   *     send lands in pending, so a degraded label would survive
+   *     restarts. Do not reorder.
    *
    * Code-resolution priority:
    *   - For paste-magnet "synthetic" groups (url starts with
@@ -604,13 +691,14 @@
    *     is the right level — all rows under that page share the
    *     same JAV code, while their `name` is the magnet filename.
    */
-  function buildVisibleSendItems(): RdSendItem[] {
+  function buildSelectedSendItems(): RdSendItem[] {
     const raw: RdSendItem[] = [];
     for (const g of groups) {
-      const rows = processedRows(g);
+      const rows = g.result?.magnets ?? [];
       const groupCode = g.result?.code ?? "";
       const isPasteGroup = g.url.startsWith("manual://");
       for (const m of rows) {
+        if (!selectedHandles[m.handle_id]) continue;
         const code = isPasteGroup
           ? (m.name || groupCode || "(unknown)")
           : (groupCode || m.name || "(unknown)");
@@ -624,15 +712,17 @@
     return dedupeByHandleId(raw);
   }
 
-  async function sendVisibleToRd() {
+  async function sendSelectedToRd() {
     if (isRdSending) return;
     if (!rdHasToken) {
-      rdMessage = "請先到「Real-Debrid」區塊設定 Token";
+      rdMessage = "請先設定 RD Token";
+      activeTab = "rd";
       return;
     }
-    const items = buildVisibleSendItems();
+    const items = buildSelectedSendItems();
     if (items.length === 0) {
-      rdMessage = "目前沒有可送出的磁力";
+      rdMessage = "目前沒有已勾選的磁力";
+      activeTab = "select";
       return;
     }
     lastBatchStartAt = new Date().toISOString();
@@ -1198,9 +1288,44 @@
 
 <main class="container">
   <h1>JavDBMagnet</h1>
-  <p class="subtitle">M5 — 批次擷取 + Real-Debrid</p>
+  <p class="subtitle">JavDB Magnet → 選取 → Real-Debrid 下載連結</p>
 
-  <section>
+  <nav class="tabs" aria-label="主要流程">
+    <button
+      type="button"
+      class:active={activeTab === "search"}
+      onclick={() => (activeTab = "search")}
+    >
+      1. JAVDB 搜尋
+      <span>{okCount}/{scrapeProgress.total || webGroups.length}</span>
+    </button>
+    <button
+      type="button"
+      class:active={activeTab === "select"}
+      onclick={() => (activeTab = "select")}
+    >
+      2. 選取 Magnet
+      <span>{selectedMagnets}/{selectableMagnets}</span>
+    </button>
+    <button
+      type="button"
+      class:active={activeTab === "rd"}
+      onclick={() => (activeTab = "rd")}
+    >
+      3. RD 下載連結
+      <span>{rdCompletedCount}/{rdSendDone.total || pendingEntries.length}</span>
+    </button>
+    <button
+      type="button"
+      class:active={activeTab === "settings"}
+      onclick={() => (activeTab = "settings")}
+    >
+      4. 設定
+      <span>偏好 / Cookies</span>
+    </button>
+  </nav>
+
+  <section hidden={activeTab !== "settings"}>
     <h2>儲存位置</h2>
     <dl>
       <dt>資料目錄</dt>
@@ -1210,7 +1335,7 @@
     </dl>
   </section>
 
-  <section>
+  <section hidden={activeTab !== "settings"}>
     <h2>主題</h2>
     <button onclick={toggleTheme}>
       主題：{theme}（點擊切換）
@@ -1220,7 +1345,7 @@
     {/if}
   </section>
 
-  <section>
+  <section hidden={activeTab !== "settings"}>
     <h2>Sidecar</h2>
     <div class="row">
       <button
@@ -1235,7 +1360,7 @@
     </div>
   </section>
 
-  <section>
+  <section hidden={activeTab !== "rd"}>
     <h2>Real-Debrid</h2>
     <div class="row">
       <span class="muted">
@@ -1317,9 +1442,31 @@
     {#if rdMessage}
       <p class="status">{rdMessage}</p>
     {/if}
+
+    <div class="rd-send-panel">
+      <div>
+        <strong>準備送出：{selectedMagnets} 個已勾選 Magnet</strong>
+        <p class="muted small">
+          從「選取 Magnet」分頁勾選後再送出；重複 BTIH 會在送出前合併一次。
+        </p>
+      </div>
+      <div class="row tight">
+        <button onclick={() => (activeTab = "select")}>回到選取</button>
+        <button
+          onclick={sendSelectedToRd}
+          disabled={isRdSending || selectedMagnets === 0 || !rdHasToken}
+          title={rdHasToken ? "" : "請先設定 RD Token"}
+        >
+          {isRdSending ? "送出中…" : sendButtonLabel}
+        </button>
+        {#if !rdHasToken}
+          <span class="muted small">尚未設定 RD Token</span>
+        {/if}
+      </div>
+    </div>
   </section>
 
-  <section>
+  <section hidden={activeTab !== "settings"}>
     <h2>
       匯入舊版資料
       <button
@@ -1442,7 +1589,7 @@
     {/if}
   </section>
 
-  <section>
+  <section hidden={activeTab !== "settings"}>
     <h2>
       應用程式設定
       <button
@@ -1456,7 +1603,7 @@
     </h2>
     {#if settingsShown && settingsDraft}
       <p class="hint">
-        編輯下列欄位後按「儲存設定」。RD Token 不在這裡管理 — 請到上方 <strong>Real-Debrid</strong> 區塊。
+        編輯下列欄位後按「儲存設定」。RD Token 不在這裡管理 — 請到 <strong>RD 下載連結</strong> 分頁。
       </p>
 
       <fieldset style="border: 1px solid var(--border, #ccc); padding: 0.75rem; margin-bottom: 0.75rem;">
@@ -1556,7 +1703,7 @@
     {/if}
   </section>
 
-  <section>
+  <section hidden={activeTab !== "settings"}>
     <h2>
       JavDB Cookies
       <button
@@ -1678,7 +1825,7 @@
     {/if}
   </section>
 
-  <section>
+  <section hidden={activeTab !== "search"}>
     <h2>批次擷取</h2>
     <p class="hint">貼上 JavDB 網址，每行一個。以 <code>#</code> 開頭或非 http(s) 的行會被忽略。</p>
 
@@ -1697,20 +1844,10 @@
       <button onclick={cancelScrape} disabled={!isScraping}>取消</button>
       {#if groups.length > 0}
         <button
-          onclick={copyVisible}
-          disabled={isScraping || visibleMagnets === 0}
-          class:flash-ok={flash.keys.has("magnet-copy-visible")}
+          onclick={() => (activeTab = "select")}
+          disabled={isScraping || selectableMagnets === 0}
         >
-          {flash.keys.has("magnet-copy-visible")
-            ? "已複製 ✓"
-            : `複製可見磁力（${visibleMagnets}）`}
-        </button>
-        <button
-          onclick={sendVisibleToRd}
-          disabled={isScraping || isRdSending || visibleMagnets === 0 || !rdHasToken}
-          title={rdHasToken ? "" : "請先設定 RD Token"}
-        >
-          送出目前可見 {visibleMagnets} 筆到 RD
+          前往選取 Magnet（{selectableMagnets}）
         </button>
         <button
           onclick={clearResults}
@@ -1720,24 +1857,93 @@
         </button>
       {/if}
     </div>
-    {#if groups.length > 0 && !rdHasToken}
-      <p class="inline-msg" data-kind="info">
-        ※「送出到 RD」目前停用 — 請先設定 RD Token（往上捲動到 <strong>Real-Debrid</strong> 區塊貼上 Token 並按「儲存」）。
-      </p>
-    {/if}
-
     <div class="status-bar" data-active={isScraping}>
       {#if scrapeProgress.total > 0}
         <span>{scrapeProgress.done} / {scrapeProgress.total}</span>
         <span class="ok">✓ {okCount}</span>
         <span class="err">✗ {errCount}</span>
-        <span class="muted">磁力：{visibleMagnets} / {totalRawMagnets}</span>
+        <span class="muted">磁力：{webVisibleMagnets} / {totalRawMagnets}</span>
       {:else}
         <span class="muted">閒置</span>
       {/if}
     </div>
 
+    {#if groups.length === 0 && !isScraping}
+      <p class="empty-state">尚無結果 — 在上方貼上網址後按下<strong>開始擷取</strong>。</p>
+    {/if}
+  </section>
+
+  <section hidden={activeTab !== "select"}>
+    <h2>直接貼磁力</h2>
+    <p class="hint">
+      已有 <code>magnet:?xt=...</code> 連結時可貼在這裡，系統會加入下方<strong>結果清單</strong>，
+      之後可送至 Real-Debrid 或複製。
+    </p>
+
+    <textarea
+      class="url-batch"
+      bind:value={magnetBatch}
+      rows="4"
+      spellcheck="false"
+      placeholder="magnet:?xt=urn:btih:...&#10;magnet:?xt=urn:btih:..."
+    ></textarea>
+
+    <div class="row">
+      <button
+        onclick={registerPastedMagnets}
+        disabled={isRegistering}
+        class:flash-ok={flash.keys.has("magnet-register")}
+      >
+        {isRegistering
+          ? "加入中…"
+          : flash.keys.has("magnet-register")
+            ? "已加入 ✓"
+            : "加入結果清單"}
+      </button>
+      <span class="muted small">
+        加入後可用下方「結果」區塊內的篩選 / 送 RD / 複製。
+      </span>
+    </div>
+    {#if registerStatus}
+      <p
+        class="inline-msg"
+        data-kind={registerStatus.kind}
+      >{registerStatus.text}</p>
+    {/if}
+
     {#if groups.length > 0}
+      <div class="selection-summary">
+        <div>
+          <strong>已勾選 {selectedMagnets} / {selectableMagnets} 個 Magnet</strong>
+          <span class="muted small">
+            篩選只影響畫面顯示；已勾選項目會保留到 RD 分頁送出。
+          </span>
+        </div>
+        <div class="row tight">
+          <button onclick={() => setRowsSelected(groups.flatMap((g) => processedRows(g)), true)}>
+            勾選目前顯示
+          </button>
+          <button onclick={() => setRowsSelected(groups.flatMap((g) => processedRows(g)), false)}>
+            取消目前顯示
+          </button>
+          <button
+            onclick={copySelected}
+            disabled={selectedMagnets === 0}
+            class:flash-ok={flash.keys.has("magnet-copy-selected")}
+          >
+            {flash.keys.has("magnet-copy-selected")
+              ? "已複製 ✓"
+              : `複製已勾選（${selectedMagnets}）`}
+          </button>
+          <button
+            onclick={() => (activeTab = "rd")}
+            disabled={selectedMagnets === 0}
+          >
+            前往 RD 下載連結
+          </button>
+        </div>
+      </div>
+
       <div class="filter-row">
         <label>
           關鍵字
@@ -1785,52 +1991,7 @@
         </label>
         <button onclick={resetFilter}>重置</button>
       </div>
-    {/if}
 
-    {#if groups.length === 0 && !isScraping}
-      <p class="empty-state">尚無結果 — 在上方貼上網址後按下<strong>開始擷取</strong>。</p>
-    {/if}
-  </section>
-
-  <section>
-    <h2>直接貼磁力</h2>
-    <p class="hint">
-      已有 <code>magnet:?xt=...</code> 連結時可貼在這裡，系統會加入下方<strong>結果清單</strong>，
-      之後可送至 Real-Debrid 或複製。
-    </p>
-
-    <textarea
-      class="url-batch"
-      bind:value={magnetBatch}
-      rows="4"
-      spellcheck="false"
-      placeholder="magnet:?xt=urn:btih:...&#10;magnet:?xt=urn:btih:..."
-    ></textarea>
-
-    <div class="row">
-      <button
-        onclick={registerPastedMagnets}
-        disabled={isRegistering}
-        class:flash-ok={flash.keys.has("magnet-register")}
-      >
-        {isRegistering
-          ? "加入中…"
-          : flash.keys.has("magnet-register")
-            ? "已加入 ✓"
-            : "加入結果清單"}
-      </button>
-      <span class="muted small">
-        加入後可用下方「結果」區塊內的篩選 / 送 RD / 複製。
-      </span>
-    </div>
-    {#if registerStatus}
-      <p
-        class="inline-msg"
-        data-kind={registerStatus.kind}
-      >{registerStatus.text}</p>
-    {/if}
-
-    {#if groups.length > 0}
       <ul class="groups">
         {#each groups as g, i (g.url)}
           {@const rows = processedRows(g)}
@@ -1856,7 +2017,16 @@
               <span class="muted url">{g.url}</span>
               {#if g.result}
                 <span class="muted">
-                  — 顯示 {rows.length} / 共 {g.result.magnet_count} 個磁力
+                  — 顯示 {rows.length} / 共 {g.result.magnet_count} 個磁力；
+                  已勾 {selectedInRows(g.result.magnets)}
+                </span>
+                <span class="row tight">
+                  <button class="small" onclick={() => setRowsSelected(rows, true)}>
+                    勾選本組顯示
+                  </button>
+                  <button class="small" onclick={() => setRowsSelected(rows, false)}>
+                    取消本組顯示
+                  </button>
                 </span>
               {/if}
             </header>
@@ -1877,6 +2047,7 @@
                 <table>
                   <thead>
                     <tr>
+                      <th>送 RD</th>
                       <th>
                         <button class="th-sort" onclick={() => toggleSort("name")}>
                           番號{sortIndicator("name")}
@@ -1909,6 +2080,18 @@
                         ondblclick={() =>
                           copyOne(m.handle_id, m.name || g.result!.code)}
                       >
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={rowSelected(m.handle_id)}
+                            onchange={(e) =>
+                              setRowSelected(
+                                m.handle_id,
+                                (e.currentTarget as HTMLInputElement).checked,
+                              )}
+                            aria-label={`選取 ${m.name || g.result!.code}`}
+                          />
+                        </td>
                         <td>{m.name}</td>
                         <td>{m.size}</td>
                         <td>{m.tags.join(", ")}</td>
@@ -1936,7 +2119,7 @@
     {/if}
   </section>
 
-  {#if rdSendProgress.length > 0}
+  {#if activeTab === "rd" && rdSendProgress.length > 0}
     <section>
       <h2>送至 Real-Debrid 進度</h2>
       <div class="status-bar">
@@ -2052,7 +2235,7 @@
     </section>
   {/if}
 
-  {#if pendingEntries.length > 0}
+  {#if activeTab === "rd" && pendingEntries.length > 0}
     <section>
       <h2>待處理（Real-Debrid）</h2>
       <p class="hint">
@@ -2146,6 +2329,34 @@
     margin: 0;
   }
 
+  .tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.5rem;
+    margin: 1rem 0 1.25rem;
+  }
+
+  .tabs button {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    min-width: 0;
+    padding: 0.65rem 0.8rem;
+    text-align: left;
+    font-weight: 600;
+  }
+
+  .tabs button span {
+    color: var(--color-muted);
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+
+  .tabs button.active {
+    border-color: #2ecc71;
+    box-shadow: inset 0 -2px 0 #2ecc71;
+  }
+
   dl {
     display: grid;
     grid-template-columns: 8rem 1fr;
@@ -2226,6 +2437,24 @@
     flex-wrap: wrap;
   }
 
+  .row.tight {
+    margin-top: 0;
+    gap: 0.35rem;
+  }
+
+  .selection-summary,
+  .rd-send-panel {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1rem;
+    padding: 0.75rem;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-button-bg);
+  }
+
   .url-batch {
     width: 100%;
     box-sizing: border-box;
@@ -2284,6 +2513,10 @@
 
   .filter-row input[type="text"] {
     width: 14rem;
+  }
+
+  input[type="checkbox"] {
+    accent-color: #2ecc71;
   }
 
   .toggle {
@@ -2530,5 +2763,21 @@
   code {
     font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
     font-size: 0.85em;
+  }
+
+  @media (max-width: 760px) {
+    .container {
+      padding: 1rem;
+    }
+
+    .tabs {
+      grid-template-columns: 1fr;
+    }
+
+    .selection-summary,
+    .rd-send-panel {
+      align-items: stretch;
+      flex-direction: column;
+    }
   }
 </style>

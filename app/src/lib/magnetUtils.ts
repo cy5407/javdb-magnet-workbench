@@ -37,6 +37,16 @@ export function parseFileCount(size: string): number {
   return m ? Number.parseInt(m[1], 10) : 999;
 }
 
+/**
+ * Synthetic groups created by the paste-magnet path (App.svelte
+ * `registerPastedMagnets`) use the `manual://` URL scheme. They carry
+ * explicit user instructions rather than scraped candidates, so the
+ * processing pipeline treats them specially — see `processGroupRows`.
+ */
+export function isManualGroup(group: Pick<ScrapedGroup, "url">): boolean {
+  return group.url.startsWith("manual://");
+}
+
 /** Case-insensitive haystack search across name / size / tags / date. */
 export function matchesKeyword(row: MagnetRow, keyword: string): boolean {
   if (!keyword) return true;
@@ -157,6 +167,12 @@ export function sortRows(
 /**
  * Compose filter → group_pick → sort. Returns a fresh array per group;
  * empty groups (after filtering) yield [] so the UI can show "no rows".
+ *
+ * Manual (pasted) groups skip the filter and group-pick stages entirely:
+ * a pasted magnet is an explicit instruction, not a candidate to narrow
+ * down — and its rows carry no size/tags/date for the filters to read
+ * (group_pick="largest" would otherwise collapse them to one arbitrary
+ * row, since every manual row parses to 0 GB). Sorting still applies.
  */
 export function processGroupRows(
   group: ScrapedGroup,
@@ -165,6 +181,9 @@ export function processGroupRows(
   sortDirection: SortDirection,
 ): MagnetRow[] {
   if (!group.result) return [];
+  if (isManualGroup(group)) {
+    return sortRows(group.result.magnets, sortColumn, sortDirection);
+  }
   const filtered = filterRows(group.result.magnets, filter);
   const picked = applyGroupPick(filtered, filter.group_pick);
   return sortRows(picked, sortColumn, sortDirection);

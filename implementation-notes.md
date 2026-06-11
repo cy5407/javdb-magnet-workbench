@@ -139,3 +139,73 @@ Workflow `wf_5216b7b9-0f3`：5 個修補並行 → pytest+cargo 驗證 → 5 個
 
 - **RD unrestrict 失敗 entry 由 Python 補完整 payload，Rust/TS 只把 `error` 加成 optional**：跨語言契約由產生端明確輸出 `download=""`、`filename=""`、`filesize=0`、`streamable=0`，避免 Rust deserialize 靠 default 吞掉 Python 欄位缺漏；optional `error` 保留前端可顯示的診斷。
 - **移除 `wait_timeout_seconds` 死設定，保留 `cache_wait_seconds` 作唯一等待值**：現有 Rust `sidecar_manager`、Python `RealDebrid.process_magnet`、前端 `rdSender` 都以 `cache_wait` 作實際等待與 timeout 預算來源；把第二個等待欄位接到 IPC timeout 只會產生兩個語意重疊但行為不同的旋鈕，所以改為從 UI/validation/types/Rust settings/legacy import 移除，legacy `RD_WAIT_TIMEOUT` 僅回 warning。
+
+---
+
+# [2026-06-11 21:35 → 21:40, 5m] 手貼磁力 vs 網頁擷取管線分離（核定 5 點方案）
+
+背景：Codex 實測出 4 個 P1 + 1 個 P2（手貼磁力被篩選/每組只留吞掉、擷取覆蓋手貼群組等）。
+三方討論後核定 5 點最小修法，**不切分頁、不做 manual 優先 metadata**。
+
+## Design decisions
+
+- **「手貼 = 明確指令」只管選擇語意（必可見、必送出），不管標籤語意**。
+  同 handle 重複時 metadata 維持 web-first：JavDB 番號/大小品質優於 `dn=` 萃取
+  （可能為空或雜訊），且 `code`/`size_label` 會持久化進 `pending_torrents.json`
+  （`commands.rs:478` → `pending.rs:33`），劣質標籤會跨重啟殘留。
+- **manual bypass 邏輯放進 `processGroupRows`（`magnetUtils.ts`）而非 App.svelte 的
+  `processedRows` wrapper**：規則集中在純函式層，可直接被既有 vitest 覆蓋。
+- **`startScrape` 保留 manual 群組時放在陣列尾端**：`applyScrapeProgressForRun` 用
+  `groups[ev.index-1]` 按索引寫入，URL 槽位必須佔據陣列頭部（`scraper.ts:94`）。
+- **批次擷取狀態列「磁力：X / Y」分子分母統一改用 web 母體**（`webVisibleMagnets` /
+  `totalRawMagnets`），避免分子含 manual、分母不含造成 X > Y 的怪相。
+  manual 數量只出現在送出按鈕 breakdown。
+- **送出按鈕 breakdown 只在有 manual 可見列時顯示**；純 web 流程維持原文案，
+  「重複 N 已合併」只在 dup > 0 時出現。
+
+## Deviations
+
+- **貼入跳過訊息從「已存在於現有群組」改為「重複的手貼磁力」**——語意變了：
+  現在只跳過 manual 群組內重複（含同批次重複），與網頁群組撞 handle 不再跳過。
+- **不採用 Codex 原提第 4 刀（manual 優先送出 metadata）**，三方已合意收回。
+
+## Tradeoffs
+
+- **同批次去重用 add-as-you-go**（迴圈內 `manualHandleIds.add`）而非事後
+  `dedupeByHandleId(newRows)`：保留 skipped 計數，訊息不用改算法。
+- **已知殘留行為**：「最大檔」模式＋手貼同番號較小檔 → 兩條都送（web 群組送最大、
+  manual 群組送手貼）。這是核定語意：篩選只管網頁候選，手貼是明確指令。
+
+---
+
+# [2026-06-11 22:05 → 22:25, 20m] 三分頁流程與 explicit Magnet selection
+
+## Design decisions
+
+- **把主流程切成三個分頁：JAVDB 搜尋、選取 Magnet、RD 下載連結。**
+  原本搜尋、篩選、直接貼 magnet、送 RD、pending 重試都在同一捲動頁，使用者會把
+  「目前可見」誤認成「準備送出」。分頁後每一頁只保留該階段的主要動作。
+- **RD 送出改用 `selectedHandles`，不再用 visible rows。**
+  使用者明確勾選才是送出依據；篩選、排序、每組只留只改變第二分頁的顯示，不會偷偷改變
+  已勾選的送出集合。
+
+## Tradeoffs
+
+- **新抓到或新貼上的 Magnet 預設勾選。**
+  這保留舊版「抓完即可送」的速度；需要排除時使用者在第二分頁取消勾選。若預設不勾，
+  批次使用者會多一個全選步驟。
+- **metadata 仍維持 web-first。**
+  三分頁只改選擇來源，不改 pending 顯示資料的品質策略；同 BTIH 同時存在 web/manual 時，
+  送出仍只送一次且保留 JavDB 的番號與大小。
+
+---
+
+# [2026-06-11 22:35 → 22:45, 10m] 第四分頁：設定
+
+## Design decisions
+
+- **新增第四分頁「設定」，把維護/偏好類區塊移出主流程。**
+  儲存位置、主題、Sidecar、舊版匯入、應用程式設定、JavDB Cookies 都放到第四頁；前三頁只保留
+  搜尋、選取、RD 轉連結的工作流程。
+- **RD Token 仍保留在「RD 下載連結」分頁。**
+  Token 是送出前置條件，放在第三頁可避免使用者要在設定頁與 RD 頁來回跳。

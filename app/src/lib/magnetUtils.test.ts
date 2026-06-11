@@ -4,6 +4,7 @@ import {
   dedupeByHandleId,
   filterRows,
   isHd,
+  isManualGroup,
   matchesKeyword,
   parseFileCount,
   parseSizeGb,
@@ -242,6 +243,53 @@ describe("processGroupRows", () => {
   it("filter rules out everything → empty", () => {
     const f = { ...defaultFilterState(), min_size_gb: 999 };
     expect(processGroupRows(group, f, null, "asc")).toEqual([]);
+  });
+
+  // Manual (pasted) groups: rows have no size/tags/date, and represent
+  // explicit user intent — the filter and group-pick stages must not
+  // touch them, only sorting.
+  const manualGroup: ScrapedGroup = {
+    url: "manual://1718000000000",
+    status: "ok",
+    finished_at: null,
+    error: null,
+    result: {
+      engine: "manual",
+      url: "manual://1718000000000",
+      code: "(直接貼上 2)",
+      title: "",
+      magnet_count: 2,
+      magnets: [
+        row({ handle_id: "m1", name: "BBB-222", size: "", tags: [], date: "" }),
+        row({ handle_id: "m2", name: "AAA-111", size: "", tags: [], date: "" }),
+      ],
+    },
+  };
+
+  it("manual groups bypass keyword/HD/size filters and group-pick", () => {
+    const f = {
+      ...defaultFilterState(),
+      keyword: "no-such-code",
+      hd_only: true,
+      min_size_gb: 5,
+      group_pick: "largest" as const,
+    };
+    const out = processGroupRows(manualGroup, f, null, "asc");
+    expect(out.map((r) => r.handle_id)).toEqual(["m1", "m2"]);
+  });
+
+  it("manual groups still honor sorting", () => {
+    const out = processGroupRows(manualGroup, defaultFilterState(), "name", "asc");
+    expect(out.map((r) => r.handle_id)).toEqual(["m2", "m1"]);
+  });
+});
+
+describe("isManualGroup", () => {
+  it("true for manual:// synthetic groups", () => {
+    expect(isManualGroup({ url: "manual://1718000000000" })).toBe(true);
+  });
+  it("false for scraped https groups", () => {
+    expect(isManualGroup({ url: "https://javdb.com/v/x" })).toBe(false);
   });
 });
 
