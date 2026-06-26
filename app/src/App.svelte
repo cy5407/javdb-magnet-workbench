@@ -19,6 +19,7 @@
     validateSettingsDraft,
   } from "./lib/settingsValidation";
   import {
+    applyRetryEventToProgressRows,
     collectDownloadLinksFromRow,
     rdErrorMessage,
     retryPending,
@@ -309,7 +310,7 @@
       registerStatus = {
         kind: "error",
         text: looksLikeUrls
-          ? "你貼的看起來是 JavDB 網址（http/https）。請改貼到上方「批次擷取」按「開始擷取」；本欄只接受 magnet:?xt=... 開頭的磁力連結。"
+          ? "你貼的看起來是 JavDB 網址（http/https）。請改貼到「1. JAVDB 搜尋」分頁的批次擷取欄位；本欄只接受 magnet:?xt=... 開頭的磁力連結。"
           : "未偵測到有效磁力連結（必須以 magnet: 開頭）",
       };
       return;
@@ -337,6 +338,11 @@
       const newRows: MagnetRow[] = [];
       let skippedExisting = 0;
       for (const r of resp.registered) {
+        // Pasting a magnet is an explicit re-selection, even if this BTIH
+        // was previously scraped and then unchecked, or already exists in a
+        // manual group. The rendered row may be skipped, but the send intent
+        // must be restored.
+        selectedHandles[r.handle_id] = true;
         if (manualHandleIds.has(r.handle_id)) {
           skippedExisting += 1;
           continue;
@@ -469,6 +475,11 @@
     }
   }
 
+  function selectOnlyRows(rows: MagnetRow[]) {
+    setRowsSelected(allSelectableRows, false);
+    setRowsSelected(rows, true);
+  }
+
   function selectedInRows(rows: MagnetRow[]): number {
     return dedupeByHandleId(rows).filter((m) => selectedHandles[m.handle_id]).length;
   }
@@ -572,6 +583,9 @@
   let webVisibleMagnets = $derived(dedupeByHandleId(webVisibleRows).length);
   let allSelectableRows = $derived(
     groups.flatMap((g) => g.result?.magnets ?? []),
+  );
+  let webHandleIds = $derived(
+    new Set(webGroups.flatMap((g) => g.result?.magnets.map((m) => m.handle_id) ?? [])),
   );
   let selectableMagnets = $derived(dedupeByHandleId(allSelectableRows).length);
   let selectedMagnets = $derived(
@@ -730,6 +744,7 @@
     rdSendProgress = items.map((it) => ({
       handle_id: it.handle_id,
       code: it.code,
+      size_label: it.size_label,
       status: "pending",
       links: [],
       error_code: null,
@@ -880,15 +895,6 @@
     let errorCount = 0;
     const errorCodes: string[] = [];
 
-    // Reconcile the corresponding "送至 Real-Debrid 進度" row when a
-    // pending entry resolves to completed/missing. torrent_id is unique
-    // per row, so this patches at most one entry.
-    const patchRowByTorrentId = (id: string, patch: Partial<RdSendProgress>) => {
-      rdSendProgress = rdSendProgress.map((r) =>
-        r.torrent_id === id ? { ...r, ...patch } : r,
-      );
-    };
-
     try {
       await retryPending(
         pendingEntries,
@@ -900,22 +906,13 @@
             }
             // Flip row from "in_pending" → "completed" + attach links so
             // 直連 N counter and row label update without a manual refresh.
-            patchRowByTorrentId(ev.torrent_id, {
-              status: "completed",
-              links: ev.result.links,
-              error_code: null,
-              completed_at: new Date().toISOString(),
-            });
+            rdSendProgress = applyRetryEventToProgressRows(rdSendProgress, ev);
           } else if (ev.result.kind === "pending") {
             stillPendingCount += 1;
           } else if (ev.result.kind === "missing") {
             missingCount += 1;
             // Mark row as error so users don't think it's still queued forever.
-            patchRowByTorrentId(ev.torrent_id, {
-              status: "error",
-              links: [],
-              error_code: "rd_torrent_missing",
-            });
+            rdSendProgress = applyRetryEventToProgressRows(rdSendProgress, ev);
           } else {
             errorCount += 1;
             errorCodes.push(ev.result.error_code);
@@ -1313,7 +1310,7 @@
       onclick={() => (activeTab = "rd")}
     >
       3. RD 下載連結
-      <span>{rdCompletedCount}/{rdSendDone.total || pendingEntries.length}</span>
+      <span>{rdSendDone.total > 0 ? `${rdCompletedCount}/${rdSendDone.total}` : `待處理 ${pendingEntries.length}`}</span>
     </button>
     <button
       type="button"
@@ -1324,6 +1321,10 @@
       <span>偏好 / Cookies</span>
     </button>
   </nav>
+
+  {#if statusMessage}
+    <p class="status global-status" aria-live="polite">{statusMessage}</p>
+  {/if}
 
   <section hidden={activeTab !== "settings"}>
     <h2>儲存位置</h2>
@@ -1340,9 +1341,6 @@
     <button onclick={toggleTheme}>
       主題：{theme}（點擊切換）
     </button>
-    {#if statusMessage}
-      <p class="status">{statusMessage}</p>
-    {/if}
   </section>
 
   <section hidden={activeTab !== "settings"}>
@@ -1362,6 +1360,28 @@
 
   <section hidden={activeTab !== "rd"}>
     <h2>Real-Debrid</h2>
+    <div class="rd-send-panel">
+      <div>
+        <strong>準備送出：{selectedMagnets} 個已勾選 Magnet</strong>
+        <p class="muted small">
+          從「選取 Magnet」分頁勾選後再送出；重複 BTIH 會在送出前合併一次。
+        </p>
+      </div>
+      <div class="row tight">
+        <button onclick={() => (activeTab = "select")}>回到選取</button>
+        <button
+          onclick={sendSelectedToRd}
+          disabled={isRdSending || selectedMagnets === 0 || !rdHasToken}
+          title={rdHasToken ? "" : "請先設定 RD Token"}
+        >
+          {isRdSending ? "送出中…" : sendButtonLabel}
+        </button>
+        {#if !rdHasToken}
+          <span class="muted small">尚未設定 RD Token</span>
+        {/if}
+      </div>
+    </div>
+
     <div class="row">
       <span class="muted">
         Token：{rdHasToken
@@ -1443,27 +1463,6 @@
       <p class="status">{rdMessage}</p>
     {/if}
 
-    <div class="rd-send-panel">
-      <div>
-        <strong>準備送出：{selectedMagnets} 個已勾選 Magnet</strong>
-        <p class="muted small">
-          從「選取 Magnet」分頁勾選後再送出；重複 BTIH 會在送出前合併一次。
-        </p>
-      </div>
-      <div class="row tight">
-        <button onclick={() => (activeTab = "select")}>回到選取</button>
-        <button
-          onclick={sendSelectedToRd}
-          disabled={isRdSending || selectedMagnets === 0 || !rdHasToken}
-          title={rdHasToken ? "" : "請先設定 RD Token"}
-        >
-          {isRdSending ? "送出中…" : sendButtonLabel}
-        </button>
-        {#if !rdHasToken}
-          <span class="muted small">尚未設定 RD Token</span>
-        {/if}
-      </div>
-    </div>
   </section>
 
   <section hidden={activeTab !== "settings"}>
@@ -1853,7 +1852,7 @@
           onclick={clearResults}
           class:flash-ok={flash.keys.has("scrape-clear")}
         >
-          {flash.keys.has("scrape-clear") ? "已清空 ✓" : "清空結果"}
+          {flash.keys.has("scrape-clear") ? "已清空 ✓" : "清空全部結果（含手貼）"}
         </button>
       {/if}
     </div>
@@ -1873,11 +1872,12 @@
     {/if}
   </section>
 
-  <section hidden={activeTab !== "select"}>
+  <section hidden={activeTab !== "search"}>
     <h2>直接貼磁力</h2>
     <p class="hint">
-      已有 <code>magnet:?xt=...</code> 連結時可貼在這裡，系統會加入下方<strong>結果清單</strong>，
-      之後可送至 Real-Debrid 或複製。
+      已有 <code>magnet:?xt=...</code> 連結時可貼在這裡。加入後切到
+      <strong>2. 選取 Magnet</strong> 分頁確認勾選，再到
+      <strong>3. RD 下載連結</strong> 分頁送出。
     </p>
 
     <textarea
@@ -1901,7 +1901,7 @@
             : "加入結果清單"}
       </button>
       <span class="muted small">
-        加入後可用下方「結果」區塊內的篩選 / 送 RD / 複製。
+        手貼 magnet 會自動勾選；若同 BTIH 先前被取消，貼上會重新勾選。
       </span>
     </div>
     {#if registerStatus}
@@ -1910,7 +1910,13 @@
         data-kind={registerStatus.kind}
       >{registerStatus.text}</p>
     {/if}
+  </section>
 
+  <section hidden={activeTab !== "select"}>
+    <h2>每個番號選取 Magnet</h2>
+    <p class="hint">
+      篩選只控制畫面顯示；RD 送出以勾選狀態為準。同一 BTIH 只會送出一次。
+    </p>
     {#if groups.length > 0}
       <div class="selection-summary">
         <div>
@@ -1922,6 +1928,9 @@
         <div class="row tight">
           <button onclick={() => setRowsSelected(groups.flatMap((g) => processedRows(g)), true)}>
             勾選目前顯示
+          </button>
+          <button onclick={() => selectOnlyRows(groups.flatMap((g) => processedRows(g)))}>
+            只勾選目前顯示
           </button>
           <button onclick={() => setRowsSelected(groups.flatMap((g) => processedRows(g)), false)}>
             取消目前顯示
@@ -2084,6 +2093,8 @@
                           <input
                             type="checkbox"
                             checked={rowSelected(m.handle_id)}
+                            onclick={(e) => e.stopPropagation()}
+                            ondblclick={(e) => e.stopPropagation()}
                             onchange={(e) =>
                               setRowSelected(
                                 m.handle_id,
@@ -2092,7 +2103,15 @@
                             aria-label={`選取 ${m.name || g.result!.code}`}
                           />
                         </td>
-                        <td>{m.name}</td>
+                        <td>
+                          {m.name}
+                          {#if isManualGroup(g) && webHandleIds.has(m.handle_id)}
+                            <span
+                              class="badge"
+                              title="這個手貼 magnet 的 BTIH 已存在於網頁擷取結果；勾選狀態共用，RD 只會送一次。"
+                            >＝網頁同筆</span>
+                          {/if}
+                        </td>
                         <td>{m.size}</td>
                         <td>{m.tags.join(", ")}</td>
                         <td>{m.date}</td>
@@ -2116,6 +2135,10 @@
           </li>
         {/each}
       </ul>
+    {:else}
+      <p class="empty-state">
+        尚無 Magnet 可選取 — 請先到 <strong>1. JAVDB 搜尋</strong> 分頁貼上 JavDB 網址或 magnet。
+      </p>
     {/if}
   </section>
 
@@ -2149,6 +2172,7 @@
         <thead>
           <tr>
             <th>番號</th>
+            <th>大小</th>
             <th>狀態</th>
             <th>連結 / 訊息</th>
           </tr>
@@ -2157,6 +2181,7 @@
           {#each rdSendProgress as row (row.handle_id)}
             <tr>
               <td>{row.code}</td>
+              <td>{row.size_label || "—"}</td>
               <td>
                 {#if row.status === "pending"}
                   待送出
@@ -2429,6 +2454,14 @@
     color: #c0392b;
   }
 
+  .global-status {
+    margin: 0 0 1rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-button-bg);
+  }
+
   .row {
     display: flex;
     gap: 0.5rem;
@@ -2586,6 +2619,17 @@
 
   .inline-msg[data-kind="info"] {
     color: var(--color-muted);
+  }
+
+  .badge {
+    display: inline-block;
+    margin-left: 0.35rem;
+    padding: 0.05rem 0.35rem;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    color: var(--color-muted);
+    font-size: 0.75rem;
+    white-space: nowrap;
   }
 
   .grow {

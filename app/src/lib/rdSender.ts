@@ -117,6 +117,7 @@ export async function sendBatch(
   const rows: RdSendProgress[] = items.map((it) => ({
     handle_id: it.handle_id,
     code: it.code,
+    size_label: it.size_label,
     status: "pending",
     links: [],
     error_code: null,
@@ -175,6 +176,7 @@ export interface RdRetryEvent {
   total: number;
   /** Identical fields as the persisted PendingEntry, plus the latest outcome. */
   torrent_id: string;
+  entry: PendingEntry;
   result:
     | { kind: "completed"; links: RdLink[]; name: string }
     | { kind: "pending"; rd_status: string; progress: number; name: string }
@@ -185,6 +187,59 @@ export interface RdRetryEvent {
 export interface RdRetryOptions {
   signal?: AbortSignal;
   fetcher?: (torrent_id: string, strategy?: string) => Promise<RdCheckOutcome>;
+}
+
+function findRetryProgressIndex(
+  rows: RdSendProgress[],
+  ev: RdRetryEvent,
+): number {
+  const torrentIndex = rows.findIndex((row) => row.torrent_id === ev.torrent_id);
+  if (torrentIndex >= 0) return torrentIndex;
+
+  const codeMatches = rows
+    .map((row, index) => ({ row, index }))
+    .filter(
+      ({ row }) =>
+        !row.torrent_id &&
+        row.status === "in_pending" &&
+        row.code === ev.entry.code,
+    );
+  return codeMatches.length === 1 ? codeMatches[0].index : -1;
+}
+
+export function applyRetryEventToProgressRows(
+  rows: RdSendProgress[],
+  ev: RdRetryEvent,
+  completedAt = new Date().toISOString(),
+): RdSendProgress[] {
+  const index = findRetryProgressIndex(rows, ev);
+  if (index < 0) return rows;
+
+  const row = rows[index];
+  let next: RdSendProgress | null = null;
+  if (ev.result.kind === "completed") {
+    next = {
+      ...row,
+      status: "completed",
+      links: ev.result.links,
+      error_code: null,
+      completed_at: completedAt,
+      torrent_id: ev.torrent_id,
+    };
+  } else if (ev.result.kind === "missing") {
+    next = {
+      ...row,
+      status: "error",
+      links: [],
+      error_code: "rd_torrent_missing",
+      torrent_id: ev.torrent_id,
+    };
+  }
+  if (!next) return rows;
+
+  const out = rows.slice();
+  out[index] = next;
+  return out;
 }
 
 /**
@@ -209,6 +264,7 @@ export async function retryPending(
           index: i + 1,
           total: entries.length,
           torrent_id: entry.torrent_id,
+          entry,
           result: {
             kind: "completed",
             links: outcome.links,
@@ -220,6 +276,7 @@ export async function retryPending(
           index: i + 1,
           total: entries.length,
           torrent_id: entry.torrent_id,
+          entry,
           result: { kind: "missing" },
         };
       } else {
@@ -227,6 +284,7 @@ export async function retryPending(
           index: i + 1,
           total: entries.length,
           torrent_id: entry.torrent_id,
+          entry,
           result: {
             kind: "pending",
             rd_status: outcome.rd_status,
@@ -241,6 +299,7 @@ export async function retryPending(
         index: i + 1,
         total: entries.length,
         torrent_id: entry.torrent_id,
+        entry,
         result: { kind: "error", error_code: code },
       };
     }

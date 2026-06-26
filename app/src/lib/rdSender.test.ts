@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyRetryEventToProgressRows,
   collectDownloadLinksFromRow,
   rdErrorMessage,
   retryPending,
@@ -352,6 +353,102 @@ describe("retryPending", () => {
         streamable: 1,
       });
     }
+  });
+});
+
+describe("applyRetryEventToProgressRows", () => {
+  const progress = (overrides: Partial<RdSendProgress>): RdSendProgress => ({
+    handle_id: "h-1",
+    code: "DSOD-032",
+    status: "in_pending",
+    links: [],
+    error_code: null,
+    ...overrides,
+  });
+
+  const entry = (overrides: Partial<PendingEntry> = {}): PendingEntry => ({
+    torrent_id: "tid-dsod",
+    code: "DSOD-032",
+    name: "DSOD-032",
+    size_label: "7.00GB, 5個文件",
+    strategy: "smart",
+    added_at: "2026-06-19T00:00:00Z",
+    last_progress: 0,
+    last_rd_status: "downloading",
+    last_checked_at: null,
+    ...overrides,
+  });
+
+  const completedEvent = (
+    overrides: Partial<RdRetryEvent> = {},
+  ): RdRetryEvent => ({
+    index: 1,
+    total: 1,
+    torrent_id: "tid-dsod",
+    entry: entry(),
+    result: {
+      kind: "completed",
+      name: "DSOD-032",
+      links: [
+        {
+          original: "o",
+          download: "https://rd.example/dsod",
+          filename: "DSOD-032.mp4",
+          filesize: 1,
+          streamable: 0,
+        },
+      ],
+    },
+    ...overrides,
+  });
+
+  it("marks the matching torrent_id progress row completed and attaches links", () => {
+    const rows = [
+      progress({ code: "OTHER-001", torrent_id: "tid-other" }),
+      progress({ torrent_id: "tid-dsod" }),
+    ];
+
+    const out = applyRetryEventToProgressRows(
+      rows,
+      completedEvent(),
+      "2026-06-19T01:02:03.000Z",
+    );
+
+    expect(out[0]).toBe(rows[0]);
+    expect(out[1]).toMatchObject({
+      status: "completed",
+      torrent_id: "tid-dsod",
+      completed_at: "2026-06-19T01:02:03.000Z",
+      links: [{ download: "https://rd.example/dsod" }],
+    });
+  });
+
+  it("falls back to the only matching in-pending code when old progress rows lack torrent_id", () => {
+    const rows = [progress({ torrent_id: undefined })];
+
+    const out = applyRetryEventToProgressRows(
+      rows,
+      completedEvent(),
+      "2026-06-19T01:02:03.000Z",
+    );
+
+    expect(out[0]).toMatchObject({
+      status: "completed",
+      torrent_id: "tid-dsod",
+      links: [{ download: "https://rd.example/dsod" }],
+    });
+  });
+
+  it("does not guess when multiple old in-pending rows share the same code", () => {
+    const rows = [
+      progress({ handle_id: "h-a", torrent_id: undefined }),
+      progress({ handle_id: "h-b", torrent_id: undefined }),
+    ];
+
+    const out = applyRetryEventToProgressRows(rows, completedEvent());
+
+    expect(out).toBe(rows);
+    expect(out.every((row) => row.status === "in_pending")).toBe(true);
   });
 });
 

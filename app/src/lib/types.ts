@@ -230,6 +230,7 @@ export interface PendingEntry {
 export interface RdSendProgress {
   handle_id: string;
   code: string;
+  size_label?: string;
   status: "pending" | "sending" | "completed" | "in_pending" | "error";
   links: RdLink[];
   error_code: string | null;

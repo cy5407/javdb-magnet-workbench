@@ -209,3 +209,34 @@ Workflow `wf_5216b7b9-0f3`：5 個修補並行 → pytest+cargo 驗證 → 5 個
   搜尋、選取、RD 轉連結的工作流程。
 - **RD Token 仍保留在「RD 下載連結」分頁。**
   Token 是送出前置條件，放在第三頁可避免使用者要在設定頁與 RD 頁來回跳。
+
+---
+
+# [2026-06-11 22:50 → 23:05, 15m] 分頁契約修補：來源輸入、全域回饋、手貼重選
+
+## Design decisions
+
+- **`statusMessage` 改成分頁外的全域 status strip。**
+  搜尋、選取、複製、清空等流程都會寫入 `statusMessage`；渲染點不能留在設定分頁內，否則錯誤路徑會靜默。
+- **手貼 magnet 對所有 registered handle 都重新設為已勾選。**
+  即使同 BTIH 已存在於網頁或手貼群組，貼上動作本身代表重新表態；UI 可以不新增重複列，但 send selection 必須恢復。
+- **把「直接貼磁力」移到第 1 頁來源輸入區。**
+  第 1 頁負責產生候選來源（JavDB URL 或 magnet），第 2 頁只負責篩選與勾選，避免分頁標題和頁面主要動作不一致。
+
+## Tradeoffs
+
+- **保留 RD Token 在第 3 頁，但把準備送出面板移到最上方。**
+  Token 是 RD 送出的前置條件，仍在同頁；主要操作先出現，避免已設定 token 的使用者每次都先看到設定表單。
+- **新增「只勾選目前顯示」而不是改變篩選語意。**
+  篩選仍只控制顯示；需要用篩選結果建立送出集合時，使用者用明確按鈕轉換。
+- **同 BTIH 的手貼列只加 badge，不拆成兩套 selection。**
+  同 torrent 共用勾選狀態是正確資料語意；badge 用來補足 provenance 和去重提示。
+
+---
+
+# [2026-06-19 22:00 → 22:10, 10m] Pending retry 回寫 RD 進度列
+
+## Design decisions
+
+- **pending retry 完成後先用 `torrent_id` 回寫 `rdSendProgress`，找不到時只在唯一同番號、仍為 `in_pending`、且舊 row 沒有 `torrent_id` 的情況 fallback。**
+  這補上舊 session / 舊 progress row 缺 `torrent_id` 時的狀態同步缺口，同時避免同番號多列時猜錯 row。
