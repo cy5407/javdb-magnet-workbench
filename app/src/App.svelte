@@ -20,7 +20,9 @@
   } from "./lib/settingsValidation";
   import {
     applyRetryEventToProgressRows,
+    buildRdDisplayRows,
     collectDownloadLinksFromRow,
+    formatCompletedAt,
     rdErrorMessage,
     retryPending,
     sendBatch,
@@ -57,6 +59,24 @@
   let settings = $state<Settings | null>(null);
   let statusMessage = $state("");
   let activeTab = $state<"search" | "select" | "rd" | "settings">("search");
+  const TAB_ORDER = ["search", "select", "rd", "settings"] as const;
+
+  /** Left/Right steps between the tab buttons the way a tablist would. The
+   * handler sits on the buttons rather than on <nav> because a keydown on a
+   * non-interactive landmark trips Svelte's a11y lint. */
+  function onTabKeydown(e: KeyboardEvent, index: number) {
+    let next: number;
+    if (e.key === "ArrowRight") next = (index + 1) % TAB_ORDER.length;
+    else if (e.key === "ArrowLeft") next = (index - 1 + TAB_ORDER.length) % TAB_ORDER.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = TAB_ORDER.length - 1;
+    else return;
+    e.preventDefault();
+    activeTab = TAB_ORDER[next];
+    const buttons = (e.currentTarget as HTMLElement).parentElement
+      ?.querySelectorAll<HTMLButtonElement>("button");
+    buttons?.[next]?.focus();
+  }
 
   // M4a — batch scrape state
   let urlBatch = $state("https://javdb.com/v/RkX3Rp\n");
@@ -310,7 +330,7 @@
       registerStatus = {
         kind: "error",
         text: looksLikeUrls
-          ? "你貼的看起來是 JavDB 網址（http/https）。請改貼到「1. JAVDB 搜尋」分頁的批次擷取欄位；本欄只接受 magnet:?xt=... 開頭的磁力連結。"
+          ? "你貼的看起來是 JavDB 網址（http/https）。請改貼到「1. 擷取 Magnet」分頁的批次擷取欄位；本欄只接受 magnet:?xt=... 開頭的磁力連結。"
           : "未偵測到有效磁力連結（必須以 magnet: 開頭）",
       };
       return;
@@ -730,7 +750,9 @@
     if (isRdSending) return;
     if (!rdHasToken) {
       rdMessage = "請先設定 RD Token";
-      activeTab = "rd";
+      // The token editor lives on the settings tab, so bounce there — staying
+      // on the RD tab would leave the user with no way to fix it.
+      activeTab = "settings";
       return;
     }
     const items = buildSelectedSendItems();
@@ -1281,33 +1303,43 @@
       0,
     ),
   );
+  /** Display-only ordering for the progress table. `rdSendProgress` itself is
+   * never reordered — the send loop writes it by original index and pending
+   * retry reconciles against it. */
+  let rdDisplayRows = $derived(buildRdDisplayRows(rdSendProgress));
 </script>
 
 <main class="container">
   <h1>JavDBMagnet</h1>
-  <p class="subtitle">JavDB Magnet → 選取 → Real-Debrid 下載連結</p>
+  <p class="subtitle">JavDB Magnet → 挑選 → Real-Debrid 下載連結</p>
 
   <nav class="tabs" aria-label="主要流程">
     <button
       type="button"
       class:active={activeTab === "search"}
+      aria-current={activeTab === "search" ? "page" : undefined}
       onclick={() => (activeTab = "search")}
+      onkeydown={(e) => onTabKeydown(e, 0)}
     >
-      1. JAVDB 搜尋
+      1. 擷取 Magnet
       <span>{okCount}/{scrapeProgress.total || webGroups.length}</span>
     </button>
     <button
       type="button"
       class:active={activeTab === "select"}
+      aria-current={activeTab === "select" ? "page" : undefined}
       onclick={() => (activeTab = "select")}
+      onkeydown={(e) => onTabKeydown(e, 1)}
     >
-      2. 選取 Magnet
+      2. 挑選 Magnet
       <span>{selectedMagnets}/{selectableMagnets}</span>
     </button>
     <button
       type="button"
       class:active={activeTab === "rd"}
+      aria-current={activeTab === "rd" ? "page" : undefined}
       onclick={() => (activeTab = "rd")}
+      onkeydown={(e) => onTabKeydown(e, 2)}
     >
       3. RD 下載連結
       <span>{rdSendDone.total > 0 ? `${rdCompletedCount}/${rdSendDone.total}` : `待處理 ${pendingEntries.length}`}</span>
@@ -1315,7 +1347,9 @@
     <button
       type="button"
       class:active={activeTab === "settings"}
+      aria-current={activeTab === "settings" ? "page" : undefined}
       onclick={() => (activeTab = "settings")}
+      onkeydown={(e) => onTabKeydown(e, 3)}
     >
       4. 設定
       <span>偏好 / Cookies</span>
@@ -1327,61 +1361,7 @@
   {/if}
 
   <section hidden={activeTab !== "settings"}>
-    <h2>儲存位置</h2>
-    <dl>
-      <dt>資料目錄</dt>
-      <dd>{dataDir}</dd>
-      <dt>日誌目錄</dt>
-      <dd>{logDir}</dd>
-    </dl>
-  </section>
-
-  <section hidden={activeTab !== "settings"}>
-    <h2>主題</h2>
-    <button onclick={toggleTheme}>
-      主題：{theme}（點擊切換）
-    </button>
-  </section>
-
-  <section hidden={activeTab !== "settings"}>
-    <h2>Sidecar</h2>
-    <div class="row">
-      <button
-        onclick={pingSidecar}
-        class:flash-ok={flash.keys.has("ping-sidecar")}
-      >
-        {flash.keys.has("ping-sidecar") ? "✓ Pong" : "Ping Sidecar"}
-      </button>
-      {#if pingMessage}
-        <span class="ping">{pingMessage}</span>
-      {/if}
-    </div>
-  </section>
-
-  <section hidden={activeTab !== "rd"}>
-    <h2>Real-Debrid</h2>
-    <div class="rd-send-panel">
-      <div>
-        <strong>準備送出：{selectedMagnets} 個已勾選 Magnet</strong>
-        <p class="muted small">
-          從「選取 Magnet」分頁勾選後再送出；重複 BTIH 會在送出前合併一次。
-        </p>
-      </div>
-      <div class="row tight">
-        <button onclick={() => (activeTab = "select")}>回到選取</button>
-        <button
-          onclick={sendSelectedToRd}
-          disabled={isRdSending || selectedMagnets === 0 || !rdHasToken}
-          title={rdHasToken ? "" : "請先設定 RD Token"}
-        >
-          {isRdSending ? "送出中…" : sendButtonLabel}
-        </button>
-        {#if !rdHasToken}
-          <span class="muted small">尚未設定 RD Token</span>
-        {/if}
-      </div>
-    </div>
-
+    <h2>Real-Debrid Token</h2>
     <div class="row">
       <span class="muted">
         Token：{rdHasToken
@@ -1462,7 +1442,74 @@
     {#if rdMessage}
       <p class="status">{rdMessage}</p>
     {/if}
+  </section>
 
+  <section hidden={activeTab !== "settings"}>
+    <h2>儲存位置</h2>
+    <dl>
+      <dt>資料目錄</dt>
+      <dd>{dataDir}</dd>
+      <dt>日誌目錄</dt>
+      <dd>{logDir}</dd>
+    </dl>
+  </section>
+
+  <section hidden={activeTab !== "settings"}>
+    <h2>主題</h2>
+    <button onclick={toggleTheme}>
+      主題：{theme}（點擊切換）
+    </button>
+  </section>
+
+  <section hidden={activeTab !== "settings"}>
+    <h2>Sidecar</h2>
+    <div class="row">
+      <button
+        onclick={pingSidecar}
+        class:flash-ok={flash.keys.has("ping-sidecar")}
+      >
+        {flash.keys.has("ping-sidecar") ? "✓ Pong" : "Ping Sidecar"}
+      </button>
+      {#if pingMessage}
+        <span class="ping">{pingMessage}</span>
+      {/if}
+    </div>
+  </section>
+
+  <section hidden={activeTab !== "rd"}>
+    <h2>Real-Debrid</h2>
+    <div class="rd-send-panel">
+      <div>
+        <strong>準備送出：{selectedMagnets} 個已勾選 Magnet</strong>
+        <p class="muted small">
+          從「2. 挑選 Magnet」分頁勾選後再送出；重複 BTIH 會在送出前合併一次。
+        </p>
+      </div>
+      <div class="row tight">
+        <button onclick={() => (activeTab = "select")}>回到挑選</button>
+        <button
+          onclick={sendSelectedToRd}
+          disabled={isRdSending || selectedMagnets === 0 || !rdHasToken}
+          title={rdHasToken ? "" : "請先設定 RD Token"}
+        >
+          {isRdSending ? "送出中…" : sendButtonLabel}
+        </button>
+        {#if !rdHasToken}
+          <span class="muted small">尚未設定 RD Token，無法送出。</span>
+          <button type="button" onclick={() => (activeTab = "settings")}>
+            前往「4. 設定」設定 Token
+          </button>
+        {/if}
+      </div>
+    </div>
+
+    <!-- rdMessage is shared with the token editor on the settings tab; the
+         tabs are mutually exclusive, so only one of the two renders is ever
+         visible. Without this copy the send / copy-link feedback on this tab
+         would silently go nowhere. -->
+    {#if rdMessage}
+      <p class="status">{rdMessage}</p>
+    {/if}
   </section>
 
   <section hidden={activeTab !== "settings"}>
@@ -1602,7 +1649,7 @@
     </h2>
     {#if settingsShown && settingsDraft}
       <p class="hint">
-        編輯下列欄位後按「儲存設定」。RD Token 不在這裡管理 — 請到 <strong>RD 下載連結</strong> 分頁。
+        編輯下列欄位後按「儲存設定」。RD Token 請在本頁上方的 <strong>Real-Debrid Token</strong> 區塊管理。
       </p>
 
       <fieldset style="border: 1px solid var(--border, #ccc); padding: 0.75rem; margin-bottom: 0.75rem;">
@@ -1846,7 +1893,7 @@
           onclick={() => (activeTab = "select")}
           disabled={isScraping || selectableMagnets === 0}
         >
-          前往選取 Magnet（{selectableMagnets}）
+          前往挑選 Magnet（{selectableMagnets}）
         </button>
         <button
           onclick={clearResults}
@@ -1867,6 +1914,36 @@
       {/if}
     </div>
 
+    {#if webGroups.length > 0}
+      <!-- Per-URL outcome only. The magnet checkbox table belongs to
+           「2. 挑選 Magnet」; this is here so a failed URL names itself
+           without making the user leave the scrape step. -->
+      <ul class="groups outcomes">
+        {#each webGroups as g, i (g.url)}
+          <li class="group outcome" data-status={g.status}>
+            <span class="status-dot"></span>
+            <strong>
+              {#if g.result}
+                {g.result.code || "（無番號）"}
+              {:else}
+                #{i + 1}
+              {/if}
+            </strong>
+            <span class="muted url small">{g.url}</span>
+            {#if g.status === "error"}
+              <span class="error small">錯誤：{g.error}</span>
+            {:else if g.result}
+              <span class="muted small">{g.result.magnet_count} 個磁力</span>
+            {:else}
+              <span class="muted small">
+                {g.status === "fetching" ? "擷取中…" : "等待中…"}
+              </span>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
+
     {#if groups.length === 0 && !isScraping}
       <p class="empty-state">尚無結果 — 在上方貼上網址後按下<strong>開始擷取</strong>。</p>
     {/if}
@@ -1876,7 +1953,7 @@
     <h2>直接貼磁力</h2>
     <p class="hint">
       已有 <code>magnet:?xt=...</code> 連結時可貼在這裡。加入後切到
-      <strong>2. 選取 Magnet</strong> 分頁確認勾選，再到
+      <strong>2. 挑選 Magnet</strong> 分頁確認勾選，再到
       <strong>3. RD 下載連結</strong> 分頁送出。
     </p>
 
@@ -2137,7 +2214,7 @@
       </ul>
     {:else}
       <p class="empty-state">
-        尚無 Magnet 可選取 — 請先到 <strong>1. JAVDB 搜尋</strong> 分頁貼上 JavDB 網址或 magnet。
+        尚無 Magnet 可選取 — 請先到 <strong>1. 擷取 Magnet</strong> 分頁貼上 JavDB 網址或 magnet。
       </p>
     {/if}
   </section>
@@ -2174,11 +2251,21 @@
             <th>番號</th>
             <th>大小</th>
             <th>狀態</th>
+            <th title="本程式確認該項目完成的時間，非 Real-Debrid 伺服器實際完成下載的時刻">
+              完成時間（本程式確認）
+            </th>
             <th>連結 / 訊息</th>
           </tr>
         </thead>
         <tbody>
-          {#each rdSendProgress as row (row.handle_id)}
+          {#each rdDisplayRows as row (row.handle_id)}
+            <!-- Gated on `status`, not on the presence of completed_at: a row
+                 flipped to `error` by a pending "missing" event keeps its old
+                 timestamp, and showing it there would be a lie. The tooltip
+                 hangs off the rendered text for the same reason — an em dash
+                 must not have a full ISO timestamp hiding behind it. -->
+            {@const completedText =
+              row.status === "completed" ? formatCompletedAt(row.completed_at) : "—"}
             <tr>
               <td>{row.code}</td>
               <td>{row.size_label || "—"}</td>
@@ -2194,6 +2281,9 @@
                 {:else if row.status === "error"}
                   <span class="status-err">失敗</span>
                 {/if}
+              </td>
+              <td class="small" title={completedText === "—" ? undefined : row.completed_at}>
+                {completedText}
               </td>
               <td>
                 {#if row.status === "completed"}
@@ -2356,7 +2446,9 @@
 
   .tabs {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    /* 4-up while every column still fits a label; below that the bar wraps to
+       2-up and finally 1-up instead of squeezing the label into the count. */
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
     gap: 0.5rem;
     margin: 1rem 0 1.25rem;
   }
@@ -2365,6 +2457,9 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    /* The count drops to its own line rather than colliding with the label. */
+    flex-wrap: wrap;
+    gap: 0.25rem 0.5rem;
     min-width: 0;
     padding: 0.65rem 0.8rem;
     text-align: left;
@@ -2375,6 +2470,7 @@
     color: var(--color-muted);
     font-size: 0.85rem;
     font-weight: 500;
+    white-space: nowrap;
   }
 
   .tabs button.active {
@@ -2770,6 +2866,26 @@
 
   .group .url {
     word-break: break-all;
+  }
+
+  /* Search-tab outcome list: same dot/border language as the selection
+     groups, one line per URL instead of a collapsible block. */
+  .outcomes {
+    gap: 0.3rem;
+  }
+
+  .group.outcome {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 0.3rem 0.6rem;
+  }
+
+  /* .error carries a block-level margin-top for standalone <p>; as a flex
+     item here it would drop the message off the baseline. */
+  .group.outcome .error {
+    margin-top: 0;
   }
 
   .title {

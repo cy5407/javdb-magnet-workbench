@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyRetryEventToProgressRows,
+  buildRdDisplayRows,
   collectDownloadLinksFromRow,
+  formatCompletedAt,
   rdErrorMessage,
   retryPending,
   sendBatch,
@@ -125,6 +127,28 @@ describe("sendBatch", () => {
     expect(out[0].error_code).toBeNull();
   });
 
+  it("stamps a UTC ISO-8601 completed_at on the first completed outcome", async () => {
+    const before = new Date().toISOString();
+    const out = await sendBatch([item(1)], () => {}, {
+      fetcher: async (h: string) => ok(h),
+    });
+    expect(out[0].completed_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(out[0].completed_at! >= before).toBe(true);
+  });
+
+  it("leaves completed_at unset for pending and error outcomes", async () => {
+    const stillPending = await sendBatch([item(1)], () => {}, {
+      fetcher: async (h: string) => pending(h),
+    });
+    expect(stillPending[0].completed_at).toBeUndefined();
+    const failed = await sendBatch([item(1)], () => {}, {
+      fetcher: async () => {
+        throw new Error("rd_api_error");
+      },
+    });
+    expect(failed[0].completed_at).toBeUndefined();
+  });
+
   it("pending outcome keeps torrent_id and empties links", async () => {
     const fetcher = vi.fn(async (h: string) => pending(h));
     const out = await sendBatch([item(1)], () => {}, { fetcher });
@@ -208,6 +232,126 @@ describe("sortCompletedRowsByCompletionTime", () => {
         "2026-03-15T00:00:00.000Z",
       ).map((r) => r.code),
     ).toEqual(["row1", "row2", "row4", "row3"]);
+  });
+});
+
+describe("buildRdDisplayRows", () => {
+  const row = (
+    code: string,
+    status: RdSendProgress["status"],
+    completed_at?: string,
+  ): RdSendProgress => ({
+    handle_id: `h-${code}`,
+    code,
+    status,
+    links: [],
+    error_code: null,
+    completed_at,
+  });
+  const done = (code: string, completed_at?: string): RdSendProgress =>
+    row(code, "completed", completed_at);
+
+  const T1 = "2026-05-17T01:00:00.000Z";
+  const T2 = "2026-05-17T02:00:00.000Z";
+  const T3 = "2026-05-17T03:00:00.000Z";
+
+  it("keeps incomplete rows above completed rows in their original order", () => {
+    const rows = [
+      done("A", T2),
+      row("B", "in_pending"),
+      row("C", "error"),
+      done("D", T1),
+      row("E", "sending"),
+      row("F", "pending"),
+    ];
+
+    expect(buildRdDisplayRows(rows).map((r) => r.code)).toEqual([
+      "B",
+      "C",
+      "E",
+      "F",
+      "D",
+      "A",
+    ]);
+  });
+
+  it("orders completed rows oldest first so the newest completion lands last", () => {
+    const rows = [done("mid", T2), done("newest", T3), done("oldest", T1)];
+
+    expect(buildRdDisplayRows(rows).map((r) => r.code)).toEqual([
+      "oldest",
+      "mid",
+      "newest",
+    ]);
+  });
+
+  it("falls back to the original order for completed rows sharing a completed_at", () => {
+    expect(
+      buildRdDisplayRows([done("A", T1), done("B", T1), done("C", T2)]).map(
+        (r) => r.code,
+      ),
+    ).toEqual(["A", "B", "C"]);
+    // Same pair fed the other way round — a non-stable sort would pass only one.
+    expect(
+      buildRdDisplayRows([done("B", T1), done("A", T1), done("C", T2)]).map(
+        (r) => r.code,
+      ),
+    ).toEqual(["B", "A", "C"]);
+  });
+
+  it("places completed rows without completed_at before timestamped ones", () => {
+    const rows = [done("t1", T1), done("m1"), done("t2", T2), done("m2")];
+
+    expect(buildRdDisplayRows(rows).map((r) => r.code)).toEqual([
+      "m1",
+      "m2",
+      "t1",
+      "t2",
+    ]);
+  });
+
+  it("returns a new array without mutating or reordering the input", () => {
+    const rows = [done("A", T2), row("B", "pending"), done("C", T1)];
+    const original = rows.map((r) => r.code);
+
+    const out = buildRdDisplayRows(rows);
+
+    expect(out).not.toBe(rows);
+    expect(rows.map((r) => r.code)).toEqual(original);
+    // Row identity must survive: the table keys on handle_id and per-row
+    // actions operate on the same objects held by the source array.
+    expect(out[0]).toBe(rows[1]);
+    expect(out[1]).toBe(rows[2]);
+    expect(out[2]).toBe(rows[0]);
+  });
+
+  it("returns [] for an empty batch", () => {
+    expect(buildRdDisplayRows([])).toEqual([]);
+  });
+});
+
+describe("formatCompletedAt", () => {
+  it("renders a stored UTC timestamp as local YYYY-MM-DD HH:mm:ss", () => {
+    // Built from local parts so the expectation holds in any TZ the suite
+    // happens to run in — the point is the format, not the offset.
+    const local = new Date(2026, 6, 26, 13, 45, 12, 345);
+    expect(formatCompletedAt(local.toISOString())).toBe("2026-07-26 13:45:12");
+  });
+
+  it("zero-pads single-digit month, day and time parts", () => {
+    const local = new Date(2026, 0, 2, 3, 4, 5);
+    expect(formatCompletedAt(local.toISOString())).toBe("2026-01-02 03:04:05");
+  });
+
+  it("renders an em dash for a legacy row carrying no completed_at", () => {
+    // Task.md 1.4(7): pre-timestamp rows must display safely, never as
+    // "Invalid Date".
+    expect(formatCompletedAt(undefined)).toBe("—");
+    expect(formatCompletedAt("")).toBe("—");
+  });
+
+  it("renders an em dash rather than Invalid Date for an unparsable value", () => {
+    expect(formatCompletedAt("not-a-timestamp")).toBe("—");
   });
 });
 
@@ -449,6 +593,81 @@ describe("applyRetryEventToProgressRows", () => {
 
     expect(out).toBe(rows);
     expect(out.every((row) => row.status === "in_pending")).toBe(true);
+  });
+
+  const FIRST_COMPLETED_AT = "2026-06-19T01:02:03.000Z";
+
+  it("keeps the original completed_at when a repeat completed event arrives", () => {
+    const rows = [
+      progress({
+        torrent_id: "tid-dsod",
+        status: "completed",
+        completed_at: FIRST_COMPLETED_AT,
+      }),
+    ];
+
+    const out = applyRetryEventToProgressRows(
+      rows,
+      completedEvent(),
+      "2026-06-20T09:00:00.000Z",
+    );
+
+    expect(out[0].completed_at).toBe(FIRST_COMPLETED_AT);
+    expect(out[0].links).toEqual([
+      {
+        original: "o",
+        download: "https://rd.example/dsod",
+        filename: "DSOD-032.mp4",
+        filesize: 1,
+        streamable: 0,
+      },
+    ]);
+  });
+
+  it("leaves an already-completed row untouched when the retry still reports pending", () => {
+    const rows = [
+      progress({
+        torrent_id: "tid-dsod",
+        status: "completed",
+        completed_at: FIRST_COMPLETED_AT,
+      }),
+    ];
+
+    const out = applyRetryEventToProgressRows(
+      rows,
+      completedEvent({
+        result: {
+          kind: "pending",
+          rd_status: "downloading",
+          progress: 40,
+          name: "DSOD-032",
+        },
+      }),
+      "2026-06-20T09:00:00.000Z",
+    );
+
+    expect(out).toBe(rows);
+    expect(out[0].completed_at).toBe(FIRST_COMPLETED_AT);
+  });
+
+  it("keeps completed_at when the torrent later reports missing", () => {
+    const rows = [
+      progress({
+        torrent_id: "tid-dsod",
+        status: "completed",
+        completed_at: FIRST_COMPLETED_AT,
+      }),
+    ];
+
+    const out = applyRetryEventToProgressRows(
+      rows,
+      completedEvent({ result: { kind: "missing" } }),
+      "2026-06-20T09:00:00.000Z",
+    );
+
+    expect(out[0].status).toBe("error");
+    expect(out[0].error_code).toBe("rd_torrent_missing");
+    expect(out[0].completed_at).toBe(FIRST_COMPLETED_AT);
   });
 });
 
