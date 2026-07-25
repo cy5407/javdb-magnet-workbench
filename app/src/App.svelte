@@ -146,6 +146,12 @@
   let cookiesPasteOpen = $state(false);
   let cookiesPasteInput = $state("");
   let cookiesSaving = $state(false);
+  // Task.md 2.5 清除: the clear button arms on the first click and only
+  // invokes on the second. Unlike 清除 Token (re-pasteable from Real-Debrid's
+  // site) the cookie header can only be recovered by walking DevTools again,
+  // so a stray click must not be enough.
+  let cookiesClearArmed = $state(false);
+  let cookiesClearing = $state(false);
 
   // M7c: Settings editor
   let settingsShown = $state(false);
@@ -1051,11 +1057,77 @@
     }
   }
 
+  function toggleCookiesShown() {
+    cookiesShown = !cookiesShown;
+    // Never leave a primed destructive button behind a collapsed section —
+    // re-expanding would put "確定清除？" one click away with no warning in
+    // view.
+    if (!cookiesShown) cookiesClearArmed = false;
+  }
+
   function toggleCookiesPaste() {
     cookiesPasteOpen = !cookiesPasteOpen;
     cookiesMessage = null;
     cookiesError = "";
+    cookiesClearArmed = false;
     if (!cookiesPasteOpen) cookiesPasteInput = "";
+  }
+
+  function armCookiesClear() {
+    cookiesClearArmed = true;
+    cookiesMessage = null;
+    cookiesError = "";
+  }
+
+  function cancelCookiesClear() {
+    cookiesClearArmed = false;
+  }
+
+  async function clearCookies() {
+    cookiesError = "";
+    cookiesMessage = null;
+    cookiesClearing = true;
+    try {
+      // `clear_cookies` hands back the post-clear status, so take it directly.
+      // refreshCookiesStatus() would run migrate_cookies_now instead, and any
+      // cookies.txt that survived would be promoted straight back.
+      cookiesStatus = await invoke<CookiesStatus>("clear_cookies");
+      cookiesClearArmed = false;
+      cookiesPasteOpen = false;
+      cookiesPasteInput = "";
+      cookiesMessage = {
+        kind: "ok",
+        text: "cookies 已清除：Credential Manager 項目與資料目錄的 cookies.txt 都已刪除，執行中的 sidecar 也已清空。重新貼上前 JavDB 擷取會被 Cloudflare 擋下。",
+      };
+      flash.flash("cookies-clear");
+    } catch (e) {
+      const raw = errText(e);
+      if (raw.startsWith("cookies_cleared_sidecar_stale")) {
+        // Deletion succeeded; only the push to the running sidecar failed.
+        // Reporting this as 清除失敗 would tell the user their credentials are
+        // still stored when they are already gone, so say what really happened
+        // and re-read the status (get_cookies_status is a plain read — unlike
+        // refreshCookiesStatus it won't re-migrate anything).
+        cookiesClearArmed = false;
+        cookiesPasteOpen = false;
+        cookiesPasteInput = "";
+        try {
+          cookiesStatus = await invoke<CookiesStatus>("get_cookies_status");
+        } catch {
+          cookiesStatus = null;
+        }
+        cookiesMessage = {
+          kind: "info",
+          text: "已清除儲存的 cookies（Credential Manager 與 cookies.txt），但執行中的 sidecar 未能同步，重新啟動 app 後才會完全生效。",
+        };
+      } else {
+        // No stable error codes on the remaining paths (unlike cookies_empty /
+        // cookies_too_large) — the raw string names the file or keyring step.
+        cookiesMessage = { kind: "error", text: `清除失敗：${raw}` };
+      }
+    } finally {
+      cookiesClearing = false;
+    }
   }
 
   async function saveCookies() {
@@ -1754,7 +1826,7 @@
       JavDB Cookies
       <button
         type="button"
-        onclick={() => (cookiesShown = !cookiesShown)}
+        onclick={toggleCookiesShown}
         style="margin-left: 0.5rem; font-size: 0.85rem; padding: 0.15rem 0.5rem;"
       >{cookiesShown ? "▴ 收合" : "▾ 展開"}</button>
     </h2>
@@ -1808,6 +1880,19 @@
       {#if cookiesMessage}
         <p class="inline-msg" data-kind={cookiesMessage.kind}>{cookiesMessage.text}</p>
       {/if}
+      {#if cookiesClearArmed}
+        <div class="inline-msg" data-kind="error">
+          <p>
+            <strong>確定要清除 cookies？</strong>
+            會刪除 Credential Manager 的 <code>JavDBMagnet/JAVDB_COOKIES</code>
+            與資料目錄的 <code>cookies.txt</code>，並清空執行中 sidecar 的 cookies。
+          </p>
+          <p class="muted small">
+            無法復原：本程式從不讀取 cookies 內容，因此無法幫你備份。要恢復擷取
+            只能重新從瀏覽器 DevTools 取得一份並貼回。
+          </p>
+        </div>
+      {/if}
       <div class="row">
         <button
           onclick={refreshCookiesStatus}
@@ -1820,6 +1905,25 @@
         <button onclick={toggleCookiesPaste} disabled={cookiesSaving}>
           {cookiesPasteOpen ? "取消輸入" : "貼上新 cookies"}
         </button>
+        {#if cookiesClearArmed}
+          <button onclick={clearCookies} disabled={cookiesClearing}>
+            {cookiesClearing ? "清除中…" : "確定清除"}
+          </button>
+          <button onclick={cancelCookiesClear} disabled={cookiesClearing}>
+            取消清除
+          </button>
+        {:else}
+          <!-- Stays mounted-but-disabled when there is nothing stored, rather
+               than {#if}-gated like 清除 Token: an unmount would swallow the
+               「已清除 ✓」 flash the instant the clear succeeds. -->
+          <button
+            onclick={armCookiesClear}
+            disabled={cookiesSaving || !cookiesStatus || cookiesStatus.storage === "none"}
+            class:flash-ok={flash.keys.has("cookies-clear")}
+          >
+            {flash.keys.has("cookies-clear") ? "已清除 ✓" : "清除 cookies"}
+          </button>
+        {/if}
         {#if cookiesStatus && cookiesStatus.storage !== "file"}
           <button
             onclick={createCookiesTemplate}

@@ -1038,8 +1038,8 @@ pub(crate) fn save_cookies_local(
 /// length, write to the credential store, scrub any stale `cookies.txt`,
 /// and push to the running sidecar so the new value is live immediately.
 ///
-/// Empty / whitespace input is rejected (no silent clears via this
-/// command; use a dedicated clear gesture if one is ever needed).
+/// Empty / whitespace input is rejected — no silent clears via this
+/// command; [`clear_cookies`] is the explicit gesture for that.
 #[tauri::command]
 pub async fn save_cookies(
     sidecar: State<'_, SidecarManager>,
@@ -1064,6 +1064,69 @@ async fn push_cookies_to_sidecar(
     ensure_ok(&resp)?;
     Ok(())
 }
+
+/// Pure helper for [`clear_cookies`]: drop the plaintext `cookies.txt`,
+/// then the credential-store entry. Extracted so integration tests can
+/// verify both invariants without standing up a [`SidecarManager`].
+///
+/// Order is load-bearing. The file goes FIRST because
+/// [`crate::migrate_cookies_from_file`] promotes any surviving cookies.txt
+/// straight back into the keyring — at the next handshake, and sooner via
+/// the UI's on-mount `migrate_cookies_now`. Clearing the keyring first and
+/// then failing the file delete would leave exactly that resurrection set
+/// up, with the user told the clear succeeded. Failing file-first instead
+/// leaves both halves intact: consistent, and retryable.
+///
+/// The file is removed unconditionally, template scaffold included — a
+/// bare template still flips [`cookies_status_with_keyring`] back to
+/// `"file"`/`present: true`, so leaving it would report the cookies as
+/// still configured. `NotFound` is success: keyring-only (no file) is the
+/// steady state after migration.
+pub(crate) fn clear_cookies_local(data_dir: &Path) -> Result<(), String> {
+    let stale = data_dir.join(COOKIES_FILE_NAME);
+    match std::fs::remove_file(&stale) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("remove {}: {e}", stale.display())),
+    }
+    crate::cookie_store::delete_cookies()
+}
+
+/// "清除 cookies" — wipe the JavDB session from every place it lives:
+/// the plaintext file, the OS credential store, and the running sidecar's
+/// in-memory handshake state.
+///
+/// The sidecar push is not optional either: the daemon keeps serving JavDB
+/// fetches from the cookies it got at handshake time, so without it a
+/// "cleared" session keeps working until the app restarts. An empty string
+/// is the protocol's existing clear signal — no protocol change needed.
+///
+/// Returns the post-clear [`CookiesStatus`] (expected `storage: "none"`)
+/// so the UI re-renders from one round trip instead of following up with
+/// `migrate_cookies_now`.
+///
+/// The sidecar push is the one step allowed to fail loudly *without* meaning
+/// "nothing was deleted": by then the file and the keyring entry are already
+/// gone. A bare `?` here would report a total failure for what is really a
+/// partial success, and the caller would tell the user their credentials are
+/// still stored — the opposite of the truth, for an unrecoverable action. The
+/// [`CLEARED_SIDECAR_STALE`] prefix lets the UI say what actually happened.
+#[tauri::command]
+pub async fn clear_cookies(
+    sidecar: State<'_, SidecarManager>,
+    path_manager: State<'_, PathManager>,
+) -> Result<CookiesStatus, String> {
+    clear_cookies_local(&path_manager.data_dir)?;
+    if let Err(e) = push_cookies_to_sidecar(&sidecar, "").await {
+        return Err(format!("{CLEARED_SIDECAR_STALE}: {e}"));
+    }
+    Ok(cookies_status_for(&path_manager.data_dir))
+}
+
+/// Stable error prefix: the stored cookies are gone, but the running sidecar
+/// still holds the old session until the app restarts. Matched by the UI, so
+/// changing it means changing `App.svelte`'s `clearCookies` too.
+pub(crate) const CLEARED_SIDECAR_STALE: &str = "cookies_cleared_sidecar_stale";
 
 /// Body of the generated cookies.txt scaffold. Inline instructions
 /// only — no real cookies, ever. Stored as a Rust constant so the
@@ -1752,5 +1815,117 @@ mod tests_cookies_e2e {
             .expect("keyring read")
             .expect("keyring must still hold pre-paste value");
         assert_eq!(still_there, preexisting);
+    }
+
+    // -----------------------------------------------------------------
+    // Clear path — clear_cookies_local
+    //
+    // Drives the pure half of `clear_cookies`; the #[tauri::command]
+    // itself needs `State<SidecarManager>`, which can't be built without
+    // a live Tauri app harness. The sidecar push it adds on top is
+    // covered by tests/test_sidecar_protocol.py.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn clear_removes_both_the_file_and_the_keyring_entry() {
+        let _sb = KeyringSandbox::new();
+        crate::cookie_store::set_cookies("_jdb_session=clear_me; cf_clearance=clear_cf")
+            .expect("seed keyring");
+
+        let d = temp_dir();
+        fs::write(
+            d.join(COOKIES_FILE_NAME),
+            "_jdb_session=clear_me; cf_clearance=clear_cf",
+        )
+        .unwrap();
+
+        clear_cookies_local(&d).expect("clear must succeed");
+
+        assert!(
+            !d.join(COOKIES_FILE_NAME).exists(),
+            "plaintext cookies.txt must be gone",
+        );
+        assert!(
+            crate::cookie_store::get_cookies()
+                .expect("keyring read")
+                .is_none(),
+            "credential-store entry must be gone",
+        );
+
+        // The user-visible half: the 設定 tab reads this, and it must stop
+        // claiming cookies are configured.
+        let s = cookies_status_for(&d);
+        assert_eq!(s.storage, "none");
+        assert!(!s.present);
+    }
+
+    #[test]
+    fn clear_succeeds_when_only_the_keyring_has_a_value() {
+        // Steady state after a migration is keyring-only with no file, so
+        // a missing cookies.txt is the COMMON case, not an error.
+        let _sb = KeyringSandbox::new();
+        crate::cookie_store::set_cookies("_jdb_session=keyring_only").expect("seed");
+
+        let d = temp_dir(); // no file
+        clear_cookies_local(&d).expect("absent cookies.txt must not fail the clear");
+
+        assert!(crate::cookie_store::get_cookies()
+            .expect("keyring read")
+            .is_none());
+        assert_eq!(cookies_status_for(&d).storage, "none");
+    }
+
+    #[test]
+    fn clear_removes_a_template_only_file_too() {
+        // A bare template holds no secret, but its mere existence forces
+        // cookies_status_with_keyring to report storage="file",
+        // present=true — so leaving it behind would show the user "已建立"
+        // immediately after they cleared.
+        let _sb = KeyringSandbox::new();
+        let d = temp_dir();
+        let template_only = "# JavDBMagnet cookies.txt\n\
+                             # ====\n\
+                             # _jdb_session=XXX; cf_clearance=XXX; locale=zh\n\
+                             # === 在下面貼上你的 cookie 整行 ===\n\n";
+        fs::write(d.join(COOKIES_FILE_NAME), template_only).unwrap();
+
+        clear_cookies_local(&d).expect("clear must succeed");
+
+        assert!(!d.join(COOKIES_FILE_NAME).exists());
+        assert_eq!(
+            cookies_status_for(&d).storage,
+            "none",
+            "status must not stay stuck on \"file\" after a clear",
+        );
+    }
+
+    #[test]
+    fn clear_sticks_across_a_restart_no_re_migration() {
+        // The load-bearing regression. `migrate_cookies_from_file` runs on
+        // every handshake — and sooner, from the UI's on-mount
+        // `migrate_cookies_now`. If the clear left cookies.txt on disk,
+        // this call would write the cleared value straight back into the
+        // credential store and the user would watch their clear undo
+        // itself without touching anything.
+        let _sb = KeyringSandbox::new();
+        let secret = "_jdb_session=resurrect_me; cf_clearance=resurrect_cf";
+        crate::cookie_store::set_cookies(secret).expect("seed keyring");
+
+        let d = temp_dir();
+        fs::write(d.join(COOKIES_FILE_NAME), secret).unwrap();
+
+        clear_cookies_local(&d).expect("clear must succeed");
+
+        let remigrated = crate::migrate_cookies_from_file(&d.join(COOKIES_FILE_NAME));
+        assert!(
+            remigrated.is_none(),
+            "nothing may be left on disk for the next handshake to re-migrate",
+        );
+        assert!(
+            crate::cookie_store::get_cookies()
+                .expect("keyring read")
+                .is_none(),
+            "the cleared value must not reappear in the credential store",
+        );
     }
 }
