@@ -74,12 +74,15 @@ pub fn get_cookies() -> Result<Option<String>, String> {
     }
 }
 
-/// Remove the keyring entry entirely. Production code never invokes this
-/// directly (a "clear cookies" UI gesture would call `set_cookies("")`
-/// which already delegates here), but it's pub so integration tests can
-/// reset the keyring around their work — see `KeyringSandbox` in
-/// `commands.rs::tests_cookies_e2e`.
-#[allow(dead_code)]
+/// Remove the keyring entry entirely. Reached in production from the 設定
+/// tab's clear gesture via [`crate::commands::clear_cookies`], and by
+/// integration tests resetting the keyring around their work — see
+/// `KeyringSandbox` in `commands.rs::tests_cookies_e2e`.
+///
+/// This is only HALF of a clear. The plaintext `cookies.txt` must go too:
+/// [`crate::migrate_cookies_from_file`] promotes any surviving file back
+/// into the keyring on the next handshake, so a keyring-only delete
+/// silently undoes itself. `clear_cookies` owns that ordering.
 pub fn delete_cookies() -> Result<(), String> {
     let e = entry()?;
     delete_internal(&e)

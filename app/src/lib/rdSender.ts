@@ -90,6 +90,44 @@ export function sortCompletedRowsByCompletionTime<T extends { completed_at?: str
     .map((entry) => entry.row);
 }
 
+/**
+ * Display ordering for the RD progress table. Incomplete rows (pending /
+ * sending / in_pending / error) stay on top in their original order;
+ * completed rows are grouped below, oldest completion first, so the row
+ * that just flipped to completed lands at the bottom. Callers must treat
+ * the result as display-only — send order, handle_id/torrent_id mapping
+ * and pending reconciliation all keep using the source array.
+ */
+export function buildRdDisplayRows(rows: RdSendProgress[]): RdSendProgress[] {
+  const incomplete: RdSendProgress[] = [];
+  const completed: RdSendProgress[] = [];
+  for (const row of rows) {
+    (row.status === "completed" ? completed : incomplete).push(row);
+  }
+  // "" sorts before every ISO-8601 string, so rows that completed before
+  // completed_at existed stay above the timestamped ones instead of
+  // masquerading as the newest completions.
+  return [...incomplete, ...sortCompletedRowsByCompletionTime(completed, "")];
+}
+
+/**
+ * Render `completed_at` for the progress table. Storage is UTC ISO-8601 but
+ * the column shows wall-clock time, so this formats in the LOCAL zone.
+ * Absent / unparsable values fall back to the same em dash as a row that
+ * never completed — legacy rows carrying no timestamp must never surface as
+ * "Invalid Date".
+ */
+export function formatCompletedAt(iso: string | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  );
+}
+
 const defaultFetcher = (
   handle_id: string,
   opts: RdSendOptions,
@@ -223,7 +261,9 @@ export function applyRetryEventToProgressRows(
       status: "completed",
       links: ev.result.links,
       error_code: null,
-      completed_at: completedAt,
+      // A row keeps the moment we FIRST confirmed completion — a repeat retry
+      // pass must refresh links without rewriting the timestamp.
+      completed_at: row.completed_at ?? completedAt,
       torrent_id: ev.torrent_id,
     };
   } else if (ev.result.kind === "missing") {

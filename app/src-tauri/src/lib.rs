@@ -406,6 +406,7 @@ pub fn run() {
             commands::get_cookies_status,
             commands::migrate_cookies_now,
             commands::save_cookies,
+            commands::clear_cookies,
             commands::create_cookies_template,
             commands::open_data_dir,
             commands::open_logs_dir,

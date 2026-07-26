@@ -1,0 +1,738 @@
+// Component tests for the four-tab shell (Task.md 2.1 / 2.4 / 2.5).
+//
+// Two things are being pinned down here that no unit test can reach:
+//   - each tab renders ONLY its own sections, and the RD tab in particular
+//     carries no token / cookies / theme / sidecar editing;
+//   - switching tabs is pure navigation — typed text, magnet selection and
+//     the RD progress table all survive a round trip.
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  setup,
+  waitFor,
+  within,
+} from "@testing-library/svelte";
+import App from "./App.svelte";
+import type {
+  CookiesStatus,
+  CopyRdLinksBulkResult,
+  PathInfo,
+  PendingEntry,
+  RdCheckOutcome,
+  RdSendOutcome,
+  Settings,
+} from "./lib/types";
+
+const tauriMocks = vi.hoisted(() => ({ invoke: vi.fn(), open: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriMocks.invoke }));
+vi.mock("@tauri-apps/plugin-shell", () => ({ open: tauriMocks.open }));
+
+type InvokeHandler = (args?: Record<string, unknown>) => unknown;
+
+const cookies = (): CookiesStatus => ({
+  present: false,
+  path: "C:\\test\\data\\cookies.txt",
+  modified_iso: null,
+  size_bytes: 0,
+  storage: "none",
+});
+
+/** What `get_cookies_status` reports once cookies live in the keyring — the
+ * only state from which 清除 is a meaningful action. */
+const keyringCookies = (): CookiesStatus => ({ ...cookies(), present: true, storage: "keyring" });
+
+// `read_settings` deliberately returns an empty api_token: the send button is
+// gated on the `rd_has_token` flag, and no fixture should look like a token.
+const baseHandlers = (): Record<string, InvokeHandler> => ({
+  get_paths: () => ({ data_dir: "C:\\test\\data", log_dir: "C:\\test\\logs" } satisfies PathInfo),
+  read_settings: () =>
+    ({
+      version: 1,
+      ui: { theme: "light", scale: "auto" },
+      rd: { api_token: "", file_pick: "smart", min_size_mb: 0, cache_wait_seconds: 5 },
+    }) satisfies Settings,
+  rd_has_token: () => ({ present: true }),
+  pending_list: () => [] as PendingEntry[],
+  get_legacy_default_dir: () => "",
+  migrate_cookies_now: cookies,
+  get_cookies_status: cookies,
+  register_magnets: () => ({
+    registered: [
+      {
+        handle_id: "h-1",
+        magnet_redacted: "magnet:?xt=urn:btih:abc\u2026",
+        name: "SNOS-192",
+        deduped: false,
+      },
+    ],
+    invalid: [] as string[],
+  }),
+  rd_send_magnet: () =>
+    ({
+      status: "completed",
+      torrent_id: "t-1",
+      name: "SNOS-192",
+      links: [
+        {
+          original: "magnet:?xt=urn:btih:abc",
+          download: "https://rd.example/one",
+          filename: "SNOS-192.mp4",
+          filesize: 1,
+          streamable: 0,
+        },
+      ],
+    }) satisfies RdSendOutcome,
+  copy_rd_links_bulk: (args) =>
+    ({ copied: (args?.links as string[]).length }) satisfies CopyRdLinksBulkResult,
+  clear_cookies: cookies,
+});
+
+let handlers: Record<string, InvokeHandler>;
+
+beforeEach(() => {
+  // @testing-library/svelte only self-registers setup/cleanup when vitest
+  // `globals` is on; this project keeps globals off, so wire it up here.
+  // setup() is also what installs flushSync as the event wrapper, without
+  // which fireEvent would resolve before Svelte 5 has settled the DOM.
+  setup();
+  handlers = baseHandlers();
+  tauriMocks.invoke.mockReset();
+  tauriMocks.invoke.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+    const handler = handlers[cmd];
+    if (!handler) throw new Error(`unmocked invoke: ${cmd}`);
+    return handler(args);
+  });
+  tauriMocks.open.mockReset();
+});
+
+afterEach(async () => {
+  await act();
+  cleanup();
+});
+
+/** Inactive tabs stay mounted behind `hidden`, so absence is not the signal.
+ * A few blocks are `{#if}`-gated and really do disappear — `null` reads as
+ * "not shown" so both mechanisms go through one predicate. */
+const isShown = (node: Element | null): boolean =>
+  node !== null && node.closest("[hidden]") === null;
+
+const heading = (name: string | RegExp): Element | null =>
+  screen.queryByRole("heading", { name, hidden: true });
+
+/** The tab bar is a <nav> of buttons with aria-current, not an ARIA tablist. */
+const tab = (label: RegExp): HTMLElement => screen.getByRole("button", { name: label });
+
+const clickTab = async (label: RegExp): Promise<void> => {
+  await fireEvent.click(tab(label));
+};
+
+const SEARCH_TAB = /^1\. 擷取 Magnet/;
+const SELECT_TAB = /^2\. 挑選 Magnet/;
+const RD_TAB = /^3\. RD 下載連結/;
+const SETTINGS_TAB = /^4\. 設定/;
+
+const rdPanel = (): HTMLElement => heading("Real-Debrid")!.closest("section")!;
+
+/** Some codes appear both in the selection table and in the RD progress
+ * table; only one of the two is ever on screen. */
+const showsCell = (name: string): boolean =>
+  screen.queryAllByRole("cell", { name, hidden: true }).some(isShown);
+
+/** Two registered magnets whose send outcomes differ, so display order and
+ * send order cannot coincide by accident. */
+const registerTwo = async (): Promise<void> => {
+  handlers.register_magnets = () => ({
+    registered: [
+      {
+        handle_id: "h-1",
+        magnet_redacted: "magnet:?xt=urn:btih:aaa…",
+        name: "AAA-001",
+        deduped: false,
+      },
+      {
+        handle_id: "h-2",
+        magnet_redacted: "magnet:?xt=urn:btih:bbb…",
+        name: "BBB-002",
+        deduped: false,
+      },
+    ],
+    invalid: [] as string[],
+  });
+  const magnetBox = screen.getByPlaceholderText(/magnet:\?xt=urn:btih:/) as HTMLTextAreaElement;
+  await fireEvent.input(magnetBox, {
+    target: { value: "magnet:?xt=urn:btih:aaa\nmagnet:?xt=urn:btih:bbb" },
+  });
+  await fireEvent.click(screen.getByRole("button", { name: "加入結果清單" }));
+  await waitFor(() => {
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("register_magnets", {
+      magnets: ["magnet:?xt=urn:btih:aaa", "magnet:?xt=urn:btih:bbb"],
+    });
+  });
+};
+
+const progressRows = (): HTMLElement[] => {
+  const table = heading("送至 Real-Debrid 進度")!.closest("section")!.querySelector("table")!;
+  return Array.from(table.querySelectorAll("tbody tr"));
+};
+
+/** 番號 / 大小 / 狀態 / 完成時間 / 連結 — the completion time is index 3. */
+const completedAtCell = (row: HTMLElement): HTMLElement =>
+  within(row).getAllByRole("cell", { hidden: true })[3];
+
+const mountApp = async (): Promise<void> => {
+  render(App);
+  // onMount ends with refreshCookiesStatus(); waiting on it proves the whole
+  // startup invoke chain drained before the first assertion.
+  await waitFor(() => {
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("migrate_cookies_now");
+  });
+};
+
+/** Paste one magnet on the search tab. Registration auto-selects the handle,
+ * so afterwards there is exactly one selected, sendable row. */
+const pasteOneMagnet = async (): Promise<void> => {
+  const magnetBox = screen.getByPlaceholderText(/magnet:\?xt=urn:btih:/) as HTMLTextAreaElement;
+  await fireEvent.input(magnetBox, { target: { value: "magnet:?xt=urn:btih:abc" } });
+  await fireEvent.click(screen.getByRole("button", { name: "加入結果清單" }));
+  await waitFor(() => {
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("register_magnets", {
+      magnets: ["magnet:?xt=urn:btih:abc"],
+    });
+  });
+};
+
+describe("tab content ownership", () => {
+  it("opens on the search tab and shows only its sections", async () => {
+    await mountApp();
+    expect(tab(SEARCH_TAB).getAttribute("aria-current")).toBe("page");
+    expect(isShown(heading("批次擷取"))).toBe(true);
+    expect(isShown(heading("直接貼磁力"))).toBe(true);
+    expect(isShown(heading("每個番號選取 Magnet"))).toBe(false);
+    expect(isShown(heading("Real-Debrid"))).toBe(false);
+    expect(isShown(heading("儲存位置"))).toBe(false);
+  });
+
+  it("shows only the selection section on the select tab", async () => {
+    await mountApp();
+    await clickTab(SELECT_TAB);
+    expect(tab(SELECT_TAB).getAttribute("aria-current")).toBe("page");
+    expect(isShown(heading("每個番號選取 Magnet"))).toBe(true);
+    expect(isShown(heading("批次擷取"))).toBe(false);
+    expect(isShown(heading("直接貼磁力"))).toBe(false);
+    expect(isShown(heading("Real-Debrid"))).toBe(false);
+    expect(isShown(heading("Sidecar"))).toBe(false);
+  });
+
+  it("shows only the preference sections on the settings tab", async () => {
+    await mountApp();
+    await clickTab(SETTINGS_TAB);
+    expect(tab(SETTINGS_TAB).getAttribute("aria-current")).toBe("page");
+    expect(isShown(heading("儲存位置"))).toBe(true);
+    expect(isShown(heading("主題"))).toBe(true);
+    expect(isShown(heading("Sidecar"))).toBe(true);
+    expect(isShown(heading(/^JavDB Cookies/))).toBe(true);
+    expect(isShown(heading(/^應用程式設定/))).toBe(true);
+    expect(isShown(heading(/^匯入舊版資料/))).toBe(true);
+    expect(isShown(heading("批次擷取"))).toBe(false);
+    expect(isShown(heading("每個番號選取 Magnet"))).toBe(false);
+    expect(isShown(heading("Real-Debrid"))).toBe(false);
+  });
+
+  it("keeps token, cookies and diagnostics off the RD tab", async () => {
+    await mountApp();
+    await clickTab(RD_TAB);
+    expect(tab(RD_TAB).getAttribute("aria-current")).toBe("page");
+    expect(isShown(heading("Real-Debrid"))).toBe(true);
+    // Task.md 2.4 — anchored on the stable input id so an editor that gets
+    // re-wrapped rather than moved still fails here.
+    expect(isShown(document.getElementById("rd-token-input"))).toBe(false);
+    expect(isShown(heading("Real-Debrid Token"))).toBe(false);
+    expect(isShown(heading(/^JavDB Cookies/))).toBe(false);
+    expect(isShown(heading("主題"))).toBe(false);
+    expect(isShown(heading("Sidecar"))).toBe(false);
+    expect(isShown(heading("儲存位置"))).toBe(false);
+    expect(isShown(heading(/^匯入舊版資料/))).toBe(false);
+    expect(isShown(heading(/^應用程式設定/))).toBe(false);
+  });
+
+  it("owns the Real-Debrid token editor on the settings tab", async () => {
+    await mountApp();
+    await clickTab(SETTINGS_TAB);
+    // Existence is asserted separately from visibility so a deleted editor
+    // can never satisfy the "not on the RD tab" case above.
+    expect(document.getElementById("rd-token-input")).not.toBeNull();
+    expect(isShown(document.getElementById("rd-token-input"))).toBe(true);
+    expect(isShown(heading("Real-Debrid Token"))).toBe(true);
+  });
+
+  it("disables sending and offers a route to 設定 when no token is stored", async () => {
+    handlers.rd_has_token = () => ({ present: false });
+    await mountApp();
+    // Select something first, so the disabled state can only come from the
+    // missing token and not from an empty selection.
+    await pasteOneMagnet();
+    await clickTab(RD_TAB);
+    const send = within(rdPanel()).getByRole("button", {
+      name: /送出已勾選/,
+    }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    const toSettings = within(rdPanel()).getByRole("button", { name: /設定/ });
+    expect(isShown(toSettings)).toBe(true);
+
+    await fireEvent.click(toSettings);
+    expect(isShown(document.getElementById("rd-token-input"))).toBe(true);
+  });
+
+  it("marks exactly one tab current and steps between them with the arrow keys", async () => {
+    await mountApp();
+    const bar = screen.getByRole("navigation", { name: "主要流程" });
+    const buttons = within(bar).getAllByRole("button");
+    expect(buttons).toHaveLength(4);
+    // Native <button> is what makes Enter/Space activation work; jsdom will
+    // not synthesize it for a div carrying role="tab".
+    for (const b of buttons) expect(b.tagName).toBe("BUTTON");
+    expect(buttons.filter((b) => b.getAttribute("aria-current") === "page")).toHaveLength(1);
+
+    await fireEvent.keyDown(tab(SEARCH_TAB), { key: "ArrowRight" });
+    expect(tab(SELECT_TAB).getAttribute("aria-current")).toBe("page");
+    expect(isShown(heading("每個番號選取 Magnet"))).toBe(true);
+
+    await fireEvent.keyDown(tab(SELECT_TAB), { key: "End" });
+    expect(tab(SETTINGS_TAB).getAttribute("aria-current")).toBe("page");
+    expect(isShown(heading("儲存位置"))).toBe(true);
+
+    await fireEvent.keyDown(tab(SETTINGS_TAB), { key: "ArrowRight" });
+    expect(tab(SEARCH_TAB).getAttribute("aria-current")).toBe("page");
+    expect(
+      within(bar)
+        .getAllByRole("button")
+        .filter((b) => b.getAttribute("aria-current") === "page"),
+    ).toHaveLength(1);
+  });
+});
+
+describe("state across tab switches", () => {
+  it("keeps typed URLs, magnet selection and RD progress across tab switches", async () => {
+    await mountApp();
+
+    // urlBatch is never cleared by an action, unlike magnetBatch, so it is
+    // the honest probe for "typed text survives navigation".
+    const urlBox = screen.getByPlaceholderText(/javdb\.com\/v\//) as HTMLTextAreaElement;
+    await fireEvent.input(urlBox, { target: { value: "https://javdb.com/v/ABC\n" } });
+
+    await pasteOneMagnet();
+
+    await clickTab(RD_TAB);
+    await fireEvent.click(within(rdPanel()).getByRole("button", { name: /送出已勾選/ }));
+    await waitFor(() => {
+      expect(isShown(heading("送至 Real-Debrid 進度"))).toBe(true);
+    });
+    expect(showsCell("SNOS-192")).toBe(true);
+
+    // Leave and come back — nothing is refetched, nothing is reset.
+    await clickTab(SETTINGS_TAB);
+    expect(isShown(heading("送至 Real-Debrid 進度"))).toBe(false);
+    await clickTab(RD_TAB);
+    expect(isShown(heading("送至 Real-Debrid 進度"))).toBe(true);
+    expect(showsCell("SNOS-192")).toBe(true);
+
+    // Selection survived: the tab badge renders selectedMagnets/selectableMagnets.
+    expect(tab(SELECT_TAB).textContent).toContain("1/1");
+
+    await clickTab(SEARCH_TAB);
+    expect((screen.getByPlaceholderText(/javdb\.com\/v\//) as HTMLTextAreaElement).value).toBe(
+      "https://javdb.com/v/ABC\n",
+    );
+
+    expect(tauriMocks.invoke.mock.calls.filter((c) => c[0] === "rd_send_magnet")).toHaveLength(1);
+  });
+
+  it("keeps the row checked on the selection tab after switching away and back", async () => {
+    await mountApp();
+    await pasteOneMagnet();
+
+    await clickTab(SELECT_TAB);
+    const row = screen.getByRole("cell", { name: "SNOS-192" }).closest("tr")!;
+    const check = within(row).getByRole("checkbox") as HTMLInputElement;
+    expect(check.checked).toBe(true);
+
+    await clickTab(SETTINGS_TAB);
+    await clickTab(SELECT_TAB);
+    const rowAgain = screen.getByRole("cell", { name: "SNOS-192" }).closest("tr")!;
+    expect((within(rowAgain).getByRole("checkbox") as HTMLInputElement).checked).toBe(true);
+  });
+});
+
+describe("per-URL scrape outcome on the search tab", () => {
+  const URL_A = "https://javdb.com/v/AAA";
+
+  /** Scrape exactly one URL: scrapeBatch only paces BETWEEN urls, so a
+   * single-URL batch settles without the 3–6s production delay. */
+  const scrapeOneUrl = async (): Promise<void> => {
+    const urlBox = screen.getByPlaceholderText(/javdb\.com\/v\//) as HTMLTextAreaElement;
+    await fireEvent.input(urlBox, { target: { value: `${URL_A}\n` } });
+    await fireEvent.click(screen.getByRole("button", { name: "開始擷取" }));
+    await waitFor(() => {
+      expect(tauriMocks.invoke).toHaveBeenCalledWith("fetch_javdb", { url: URL_A });
+    });
+  };
+
+  it("names the failing URL and its error without leaving the scrape tab", async () => {
+    handlers.fetch_javdb = () => {
+      throw new Error("javdb_parse_failed");
+    };
+    await mountApp();
+    await scrapeOneUrl();
+
+    // Task.md 2.2 — the outcome must be readable on tab 1, not only after
+    // switching to 「2. 挑選 Magnet」.
+    // The select tab renders the same error, so "some visible" is the signal.
+    await waitFor(() => {
+      expect(screen.getAllByText(/javdb_parse_failed/).some(isShown)).toBe(true);
+    });
+    expect(screen.getAllByText(URL_A).some(isShown)).toBe(true);
+    expect(isShown(heading("每個番號選取 Magnet"))).toBe(false);
+  });
+
+  it("reports the magnet count for a successful URL and keeps the picker table on tab 2", async () => {
+    handlers.fetch_javdb = () => ({
+      engine: "test",
+      url: URL_A,
+      code: "AAA-001",
+      title: "t",
+      magnet_count: 2,
+      magnets: [],
+    });
+    await mountApp();
+    await scrapeOneUrl();
+
+    await waitFor(() => {
+      expect(isShown(screen.getByText("2 個磁力"))).toBe(true);
+    });
+    // 2.2 forbids the full checkbox table here — the summary must not have
+    // dragged it along.
+    expect(screen.queryByRole("columnheader", { name: "送 RD", hidden: true })).toBeNull();
+  });
+});
+
+describe("RD progress table completion time", () => {
+  it("moves the completed row below the pending one and timestamps only it", async () => {
+    // h-1 completes, h-2 stays pending: send order is [h-1, h-2] so any table
+    // still iterating rdSendProgress would render them the other way round.
+    handlers.rd_send_magnet = (args) =>
+      args?.handleId === "h-1"
+        ? ({
+            status: "completed",
+            torrent_id: "t-1",
+            name: "AAA-001",
+            links: [
+              {
+                original: "magnet:?xt=urn:btih:aaa",
+                download: "https://rd.example/one",
+                filename: "AAA-001.mp4",
+                filesize: 1,
+                streamable: 0,
+              },
+            ],
+          } satisfies RdSendOutcome)
+        : ({
+            status: "pending",
+            torrent_id: "t-2",
+            name: "BBB-002",
+            rd_status: "downloading",
+            progress: 10,
+          } satisfies RdSendOutcome);
+
+    await mountApp();
+    await registerTwo();
+    await clickTab(RD_TAB);
+    await fireEvent.click(within(rdPanel()).getByRole("button", { name: /送出已勾選/ }));
+    await waitFor(() => {
+      expect(progressRows()).toHaveLength(2);
+      expect(within(progressRows()[1]).queryByText("已完成")).not.toBeNull();
+    });
+
+    const [pendingRow, completedRow] = progressRows();
+    expect(within(pendingRow).getAllByRole("cell", { hidden: true })[0].textContent).toBe(
+      "BBB-002",
+    );
+    expect(within(completedRow).getAllByRole("cell", { hidden: true })[0].textContent).toBe(
+      "AAA-001",
+    );
+
+    // 1.3 — completed shows local YYYY-MM-DD HH:mm:ss with the full ISO in title.
+    const done = completedAtCell(completedRow);
+    expect(done.textContent!.trim()).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(done.getAttribute("title")).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/);
+
+    // 1.3 — a row that has not completed shows the em dash and hides nothing
+    // behind a tooltip.
+    const notDone = completedAtCell(pendingRow);
+    expect(notDone.textContent!.trim()).toBe("—");
+    expect(notDone.getAttribute("title")).toBeNull();
+  });
+
+  it("labels the column as the app's own confirmation time", async () => {
+    await mountApp();
+    await pasteOneMagnet();
+    await clickTab(RD_TAB);
+    await fireEvent.click(within(rdPanel()).getByRole("button", { name: /送出已勾選/ }));
+    await waitFor(() => {
+      expect(progressRows()).toHaveLength(1);
+    });
+
+    // Task.md 1.3: the wording must not imply RD's real finish time.
+    const header = screen.getByRole("columnheader", { name: /完成時間/, hidden: true });
+    expect(header.textContent).toContain("本程式確認");
+    expect(header.getAttribute("title")).toContain("非 Real-Debrid 伺服器");
+  });
+});
+
+// Task.md 情境 1 end to end. rdSender.test.ts already pins the two halves
+// (applyRetryEventToProgressRows, buildRdDisplayRows) as pure functions; what
+// only the component can show is that retryAllPending actually wires them
+// together — that the row the user retried is the one that moves, and that it
+// picks up a timestamp on the way.
+describe("retrying a pending row through to completion", () => {
+  const pending = (torrent_id: string, code: string): PendingEntry => ({
+    torrent_id,
+    code,
+    name: code,
+    size_label: "1.0 GB",
+    strategy: "smart",
+    added_at: "2026-01-01T00:00:00Z",
+    last_progress: 10,
+    last_rd_status: "downloading",
+    last_checked_at: null,
+  });
+
+  /** Send two magnets that both land in RD's queue, so the progress table
+   * starts with two `in_pending` rows in send order. */
+  const sendTwoIntoPending = async (): Promise<void> => {
+    handlers.rd_send_magnet = (args) =>
+      ({
+        status: "pending",
+        torrent_id: args?.handleId === "h-1" ? "t-1" : "t-2",
+        name: args?.handleId === "h-1" ? "AAA-001" : "BBB-002",
+        rd_status: "downloading",
+        progress: 10,
+      }) satisfies RdSendOutcome;
+    handlers.pending_list = () => [pending("t-1", "AAA-001"), pending("t-2", "BBB-002")];
+
+    await mountApp();
+    await registerTwo();
+    await clickTab(RD_TAB);
+    await fireEvent.click(within(rdPanel()).getByRole("button", { name: /送出已勾選/ }));
+    await waitFor(() => {
+      expect(progressRows()).toHaveLength(2);
+    });
+  };
+
+  it("flips the retried row to 已完成, timestamps it, and drops it below the still-pending row", async () => {
+    await sendTwoIntoPending();
+    expect(progressRows().map((r) => within(r).getAllByRole("cell", { hidden: true })[0].textContent))
+      .toEqual(["AAA-001", "BBB-002"]);
+
+    // Only the first torrent finished. t-2 staying pending is what makes the
+    // reorder observable: a table still iterating rdSendProgress would leave
+    // AAA-001 on top.
+    handlers.rd_check_pending = (args) =>
+      args?.torrentId === "t-1"
+        ? ({
+            status: "completed",
+            torrent_id: "t-1",
+            name: "AAA-001",
+            links: [
+              {
+                original: "magnet:?xt=urn:btih:aaa",
+                download: "https://rd.example/aaa",
+                filename: "AAA-001.mp4",
+                filesize: 1,
+                streamable: 0,
+              },
+            ],
+          } satisfies RdCheckOutcome)
+        : ({
+            status: "pending",
+            torrent_id: "t-2",
+            name: "BBB-002",
+            rd_status: "downloading",
+            progress: 42,
+          } satisfies RdCheckOutcome);
+    // retryAllPending re-reads pending_list in its finally block; RD dropped
+    // the finished torrent, so the second read must not still list t-1.
+    handlers.pending_list = () => [pending("t-2", "BBB-002")];
+
+    // 待處理 is its own section, sibling to the Real-Debrid panel.
+    await fireEvent.click(screen.getByRole("button", { name: /全部重試/ }));
+    await waitFor(() => {
+      expect(screen.getByText(/重試完成/)).not.toBeNull();
+    });
+
+    const rows = progressRows();
+    expect(rows.map((r) => within(r).getAllByRole("cell", { hidden: true })[0].textContent)).toEqual(
+      ["BBB-002", "AAA-001"],
+    );
+    const [stillPending, justCompleted] = rows;
+    expect(within(justCompleted).queryByText("已完成")).not.toBeNull();
+    expect(within(stillPending).queryByText("RD 處理中")).not.toBeNull();
+
+    // The timestamp is minted by the retry, not carried over from the send:
+    // the row had none while it sat in 待處理.
+    expect(completedAtCell(justCompleted).textContent!.trim()).toMatch(
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+    );
+    expect(completedAtCell(stillPending).textContent!.trim()).toBe("—");
+
+    expect(screen.getByText(/1 個完成/)).not.toBeNull();
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("copy_rd_links_bulk", {
+      links: ["https://rd.example/aaa"],
+    });
+  });
+});
+
+// Task.md 2.5 — 清除 is the last of 新增/更換/驗證/清除 to land on the 設定 tab.
+// These live here rather than in a lib unit test on purpose: the behaviour
+// being specified IS the component's state machine (arm -> confirm -> invoke
+// -> adopt the returned status). There is no pure function to extract that
+// would not be a restatement of the same three assignments, and the property
+// that matters most — a single click does NOT destroy anything — is only
+// observable as "the click happened and no invoke followed".
+describe("clearing JavDB cookies from the settings tab", () => {
+  const cookiesSection = (): HTMLElement => heading(/^JavDB Cookies/)!.closest("section")!;
+
+  /** The section is collapsed by default; every control lives behind 展開. */
+  const openCookiesSection = async (): Promise<void> => {
+    await clickTab(SETTINGS_TAB);
+    await fireEvent.click(within(cookiesSection()).getByRole("button", { name: /展開/ }));
+  };
+
+  /** `hidden: true` so the same lookup works from another tab, where the whole
+   * section is behind `hidden` — visibility is asserted with isShown instead. */
+  const clearButton = (name: RegExp): HTMLButtonElement =>
+    within(cookiesSection()).getByRole("button", { name, hidden: true }) as HTMLButtonElement;
+
+  const noClearButton = (name: RegExp): boolean =>
+    within(cookiesSection()).queryByRole("button", { name, hidden: true }) === null;
+
+  const mountWithStoredCookies = async (): Promise<void> => {
+    handlers.migrate_cookies_now = keyringCookies;
+    handlers.get_cookies_status = keyringCookies;
+    await mountApp();
+    await openCookiesSection();
+  };
+
+  it("arms instead of clearing on the first click", async () => {
+    await mountWithStoredCookies();
+    await fireEvent.click(clearButton(/^清除 cookies$/));
+
+    expect(tauriMocks.invoke.mock.calls.some((c) => c[0] === "clear_cookies")).toBe(false);
+    expect(isShown(screen.getByText(/確定要清除 cookies/))).toBe(true);
+    // The armed button must not reuse the resting label, or a double-click
+    // would sail through the confirmation without it ever being read.
+    expect(noClearButton(/^清除 cookies$/)).toBe(true);
+  });
+
+  it("backs out cleanly and can be armed again", async () => {
+    await mountWithStoredCookies();
+    await fireEvent.click(clearButton(/^清除 cookies$/));
+    await fireEvent.click(clearButton(/^取消清除$/));
+
+    expect(tauriMocks.invoke.mock.calls.some((c) => c[0] === "clear_cookies")).toBe(false);
+    expect(screen.queryByText(/確定要清除 cookies/)).toBeNull();
+    expect(clearButton(/^清除 cookies$/).disabled).toBe(false);
+  });
+
+  it("clears on the confirming click and shows the emptied state straight away", async () => {
+    await mountWithStoredCookies();
+    expect(isShown(screen.getByText(/cookies 已加密儲存/))).toBe(true);
+    const migratesBefore = tauriMocks.invoke.mock.calls.filter(
+      (c) => c[0] === "migrate_cookies_now",
+    ).length;
+
+    await fireEvent.click(clearButton(/^清除 cookies$/));
+    await fireEvent.click(clearButton(/^確定清除$/));
+
+    // No payload: both of the Rust command's parameters are injected state.
+    await waitFor(() => {
+      expect(tauriMocks.invoke).toHaveBeenCalledWith("clear_cookies");
+    });
+    // The returned status is adopted as-is. Re-running migrate_cookies_now
+    // would promote any surviving cookies.txt back into the keyring, which is
+    // exactly the resurrection the clear exists to prevent.
+    expect(tauriMocks.invoke.mock.calls.filter((c) => c[0] === "migrate_cookies_now")).toHaveLength(
+      migratesBefore,
+    );
+    await waitFor(() => {
+      expect(isShown(screen.getByText(/尚未設定 cookies/))).toBe(true);
+    });
+    expect(screen.queryByText(/cookies 已加密儲存/)).toBeNull();
+    expect(isShown(screen.getByText(/cookies 已清除/))).toBe(true);
+    expect(screen.queryByText(/確定要清除 cookies/)).toBeNull();
+
+    // flash-ok survives the clear because the button is disabled, not
+    // unmounted, once there is nothing left to clear.
+    const settled = clearButton(/已清除/);
+    expect(settled.classList.contains("flash-ok")).toBe(true);
+    expect(settled.disabled).toBe(true);
+  });
+
+  it("offers nothing to clear when no cookies are stored", async () => {
+    await mountApp();
+    await openCookiesSection();
+    expect(clearButton(/^清除 cookies$/).disabled).toBe(true);
+  });
+
+  it("surfaces the raw backend error and stays armed-free", async () => {
+    handlers.clear_cookies = () => {
+      throw new Error("keyring delete: access denied");
+    };
+    await mountWithStoredCookies();
+    await fireEvent.click(clearButton(/^清除 cookies$/));
+    await fireEvent.click(clearButton(/^確定清除$/));
+
+    await waitFor(() => {
+      expect(isShown(screen.getByText(/清除失敗：keyring delete: access denied/))).toBe(true);
+    });
+    // A failed clear leaves the stored state visible — the UI must not claim
+    // success it did not get.
+    expect(isShown(screen.getByText(/cookies 已加密儲存/))).toBe(true);
+    expect(noClearButton(/已清除/)).toBe(true);
+  });
+
+  it("reports a stale sidecar as a partial clear, not a failed one", async () => {
+    handlers.clear_cookies = () => {
+      throw new Error("cookies_cleared_sidecar_stale: sidecar is dead: exited early");
+    };
+    await mountWithStoredCookies();
+    // The backend removed the file and the keyring entry before the push
+    // failed, so a fresh read now reports an empty store.
+    handlers.get_cookies_status = cookies;
+
+    await fireEvent.click(clearButton(/^清除 cookies$/));
+    await fireEvent.click(clearButton(/^確定清除$/));
+
+    await waitFor(() => {
+      expect(isShown(screen.getByText(/已清除儲存的 cookies/))).toBe(true);
+    });
+    // The credentials really are gone. Saying 清除失敗 would send the user
+    // looking for cookies that no longer exist, and this action is one they
+    // cannot undo.
+    expect(screen.queryByText(/清除失敗/)).toBeNull();
+    await waitFor(() => {
+      expect(isShown(screen.getByText(/尚未設定 cookies/))).toBe(true);
+    });
+    expect(screen.queryByText(/cookies 已加密儲存/)).toBeNull();
+  });
+
+  it("keeps the clear control off the RD tab", async () => {
+    await mountWithStoredCookies();
+    await clickTab(RD_TAB);
+    expect(isShown(clearButton(/^清除 cookies$/))).toBe(false);
+  });
+});
