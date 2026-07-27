@@ -16,13 +16,16 @@ import type {
 // starting positions, which Sonar flags as super-linear (polynomial)
 // backtracking. JavDB never emits sizes wider than a handful of
 // digits, so a tight upper bound is both safe and behavior-preserving.
+const SIZE_TB_RX = /(\d{1,12}(?:\.\d{1,12})?)\s{0,4}TB/i;
 const SIZE_GB_RX = /(\d{1,12}(?:\.\d{1,12})?)\s{0,4}GB/i;
 const SIZE_MB_RX = /(\d{1,12}(?:\.\d{1,12})?)\s{0,4}MB/i;
 const FILE_COUNT_RX = /(\d{1,9})\s{0,4}個文件/;
 
-/** "5.67GB, 5個文件" → 5.67. "512MB, 1個文件" → 0.5. unparseable → 0. */
+/** "1.2TB" → 1228.8. "5.67GB, 5個文件" → 5.67. "512MB, 1個文件" → 0.5. unparseable → 0. */
 export function parseSizeGb(size: string): number {
   if (!size) return 0;
+  const tb = SIZE_TB_RX.exec(size);
+  if (tb) return Number.parseFloat(tb[1]) * 1024;
   const gb = SIZE_GB_RX.exec(size);
   if (gb) return Number.parseFloat(gb[1]);
   const mb = SIZE_MB_RX.exec(size);
@@ -152,7 +155,7 @@ export function sortRows(
     let cmp = 0;
     if (column === "size") {
       cmp = parseSizeGb(a.size) - parseSizeGb(b.size);
-    } else if (column === "code" || column === "name") {
+    } else if (column === "name") {
       cmp = a.name.localeCompare(b.name);
     } else if (column === "tags") {
       cmp = a.tags.join(",").localeCompare(b.tags.join(","));

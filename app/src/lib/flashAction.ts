@@ -22,6 +22,8 @@ export interface FlashController {
    * the resolved value or re-throws the rejection unchanged.
    */
   run<T>(key: string, fn: () => Promise<T>, durationMs?: number): Promise<T>;
+  /** Clear all active timers and reset keys set. */
+  dispose(): void;
 }
 
 export function createFlashController(): FlashController {
@@ -49,5 +51,13 @@ export function createFlashController(): FlashController {
     return value;
   }
 
-  return { keys, flash, run };
+  function dispose(): void {
+    for (const handle of timers.values()) {
+      clearTimeout(handle);
+    }
+    timers.clear();
+    keys.clear();
+  }
+
+  return { keys, flash, run, dispose };
 }

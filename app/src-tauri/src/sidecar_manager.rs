@@ -320,6 +320,23 @@ mod tests {
     }
 
     #[test]
+    fn require_ok_propagates_err_on_error_envelope() {
+        let err_resp = json!({
+            "ok": false,
+            "request_id": "r-1",
+            "error": {
+                "code": "bad_request",
+                "message": "forget_magnets failed: invalid handle_ids",
+                "internal": ""
+            }
+        });
+        let res = require_ok(&err_resp, "forget_magnets");
+        assert!(res.is_err());
+        let err_msg = res.unwrap_err();
+        assert!(err_msg.contains("forget_magnets failed"), "got: {err_msg}");
+    }
+
+    #[test]
     fn timeout_error_names_the_command_and_actual_secs() {
         let msg = timeout_error("rd_send_magnet", 105);
         assert!(msg.contains("rd_send_magnet"), "got: {msg}");

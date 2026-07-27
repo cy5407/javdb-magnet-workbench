@@ -35,6 +35,9 @@ describe("parseSizeGb", () => {
   it("parses MB and converts to GB", () => {
     expect(parseSizeGb("512MB, 1個文件")).toBeCloseTo(0.5, 5);
   });
+  it("parses TB and converts to GB", () => {
+    expect(parseSizeGb("1.2TB, 10個文件")).toBeCloseTo(1228.8, 5);
+  });
   it("returns 0 on garbage", () => {
     expect(parseSizeGb("無法解析")).toBe(0);
     expect(parseSizeGb("")).toBe(0);
@@ -389,15 +392,6 @@ describe("coverage gap fillers", () => {
     const a = row({ handle_id: "a", date: "2026-05-01" });
     const b = row({ handle_id: "b", date: "2026-01-15" });
     const sorted = sortRows([a, b], "date", "asc");
-    expect(sorted.map((r) => r.handle_id)).toEqual(["b", "a"]);
-  });
-
-  // sortRows "code" column shares the name-compare branch with "name" but
-  // exercises a different SortColumn discriminant.
-  it("sortRows orders by code (same path as name)", () => {
-    const a = row({ handle_id: "a", name: "ZZZ-999" });
-    const b = row({ handle_id: "b", name: "AAA-111" });
-    const sorted = sortRows([a, b], "code", "asc");
     expect(sorted.map((r) => r.handle_id)).toEqual(["b", "a"]);
   });
 });

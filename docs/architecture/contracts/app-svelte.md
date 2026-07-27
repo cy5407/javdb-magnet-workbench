@@ -32,7 +32,7 @@ The file is organized as:
 
 `defaultFilterState`, `CookiesStatus`, `CopyBulkResult`, `CopyRdLinksBulkResult`, `FilterState`, `LegacyImportPreview`, `LegacyImportReport`, `GroupPick`, `MagnetRow`, `PathInfo`, `PendingEntry`, `PingResponse`, `RdSendProgress`, `RdUserInfo`, `ScrapedGroup`, `Settings`, `SortColumn`, `SortDirection`, `Theme`.
 
-**Svelte 5 runes used**: `$state`, `$derived`, `$derived.by`. (No `$effect`, no `onDestroy`.)
+**Svelte 5 runes used**: `$state`, `$derived`, `$derived.by`. Lifecycle: `onDestroy` disposes the flash controller (`flash.dispose()`); no `$effect`.
 
 ### 1.2 Tauri command surface — every `invoke()` call
 
@@ -77,7 +77,7 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch`, `s
 | `okCount` | `groups[].status` | [477](../../../app/src/App.svelte#L477) |
 | `errCount` | `groups[].status` | [478](../../../app/src/App.svelte#L478) |
 | `totalRawMagnets` | `groups[].result.magnet_count` | [479](../../../app/src/App.svelte#L479) |
-| `visibleMagnets` (`$derived.by`) | `groups`, `filter`, `sortColumn`, `sortDirection` (via `processedRows`) | [486](../../../app/src/App.svelte#L486) |
+| `allVisibleRows` (`$derived`) | `webVisibleRows`, `manualVisibleRows` | [620](../../../app/src/App.svelte#L620) |
 | `settingsErrors` | `settingsDraft` | [897](../../../app/src/App.svelte#L897) |
 | `settingsValid` | `settingsErrors` | [900](../../../app/src/App.svelte#L900) |
 | `rdCompletedCount` | `rdSendProgress[].status` | [1046](../../../app/src/App.svelte#L1046) |
@@ -88,7 +88,7 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch`, `s
 ### 1.5 Lifecycle
 
 - `onMount` ([App.svelte:141–189](../../../app/src/App.svelte#L141)) — boot-time IPC to populate paths, settings, RD token presence, pending list, legacy default dir, cookies status. Best-effort: every step is wrapped in its own `try/catch` so a partial failure still allows the rest of the UI to render.
-- No `onDestroy`, no `$effect`. Cancellation tokens (`scrapeAbort`, `rdSendAbort`, `retryAbort`) are not torn down on unmount — fine for a top-level component but worth noting.
+- `onDestroy(() => flash.dispose())` clears all pending flash timers on unmount. No `$effect`. Cancellation tokens (`scrapeAbort`, `rdSendAbort`, `retryAbort`) are not torn down on unmount — fine for a top-level component but worth noting.
 
 ---
 
@@ -112,7 +112,7 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch`, `s
 | `magnetBatch` | `string` | `""` | `bind:value` textarea [1560](../../../app/src/App.svelte#L1560), cleared in `registerPastedMagnets` | `registerPastedMagnets` |
 | `isRegistering` | `boolean` | `false` | `registerPastedMagnets` | button disabled [1567](../../../app/src/App.svelte#L1567) |
 | `registerStatus` | `{kind, text} \| null` | `null` | `registerPastedMagnets` | markup [1574](../../../app/src/App.svelte#L1574) |
-| `groups` | `ScrapedGroup[]` | `[]` | `startScrape`, `scrapeBatch` callback (slot replace), `registerPastedMagnets`, `clearResults` | many: `processedRows`, `buildVisibleSendItems`, `copyVisible`, `visibleMagnets`, `okCount`, `errCount`, `totalRawMagnets`, markup [1583](../../../app/src/App.svelte#L1583) |
+| `groups` | `ScrapedGroup[]` | `[]` | `startScrape`, `scrapeBatch` callback (slot replace), `registerPastedMagnets`, `clearResults` | many: `processedRows`, `buildVisibleSendItems`, `copyVisible`, `webVisibleRows` / `manualVisibleRows` / `allVisibleRows`, `okCount`, `errCount`, `totalRawMagnets`, markup [1583](../../../app/src/App.svelte#L1583) |
 | `scrapeProgress` | `{done, total}` | `{0,0}` | `startScrape`, `scrapeBatch` callback, `clearResults` | markup [1486](../../../app/src/App.svelte#L1486) |
 | `isScraping` | `boolean` | `false` | `startScrape` (set/finally) | button disabled / labels [1461–1476](../../../app/src/App.svelte#L1461) |
 | `scrapeAbort` | `AbortController \| null` | `null` | `startScrape`, `cancelScrape`, `clearResults` | `cancelScrape` |
@@ -121,7 +121,7 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch`, `s
 
 | Var | Type | Initial | Mutated by | Read by |
 |---|---|---|---|---|
-| `filter` | `FilterState` | `defaultFilterState()` | `bind:value` inputs, `commitMinSize`, `commitMaxSize`, `setGroupPick`, `resetFilter` | `processedRows`, `visibleMagnets` |
+| `filter` | `FilterState` | `defaultFilterState()` | `bind:value` inputs, `commitMinSize`, `commitMaxSize`, `setGroupPick`, `resetFilter` | `processedRows`, `allVisibleRows`（經 `webVisibleRows`/`manualVisibleRows`） |
 | `minSizeInput` | `string` | `""` | input bind [1516](../../../app/src/App.svelte#L1516), `resetFilter` | `commitMinSize` |
 | `maxSizeInput` | `string` | `""` | input bind [1526](../../../app/src/App.svelte#L1526), `resetFilter` | `commitMaxSize` |
 | `sortColumn` | `SortColumn \| null` | `null` | `toggleSort`, `resetFilter` | `processedRows`, `sortIndicator` |
@@ -257,8 +257,9 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch`, `s
 **Purpose**: Flip light/dark, persist via `write_settings`.
 
 **Contract**:
-- Guard: if `settings === null` sets `statusMessage` and returns.
-- Mutates `theme`, `settings.ui.theme`, `statusMessage`.
+- Guard: if `settings === null` or `isThemeSaving === true`, returns immediately to prevent reentrancy / rapid double clicks.
+- 3-State Sync & Rollback: Optimistically updates `theme`, `settings.ui.theme`, and `settingsDraft.ui.theme`. If `write_settings` fails, rolls back all three states to their previous value and sets `statusMessage`.
+- Concurrency: `isThemeSaving` guard is released in a `finally` block.
 
 **Calls**: `applyTheme(theme)`, `invoke('write_settings', { settings })`.
 
@@ -363,7 +364,7 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch`, `s
 
 **Reads**: `filter`, `sortColumn`, `sortDirection`. **Pure** w.r.t. component state.
 
-**Called by**: `copyVisible`, `buildVisibleSendItems`, `visibleMagnets` derived, markup `{@const rows = processedRows(g)}` [1584](../../../app/src/App.svelte#L1584).
+**Called by**: `copyVisible`, `buildVisibleSendItems`, `webVisibleRows` / `manualVisibleRows` derived（`allVisibleRows` 由兩者組成，供三個全選/反選按鈕共用）, markup `{@const rows = processedRows(g)}` [1584](../../../app/src/App.svelte#L1584).
 
 ---
 
@@ -792,7 +793,7 @@ button.onclick [1461]
             └── groups[ev.index-1] = ev.group; scrapeProgress = {ev.index, ev.total}
 ```
 
-UI re-render path: `groups` mutation → `processedRows` recomputed in markup → derived `okCount` / `errCount` / `totalRawMagnets` / `visibleMagnets` update → status bar + groups list re-render.
+UI re-render path: `groups` mutation → `processedRows` recomputed in markup → derived `okCount` / `errCount` / `totalRawMagnets` / `allVisibleRows` update → status bar + groups list re-render.
 
 ### 4.3 "Send to RD" button click
 

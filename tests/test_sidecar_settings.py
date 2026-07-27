@@ -68,6 +68,10 @@ class ClassifyRdError(unittest.TestCase):
         self.assertEqual(sd._classify_rd_error("帳號權限不足（需要 Premium 會員）"),
                          sd._RD_ERR_PREMIUM)
 
+    def test_magnet_error_containing_digits_not_misclassified(self):
+        self.assertEqual(sd._classify_rd_error("磁力解析失敗: IPZZ-403.mkv"),
+                         sd._RD_ERR_MAGNET)
+
     def test_premium_english_keyword(self):
         self.assertEqual(sd._classify_rd_error("requires premium subscription"),
                          sd._RD_ERR_PREMIUM)
@@ -294,10 +298,11 @@ class RdClientFactory(unittest.TestCase):
         constructed: list[tuple] = []
 
         class _FakeClient:
-            def __init__(self, token, min_size_mb=500):
+            def __init__(self, token, min_size_mb=500, deadline=None):
                 constructed.append((token, min_size_mb))
                 self.token = token
                 self.min_size_mb = min_size_mb
+                self.deadline = deadline
 
         self.fake_module.RealDebrid = _FakeClient
         self.fake_module.RealDebridError = _FakeError
@@ -413,7 +418,7 @@ class RdSendMagnetSettingsWiring(unittest.TestCase):
         fake = self._stub_client()
         with mock.patch.object(sd, "_rd_client", return_value=fake) as m:
             sd.dispatch(state, {"cmd": "rd_send_magnet", "request_id": "r",
-                                "handle_id": "h-1"})
+                                "handle_id": "h-1", "cache_wait": 20})
         # _rd_client must receive min_size_mb=750 from settings
         kwargs = m.call_args.kwargs
         self.assertEqual(kwargs["min_size_mb"], 750)

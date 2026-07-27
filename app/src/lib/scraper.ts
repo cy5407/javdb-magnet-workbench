@@ -115,25 +115,28 @@ export interface ScrapeOptions {
 const defaultFetcher = (url: string): Promise<FetchResult> =>
   invoke<FetchResult>("fetch_javdb", { url });
 
+function parseBatchWithFilter(raw: string, filterRe: RegExp): string[] {
+  if (!raw) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    if (!filterRe.test(trimmed)) continue;
+    if (seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
 /**
  * Normalize whatever the user pasted into the textarea into a deduped,
  * trimmed list of HTTPS URL strings. Empty lines, comment lines (`#`),
  * and obvious garbage are dropped.
  */
 export function parseUrlBatch(raw: string): string[] {
-  if (!raw) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (trimmed.startsWith("#")) continue;
-    if (!/^https:\/\//i.test(trimmed)) continue;
-    if (seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    out.push(trimmed);
-  }
-  return out;
+  return parseBatchWithFilter(raw, /^https:\/\//i);
 }
 
 /**
@@ -143,19 +146,7 @@ export function parseUrlBatch(raw: string): string[] {
  * its side; this dedupe is mainly UX (the user sees fewer rows).
  */
 export function parseMagnetBatch(raw: string): string[] {
-  if (!raw) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (trimmed.startsWith("#")) continue;
-    if (!/^magnet:/i.test(trimmed)) continue;
-    if (seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    out.push(trimmed);
-  }
-  return out;
+  return parseBatchWithFilter(raw, /^magnet:/i);
 }
 
 interface ResolvedScrapeOptions {
@@ -188,10 +179,21 @@ async function fetchGroupWithRetry(
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       group.result = await resolved.fetcher(group.url);
+      if (resolved.signal?.aborted) {
+        group.result = null;
+        group.status = "pending";
+        group.error = null;
+        return false;
+      }
       group.status = "ok";
       group.error = null;
       return true;
     } catch (e) {
+      if (resolved.signal?.aborted) {
+        group.status = "pending";
+        group.error = null;
+        return false;
+      }
       const message = errText(e);
       const canRetry =
         attempt === 0 &&
@@ -241,7 +243,6 @@ export async function scrapeBatch(
     }
 
     const group = groups[i];
-    group.status = "fetching";
     const settled = await fetchGroupWithRetry(group, resolved);
     if (!settled) break;
     group.finished_at = new Date().toISOString();

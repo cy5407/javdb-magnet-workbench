@@ -65,4 +65,17 @@ describe("createFlashController", () => {
     await expect(ctl.run("save-btn", async () => { throw err; })).rejects.toBe(err);
     expect(ctl.keys.has("save-btn")).toBe(false);
   });
+
+  it("dispose() clears active timers and keys set", () => {
+    const ctl = createFlashController();
+    ctl.flash("btn-1");
+    ctl.flash("btn-2");
+    expect(ctl.keys.has("btn-1")).toBe(true);
+    expect(ctl.keys.has("btn-2")).toBe(true);
+
+    ctl.dispose();
+    expect(ctl.keys.size).toBe(0);
+    vi.advanceTimersByTime(1200);
+    expect(ctl.keys.has("btn-1")).toBe(false);
+  });
 });

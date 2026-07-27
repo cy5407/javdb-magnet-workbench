@@ -263,5 +263,24 @@ class FileHandlerOSErrorFallback(unittest.TestCase):
         )
 
 
+    def test_resolved_log_file_published_before_initialized(self):
+        from unittest import mock
+        mod = _force_reimport("app_logging")
+        observed_resolved = []
+
+        old_get_logger = logging.getLogger
+        def spy_get_logger(name=None):
+            if mod._initialized:
+                observed_resolved.append(mod._resolved_log_file)
+            return old_get_logger(name)
+
+        with mock.patch("logging.getLogger", side_effect=spy_get_logger):
+            mod.setup_logging()
+
+        self.assertTrue(len(observed_resolved) > 0)
+        self.assertTrue(all(r is not None for r in observed_resolved),
+                        f"Observed _resolved_log_file as None while _initialized was True: {observed_resolved}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

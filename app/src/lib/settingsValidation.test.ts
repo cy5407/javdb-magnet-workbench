@@ -86,6 +86,14 @@ describe("validateScale", () => {
   it("abc rejected", () => {
     expect(validateScale("abc")).toMatch(/auto|數字/);
   });
+  it("rejects non-standard number formats like 1e0, .5, +1, 0x2", () => {
+    expect(validateScale("1e0")).not.toBeNull();
+    expect(validateScale(".5")).not.toBeNull();
+    expect(validateScale("+1")).not.toBeNull();
+    expect(validateScale("0x2")).not.toBeNull();
+    expect(validateScale("1")).toBeNull();
+    expect(validateScale("1.5")).toBeNull();
+  });
   it("empty rejected", () => {
     expect(validateScale("")).toMatch(/空/);
   });

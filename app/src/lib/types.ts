@@ -154,7 +154,7 @@ export const defaultFilterState = (): FilterState => ({
   group_pick: "all",
 });
 
-export type SortColumn = "code" | "size" | "tags" | "date" | "name";
+export type SortColumn = "size" | "tags" | "date" | "name";
 export type SortDirection = "asc" | "desc";
 
 // ---------------------------------------------------------------------------

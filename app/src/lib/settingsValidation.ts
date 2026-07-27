@@ -62,7 +62,10 @@ export function validateScale(value: string): string | null {
   const trimmed = value.trim();
   if (trimmed.length === 0) return "不能為空";
   if (trimmed === "auto") return null;
-  const n = Number(trimmed);
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+    return "必須是 auto 或 0.5–3.0 之間的數字";
+  }
+  const n = Number.parseFloat(trimmed);
   if (!Number.isFinite(n)) return "必須是 auto 或 0.5–3.0 之間的數字";
   if (n < SCALE_MIN || n > SCALE_MAX) {
     return `必須在 ${SCALE_MIN}–${SCALE_MAX} 之間`;

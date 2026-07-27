@@ -253,7 +253,7 @@ Tagged exception for all RD client failures (auth, permission, rate-limit, HTTP 
 
 #### `_request(self, method, path, _retry_count=0, **kwargs)`  *([realdebrid.py:48](../../../realdebrid.py#L48))*
 
-**Purpose**: Single chokepoint for every RD HTTP call. Adds 30s timeout, 401/403/429 handling, JSON decode, and debug logging with magnet redaction.
+**Purpose**: Single chokepoint for every RD HTTP call. Adds deadline-aware timeout（`min(30s, remaining budget)`，deadline 由 sidecar 以 `time.monotonic()` 設定並貫穿整個 command）, 401/403/429 handling（單次 Retry-After 退避受 `MAX_RETRY_AFTER_SECONDS = 10` 與剩餘預算夾制）, JSON decode, and debug logging with magnet redaction.
 
 **Contract**:
 - Params:
@@ -293,15 +293,22 @@ Tagged exception for all RD client failures (auth, permission, rate-limit, HTTP 
 
 ---
 
-#### `add_magnet(self, magnet: str) -> str`  *([realdebrid.py:115](../../../realdebrid.py#L115))*
+#### `close(self)`
+
+**Purpose**: Close the underlying `requests.Session`.
+
+#### `user(self) -> dict`
+
+**Purpose**: Public method to retrieve account metadata via `GET /user`.
+
+#### `add_magnet(self, magnet: str) -> str`
 
 **Purpose**: POST `/torrents/addMagnet` → return torrent id.
 
 **Contract**:
-- Params: `magnet: str` — `magnet:?xt=urn:btih:...` URI.
-- Returns: torrent id `str`.
-- Side effects: network.
-- Raises: any `RealDebridError` from `_request`.
+- Params: `magnet: str` — full magnet URI.
+- Returns: `str` torrent id.
+- Raises: `RealDebridError("RD API 回傳無效的 torrent id")` if response result is non-dict or `id` is missing/empty/non-string, or any `RealDebridError` from `_request`.
 
 **Called by**: [`process_magnet`](#process_magnetself-magnet-strategy--smart-cache_wait--15-progressnone---dict-realdebridpy215).
 

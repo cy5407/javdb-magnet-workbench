@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { createFlashController } from "./lib/flashAction";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openExternal } from "@tauri-apps/plugin-shell";
@@ -117,9 +117,11 @@
   let rdSendProgress = $state<RdSendProgress[]>([]);
   let rdSendDone = $state<{ done: number; total: number }>({ done: 0, total: 0 });
   let isRdSending = $state(false);
+  let isCancelingSend = $state(false);
   let rdSendAbort: AbortController | null = null;
   let pendingEntries = $state<PendingEntry[]>([]);
   let isRetryingPending = $state(false);
+  let isThemeSaving = $state(false);
   let lastBatchStartAt = $state(new Date().toISOString());
   let retryAbort: AbortController | null = null;
   // Inline status for the pending section, rendered right under the
@@ -180,6 +182,23 @@
     document.documentElement.style.fontSize = `${scale * 16}px`;
   }
 
+  async function loadAndApplySettings(): Promise<Settings> {
+    const s = await invoke<Settings>("read_settings");
+    settings = s;
+    theme = s.ui.theme as Theme;
+    applyTheme(theme);
+    applyScale(s.ui.scale);
+    return s;
+  }
+
+  async function reloadPendingSilently(context = "pending_list") {
+    try {
+      pendingEntries = await invoke<PendingEntry[]>("pending_list");
+    } catch (e) {
+      console.warn(`${context} failed:`, e);
+    }
+  }
+
   onMount(async () => {
     try {
       const paths = await invoke<PathInfo>("get_paths");
@@ -191,11 +210,7 @@
     }
 
     try {
-      const s = await invoke<Settings>("read_settings");
-      settings = s;
-      theme = s.ui.theme;
-      applyTheme(theme);
-      applyScale(s.ui.scale);
+      await loadAndApplySettings();
     } catch (e) {
       console.error("read_settings failed:", e);
       statusMessage = `讀取設定失敗：${e}`;
@@ -208,11 +223,7 @@
     } catch (e) {
       console.warn("rd_has_token failed:", e);
     }
-    try {
-      pendingEntries = await invoke<PendingEntry[]>("pending_list");
-    } catch (e) {
-      console.warn("pending_list failed:", e);
-    }
+    await reloadPendingSilently();
 
     // M7a-lite: pre-fill legacy import path from env var if dev/test set it.
     // The env var itself NEVER triggers an import; only pre-fills the input.
@@ -231,19 +242,38 @@
   });
 
   async function toggleTheme() {
+    if (isThemeSaving) return;
     if (settings === null) {
       statusMessage = "設定尚未載入";
       return;
     }
-    theme = theme === "light" ? "dark" : "light";
-    applyTheme(theme);
-    settings.ui.theme = theme;
+    const oldTheme = theme;
+    const oldSettingsTheme = settings.ui.theme;
+    const oldDraftTheme = settingsDraft ? settingsDraft.ui.theme : undefined;
+    const newTheme = theme === "light" ? "dark" : "light";
+
+    isThemeSaving = true;
+    theme = newTheme;
+    applyTheme(newTheme);
+    settings.ui.theme = newTheme;
+
     try {
       await invoke("write_settings", { settings });
-      statusMessage = `主題已儲存：${theme}`;
+      if (settingsDraft) {
+        settingsDraft.ui.theme = newTheme;
+      }
+      statusMessage = `主題已儲存：${newTheme}`;
     } catch (e) {
+      theme = oldTheme;
+      settings.ui.theme = oldSettingsTheme;
+      if (settingsDraft && oldDraftTheme !== undefined) {
+        settingsDraft.ui.theme = oldDraftTheme;
+      }
+      applyTheme(oldTheme);
       console.error("write_settings failed:", e);
       statusMessage = `儲存設定失敗：${e}`;
+    } finally {
+      isThemeSaving = false;
     }
   }
 
@@ -543,6 +573,7 @@
   // Clears web AND manual groups alike. This is intentionally the ONLY
   // path that removes manual (pasted) groups — startScrape preserves them.
   async function clearResults() {
+    if (isRdSending || isRetryingPending) return;
     if (isScraping) {
       scrapeAbort?.abort();
     }
@@ -596,16 +627,10 @@
   let manualVisibleRows = $derived(
     groups.filter(isManualGroup).flatMap((g) => processedRows(g)),
   );
-  // Counts unique handle_ids across all visible (filtered/sorted/grouped)
-  // rows. This still drives the scrape/selection screen status, but RD
-  // send now uses explicit checkbox selection instead of visibility.
-  let visibleMagnets = $derived(
-    dedupeByHandleId([...webVisibleRows, ...manualVisibleRows]).length,
-  );
+  let allVisibleRows = $derived([...webVisibleRows, ...manualVisibleRows]);
   // Web-only unique handles for the scrape status bar, so「磁力：X / Y」
-  // keeps numerator and denominator in the same (web) universe — the
-  // global visibleMagnets includes manual rows that totalRawMagnets
-  // deliberately excludes, which could render X > Y.
+  // keeps numerator and denominator in the same (web) universe — totalRawMagnets
+  // deliberately excludes manual rows.
   let webVisibleMagnets = $derived(dedupeByHandleId(webVisibleRows).length);
   let allSelectableRows = $derived(
     groups.flatMap((g) => g.result?.magnets ?? []),
@@ -753,7 +778,7 @@
   }
 
   async function sendSelectedToRd() {
-    if (isRdSending) return;
+    if (isRdSending || isRetryingPending) return;
     if (!rdHasToken) {
       rdMessage = "請先設定 RD Token";
       // The token editor lives on the settings tab, so bounce there — staying
@@ -803,18 +828,16 @@
       );
     } finally {
       isRdSending = false;
+      isCancelingSend = false;
       rdSendAbort = null;
       // Refresh persistent pending list — rd_send_magnet on the Rust side
       // already added pending entries to disk.
-      try {
-        pendingEntries = await invoke<PendingEntry[]>("pending_list");
-      } catch (e) {
-        console.warn("pending_list failed:", e);
-      }
+      await reloadPendingSilently();
     }
   }
 
   function cancelRdSend() {
+    isCancelingSend = true;
     rdSendAbort?.abort();
   }
 
@@ -822,6 +845,7 @@
   // Logic + 1.2s timer + debounce-on-re-click live in flashAction.ts and are
   // unit-tested there; this file only wires keys to templates and call sites.
   const flash = createFlashController();
+  onDestroy(() => flash.dispose());
 
   async function copyRdDownloads() {
     const lines: string[] = [];
@@ -830,9 +854,7 @@
       lastBatchStartAt,
     );
     for (const row of completedRows) {
-      for (const link of row.links) {
-        if (link.download) lines.push(link.download);
-      }
+      lines.push(...collectDownloadLinksFromRow(row));
     }
     if (lines.length === 0) {
       rdMessage = "目前沒有可複製的下載連結";
@@ -896,6 +918,7 @@
    * editor modified the file. We surface this as an explicit
    * `pendingMessage` so the button is no longer "silent". */
   async function refreshPending() {
+    if (isRdSending || isRetryingPending) return;
     try {
       pendingEntries = await invoke<PendingEntry[]>("pending_list");
       pendingMessage = {
@@ -909,11 +932,12 @@
   }
 
   async function retryAllPending() {
-    if (isRetryingPending) return;
+    if (isRdSending || isRetryingPending) return;
     if (pendingEntries.length === 0) return;
     lastBatchStartAt = new Date().toISOString();
     isRetryingPending = true;
     retryAbort = new AbortController();
+    const abortSignal = retryAbort.signal;
     pendingMessage = { kind: "info", text: `重試中 0/${pendingEntries.length}…` };
 
     const completedLinks: string[] = [];
@@ -923,10 +947,13 @@
     let errorCount = 0;
     const errorCodes: string[] = [];
 
+    const batchTotal = pendingEntries.length;
+    let processedCount = 0;
     try {
       await retryPending(
         pendingEntries,
         (ev: RdRetryEvent) => {
+          processedCount = ev.index;
           if (ev.result.kind === "completed") {
             completedCount += 1;
             for (const l of ev.result.links) {
@@ -955,26 +982,21 @@
     } finally {
       isRetryingPending = false;
       retryAbort = null;
-      // Re-read disk so the table reflects sidecar-side mutations
-      // (entries removed on completed/missing; status/progress
-      // updated for still-pending entries). We DON'T call the
-      // refresh helper because that would overwrite pendingMessage
-      // with a generic "已重新載入" line — we want the retry summary.
-      try {
-        pendingEntries = await invoke<PendingEntry[]>("pending_list");
-      } catch (e) {
-        console.warn("pending_list after retry failed:", e);
-      }
+      await reloadPendingSilently("pending_list after retry");
     }
 
-    // Build the summary fragments.
+    const isAborted = abortSignal.aborted;
     const parts: string[] = [];
     if (completedCount > 0) parts.push(`${completedCount} 個完成`);
     if (stillPendingCount > 0) parts.push(`${stillPendingCount} 個仍在 RD 處理中`);
     if (missingCount > 0) parts.push(`${missingCount} 個已從 RD 消失（已移除）`);
     if (errorCount > 0) parts.push(`${errorCount} 個查詢失敗`);
 
-    let summary = parts.length > 0 ? `重試完成：${parts.join("、")}` : "重試完成";
+    let summary = isAborted
+      ? `已取消：完成 ${processedCount}/${batchTotal}`
+      : parts.length > 0
+        ? `重試完成：${parts.join("、")}`
+        : "重試完成";
 
     if (completedLinks.length > 0) {
       try {
@@ -1265,11 +1287,8 @@
         // values regardless.
       }
       // Refresh canonical settings + dependent UI state.
-      settings = await invoke<Settings>("read_settings");
-      theme = settings.ui.theme as Theme;
-      applyTheme(theme);
-      applyScale(settings.ui.scale);
-      settingsDraft = freshSettingsDraft(settings);
+      const updated = await loadAndApplySettings();
+      settingsDraft = freshSettingsDraft(updated);
       settingsMessage = "設定已儲存";
       settingsMessageKind = "ok";
       flash.flash("settings-save");
@@ -1307,22 +1326,13 @@
       }
       if (legacyReport.env_imported) {
         try {
-          settings = await invoke<Settings>("read_settings");
-          if (settings) {
-            theme = settings.ui.theme as Theme;
-            applyTheme(theme);
-            applyScale(settings.ui.scale);
-          }
+          await loadAndApplySettings();
         } catch (e) {
           console.warn("read_settings after import failed:", e);
         }
       }
       if (legacyReport.pending_imported > 0) {
-        try {
-          pendingEntries = await invoke<PendingEntry[]>("pending_list");
-        } catch (e) {
-          console.warn("pending_list after import failed:", e);
-        }
+        await reloadPendingSilently("pending_list after import");
       }
       if (legacyReport.cookies_imported) {
         await refreshCookiesStatus();
@@ -1336,6 +1346,7 @@
   }
 
   async function removePending(torrent_id: string) {
+    if (isRdSending || isRetryingPending) return;
     try {
       pendingEntries = await invoke<PendingEntry[]>("pending_remove", {
         torrentId: torrent_id,
@@ -1350,6 +1361,7 @@
   }
 
   async function clearAllPending() {
+    if (isRdSending || isRetryingPending) return;
     try {
       await invoke("pending_clear");
       pendingEntries = [];
@@ -1528,7 +1540,7 @@
 
   <section hidden={activeTab !== "settings"}>
     <h2>主題</h2>
-    <button onclick={toggleTheme}>
+    <button onclick={toggleTheme} disabled={isThemeSaving}>
       主題：{theme}（點擊切換）
     </button>
   </section>
@@ -1561,7 +1573,7 @@
         <button onclick={() => (activeTab = "select")}>回到挑選</button>
         <button
           onclick={sendSelectedToRd}
-          disabled={isRdSending || selectedMagnets === 0 || !rdHasToken}
+          disabled={isRdSending || isRetryingPending || selectedMagnets === 0 || !rdHasToken}
           title={rdHasToken ? "" : "請先設定 RD Token"}
         >
           {isRdSending ? "送出中…" : sendButtonLabel}
@@ -1590,7 +1602,7 @@
       <button
         type="button"
         onclick={() => (legacyShown = !legacyShown)}
-        style="margin-left: 0.5rem; font-size: 0.85rem; padding: 0.15rem 0.5rem;"
+        class="section-toggle"
       >{legacyShown ? "▴ 收合" : "▾ 展開"}</button>
     </h2>
     {#if legacyShown}
@@ -1716,7 +1728,7 @@
           if (!settingsShown) openSettingsEditor();
           else settingsShown = false;
         }}
-        style="margin-left: 0.5rem; font-size: 0.85rem; padding: 0.15rem 0.5rem;"
+        class="section-toggle"
       >{settingsShown ? "▴ 收合" : "▾ 展開"}</button>
     </h2>
     {#if settingsShown && settingsDraft}
@@ -1827,7 +1839,7 @@
       <button
         type="button"
         onclick={toggleCookiesShown}
-        style="margin-left: 0.5rem; font-size: 0.85rem; padding: 0.15rem 0.5rem;"
+        class="section-toggle"
       >{cookiesShown ? "▴ 收合" : "▾ 展開"}</button>
     </h2>
     {#if cookiesShown}
@@ -2001,6 +2013,7 @@
         </button>
         <button
           onclick={clearResults}
+          disabled={isRdSending || isRetryingPending}
           class:flash-ok={flash.keys.has("scrape-clear")}
         >
           {flash.keys.has("scrape-clear") ? "已清空 ✓" : "清空全部結果（含手貼）"}
@@ -2107,13 +2120,13 @@
           </span>
         </div>
         <div class="row tight">
-          <button onclick={() => setRowsSelected(groups.flatMap((g) => processedRows(g)), true)}>
+          <button onclick={() => setRowsSelected(allVisibleRows, true)}>
             勾選目前顯示
           </button>
-          <button onclick={() => selectOnlyRows(groups.flatMap((g) => processedRows(g)))}>
+          <button onclick={() => selectOnlyRows(allVisibleRows)}>
             只勾選目前顯示
           </button>
-          <button onclick={() => setRowsSelected(groups.flatMap((g) => processedRows(g)), false)}>
+          <button onclick={() => setRowsSelected(allVisibleRows, false)}>
             取消目前顯示
           </button>
           <button
@@ -2335,7 +2348,9 @@
       </div>
       <div class="row">
         {#if isRdSending}
-          <button onclick={cancelRdSend}>取消</button>
+          <button onclick={cancelRdSend} disabled={isCancelingSend}>
+            {isCancelingSend ? "取消中…" : "取消"}
+          </button>
         {/if}
         <button
           class:flash-ok={flash.keys.has("rd-bulk")}
@@ -2470,7 +2485,7 @@
       <div class="row">
         <button
           onclick={retryAllPending}
-          disabled={isRetryingPending || pendingEntries.length === 0}
+          disabled={isRdSending || isRetryingPending || pendingEntries.length === 0 || !rdHasToken}
         >
           {isRetryingPending ? "重試中…" : "全部重試（查 RD）"}
         </button>
@@ -2479,14 +2494,14 @@
         {/if}
         <button
           onclick={refreshPending}
-          disabled={isRetryingPending}
+          disabled={isRdSending || isRetryingPending}
           class:flash-ok={flash.keys.has("pending-refresh")}
         >
           {flash.keys.has("pending-refresh") ? "已重讀 ✓" : "重讀本機紀錄"}
         </button>
         <button
           onclick={clearAllPending}
-          disabled={isRetryingPending}
+          disabled={isRdSending || isRetryingPending}
           class:flash-ok={flash.keys.has("pending-clear")}
         >
           {flash.keys.has("pending-clear") ? "已清空 ✓" : "全部清空"}
@@ -2515,7 +2530,7 @@
               <td>{p.strategy}</td>
               <td class="small muted">{p.added_at.slice(0, 10)}</td>
               <td>
-                <button onclick={() => removePending(p.torrent_id)}>移除</button>
+                <button onclick={() => removePending(p.torrent_id)} disabled={isRdSending || isRetryingPending}>移除</button>
               </td>
             </tr>
           {/each}
@@ -3027,6 +3042,12 @@
   code {
     font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
     font-size: 0.85em;
+  }
+
+  .section-toggle {
+    margin-left: 0.5rem;
+    font-size: 0.85rem;
+    padding: 0.15rem 0.5rem;
   }
 
   @media (max-width: 760px) {

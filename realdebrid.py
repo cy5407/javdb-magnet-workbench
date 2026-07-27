@@ -17,27 +17,47 @@ API_BASE = "https://api.real-debrid.com/rest/1.0"
 VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".wmv", ".mov", ".m4v", ".ts", ".webm"}
 
 
+MAX_RETRY_AFTER_SECONDS = 10
+
+
 class RealDebridError(Exception):
     pass
 
 
 class RealDebrid:
-    def __init__(self, token: str, min_size_mb: int = 500):
+    def __init__(self, token: str, min_size_mb: int = 500, deadline: Optional[float] = None):
         if not token:
             raise RealDebridError("RD_API_TOKEN 未設定，請編輯 .env 檔案貼上 token")
         self.session = requests.Session()
         self.session.headers["Authorization"] = f"Bearer {token}"
         self.min_size_mb = min_size_mb
+        self.deadline = deadline
 
-    def _request(self, method: str, path: str, _retry_count: int = 0, **kwargs):
+    def close(self):
+        self.session.close()
+
+    def user(self) -> dict:
+        """取得使用者帳號資訊"""
+        return self._request("GET", "/user")
+
+    def _request(self, method: str, path: str, _retry_count: int = 0, deadline: Optional[float] = None, **kwargs):
+        dl = deadline if deadline is not None else self.deadline
+        if dl is not None:
+            remaining = dl - time.monotonic()
+            if remaining <= 0:
+                raise RealDebridError("HTTP 429: 請求超過時間預算")
+            http_timeout = min(30.0, max(0.001, remaining))
+        else:
+            http_timeout = 30.0
+
         url = f"{API_BASE}{path}"
         logger.debug(f"→ {method} {path} {self._redact_log_kwargs(kwargs)}")
 
-        resp = self.session.request(method, url, timeout=30, allow_redirects=False, **kwargs)
+        resp = self.session.request(method, url, timeout=http_timeout, allow_redirects=False, **kwargs)
         logger.debug(f"← HTTP {resp.status_code} ({len(resp.content)} bytes)")
 
         if resp.status_code == 429:
-            return self._retry_after_rate_limit(resp, method, path, _retry_count, kwargs)
+            return self._retry_after_rate_limit(resp, method, path, _retry_count, kwargs, deadline=dl)
 
         self._raise_for_status(resp)
 
@@ -83,15 +103,25 @@ class RealDebrid:
             log["headers"] = {k: RealDebrid._redact_header_field(k, v) for k, v in kwargs["headers"].items()}
         return log
 
-    def _retry_after_rate_limit(self, resp, method: str, path: str, retry_count: int, kwargs: dict):
+    def _retry_after_rate_limit(self, resp, method: str, path: str, retry_count: int, kwargs: dict, deadline: Optional[float] = None):
         """429 自動重試（最多 3 次）"""
         if retry_count >= 3:
             logger.error("429 重試 3 次仍失敗")
             raise RealDebridError("HTTP 429: 請求頻率過高，請稍後再試")
-        wait = self._parse_retry_after(resp)
-        logger.warning(f"429 速率限制，等待 {wait}s 後重試（第 {retry_count + 1}/3 次）")
-        time.sleep(wait)
-        return self._request(method, path, _retry_count=retry_count + 1, **kwargs)
+        dl = deadline if deadline is not None else self.deadline
+        parsed = self._parse_retry_after(resp)
+        wait = min(max(parsed, 0.0), float(MAX_RETRY_AFTER_SECONDS))
+        if dl is not None:
+            remaining = dl - time.monotonic()
+            if remaining <= 0:
+                raise RealDebridError("HTTP 429: 請求超過時間預算")
+            wait = min(wait, max(0.0, remaining))
+        if wait > 0:
+            logger.warning(f"429 速率限制，等待 {wait}s 後重試（第 {retry_count + 1}/3 次）")
+            time.sleep(wait)
+        else:
+            logger.warning(f"429 速率限制，立即重試（第 {retry_count + 1}/3 次）")
+        return self._request(method, path, _retry_count=retry_count + 1, deadline=dl, **kwargs)
 
     @staticmethod
     def _raise_for_status(resp) -> None:
@@ -147,6 +177,8 @@ class RealDebrid:
     def add_magnet(self, magnet: str) -> str:
         """新增磁力，回傳 torrent id"""
         result = self._request("POST", "/torrents/addMagnet", data={"magnet": magnet})
+        if not isinstance(result, dict) or not isinstance(result.get("id"), str) or not result["id"]:
+            raise RealDebridError("RD API 回傳無效的 torrent id")
         return result["id"]
 
     def torrent_info(self, torrent_id: str) -> dict:

@@ -16,6 +16,7 @@ network or token is required.
 """
 
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -263,16 +264,17 @@ class RequestRateLimit(unittest.TestCase):
             self.rd._request("GET", "/torrents")
         mock_sleep.assert_called_once_with(5.0)
 
-    def test_429_gives_up_after_3_retries(self):
-        # 4 total responses: initial + 3 retries, all 429 → finally raise.
-        responses = [_resp(429, headers={"Retry-After": "0"})] * 4
-        with mock.patch.object(self.rd.session, "request",
-                               side_effect=responses) as mock_req, \
-             mock.patch("realdebrid.time.sleep"):
-            with self.assertRaises(RealDebridError) as cm:
-                self.rd._request("GET", "/torrents")
-        self.assertEqual(mock_req.call_count, 4)
-        self.assertIn("429", str(cm.exception))
+    def test_429_negative_retry_after_retries_immediately_if_remaining_budget(self):
+        first = _resp(429, headers={"Retry-After": "-5"})
+        second = _resp(200, json_body={"ok": True}, content=b'{"ok":true}')
+        import time
+        deadline = time.monotonic() + 50.0
+        with mock.patch.object(self.rd.session, "request", side_effect=[first, second]) as mock_req, \
+             mock.patch("realdebrid.time.sleep") as mock_sleep:
+            out = self.rd._request("GET", "/torrents", deadline=deadline)
+        self.assertEqual(out, {"ok": True})
+        self.assertEqual(mock_req.call_count, 2)
+        mock_sleep.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +291,19 @@ class ApiWrappers(unittest.TestCase):
                                                   json_body={"id": "TID-1", "uri": "x"},
                                                   content=b'{"id":"TID-1"}')):
             self.assertEqual(self.rd.add_magnet("magnet:?xt=urn:btih:abc"), "TID-1")
+
+    def test_add_magnet_validates_response_result(self):
+        invalid_bodies = [
+            _resp(200, json_body="not-a-dict", content=b'"not-a-dict"'),
+            _resp(200, json_body={}, content=b'{}'),
+            _resp(200, json_body={"id": ""}, content=b'{"id":""}'),
+            _resp(200, json_body={"id": 123}, content=b'{"id":123}'),
+        ]
+        for resp_obj in invalid_bodies:
+            with mock.patch.object(self.rd.session, "request", return_value=resp_obj):
+                with self.assertRaises(RealDebridError) as cm:
+                    self.rd.add_magnet("magnet:?xt=urn:btih:abc")
+                self.assertIn("無效的 torrent id", str(cm.exception))
 
     def test_select_files_joins_list_into_csv(self):
         captured: dict = {}
@@ -622,6 +637,51 @@ class ProcessMagnet(unittest.TestCase):
              mock.patch.object(self.rd, "torrent_info", return_value=info):
             out = self.rd.process_magnet("magnet:?xt=urn:sha1:zz&dn=no-btih")
         self.assertEqual(out["status"], "completed")
+
+
+# ---------------------------------------------------------------------------
+# Deadline and Retry-After Bounds
+# ---------------------------------------------------------------------------
+
+class DeadlineAndRetryAfterBounds(unittest.TestCase):
+    def setUp(self):
+        self.rd = RealDebrid("tok")
+
+    def test_max_retry_after_constant_exists(self):
+        from realdebrid import MAX_RETRY_AFTER_SECONDS
+        self.assertEqual(MAX_RETRY_AFTER_SECONDS, 10)
+
+    def test_retry_after_capped_at_max(self):
+        r429 = _resp(429, headers={"Retry-After": "999"})
+        r200 = _resp(200, json_body={"ok": True})
+        with mock.patch.object(self.rd.session, "request", side_effect=[r429, r200]), \
+             mock.patch("time.sleep") as mock_sleep:
+            res = self.rd._request("GET", "/user", deadline=time.monotonic() + 100.0)
+            self.assertEqual(res, {"ok": True})
+            mock_sleep.assert_called_once()
+            self.assertAlmostEqual(mock_sleep.call_args[0][0], 10.0, places=2)
+
+    def test_retry_after_negative_clamped_to_zero(self):
+        r429 = _resp(429, headers={"Retry-After": "-5"})
+        r200 = _resp(200, json_body={"ok": True})
+        with mock.patch.object(self.rd.session, "request", side_effect=[r429, r200]), \
+             mock.patch("time.sleep") as mock_sleep:
+            res = self.rd._request("GET", "/user")
+            self.assertEqual(res, {"ok": True})
+            mock_sleep.assert_not_called()
+
+    def test_deadline_exhausted_raises_realdebrid_error_rate(self):
+        with mock.patch.object(self.rd.session, "request") as mock_req:
+            deadline = time.monotonic() - 1.0
+            with self.assertRaises(RealDebridError) as cm:
+                self.rd._request("GET", "/user", deadline=deadline)
+            self.assertIn("429", str(cm.exception))
+            mock_req.assert_not_called()
+
+    def test_close_method_closes_session(self):
+        with mock.patch.object(self.rd.session, "close") as mock_close:
+            self.rd.close()
+            mock_close.assert_called_once()
 
 
 if __name__ == "__main__":

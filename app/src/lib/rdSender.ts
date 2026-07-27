@@ -296,54 +296,36 @@ export async function retryPending(
   for (let i = 0; i < entries.length; i++) {
     if (opts.signal?.aborted) break;
     const entry = entries[i];
-    let event: RdRetryEvent;
+    const base = {
+      index: i + 1,
+      total: entries.length,
+      torrent_id: entry.torrent_id,
+      entry,
+    };
+    let result: RdRetryEvent["result"];
     try {
       const outcome = await fetcher(entry.torrent_id, entry.strategy);
       if (outcome.status === "completed") {
-        event = {
-          index: i + 1,
-          total: entries.length,
-          torrent_id: entry.torrent_id,
-          entry,
-          result: {
-            kind: "completed",
-            links: outcome.links,
-            name: outcome.name,
-          },
+        result = {
+          kind: "completed",
+          links: outcome.links,
+          name: outcome.name,
         };
       } else if (outcome.status === "missing") {
-        event = {
-          index: i + 1,
-          total: entries.length,
-          torrent_id: entry.torrent_id,
-          entry,
-          result: { kind: "missing" },
-        };
+        result = { kind: "missing" };
       } else {
-        event = {
-          index: i + 1,
-          total: entries.length,
-          torrent_id: entry.torrent_id,
-          entry,
-          result: {
-            kind: "pending",
-            rd_status: outcome.rd_status,
-            progress: outcome.progress,
-            name: outcome.name,
-          },
+        result = {
+          kind: "pending",
+          rd_status: outcome.rd_status,
+          progress: outcome.progress,
+          name: outcome.name,
         };
       }
     } catch (e) {
       const code = errText(e);
-      event = {
-        index: i + 1,
-        total: entries.length,
-        torrent_id: entry.torrent_id,
-        entry,
-        result: { kind: "error", error_code: code },
-      };
+      result = { kind: "error", error_code: code };
     }
-    onProgress(event);
+    onProgress({ ...base, result });
   }
 }
 

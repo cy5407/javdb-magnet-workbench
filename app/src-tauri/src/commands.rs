@@ -146,6 +146,7 @@ pub async fn forget_magnets(
         None => Value::Null,
     };
     let resp = sidecar.request("forget_magnets", payload).await?;
+    ensure_ok(&resp)?;
     Ok(resp
         .get("forgot")
         .or_else(|| resp.get("forgotten"))

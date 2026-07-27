@@ -282,21 +282,19 @@ Produced by `_err`:
 
 **Called by**: Rust `commands::copy_magnets_bulk`.
 
-### `cmd_forget_magnets(state: DaemonState, req: dict) -> dict` ([sidecar.py:308](../../../sidecar/sidecar.py#L308))
+### `cmd_forget_magnets(state: DaemonState, req: dict) -> dict` ([sidecar.py:430](../../../sidecar/sidecar.py#L430))
 
-**Purpose**: Clear all in-memory magnet handles.
+**Purpose**: Clear all or specified in-memory magnet handles.
 
 **Contract**:
-- Params: currently ignores `handle_ids`; clears all handles.
-- Returns: success with `forgot` count.
-- Side effects: clears `state.magnets` and `state.magnet_to_handle`.
-- Errors: none expected.
+- Params: optional `handle_ids` (omitted/null = clear all; `[]` = no-op; list of handle strings = delete specified handles and update reverse index; mixed non-string types return `bad_request` with zero state mutations).
+- Returns: success with `forgot` count of deleted handles.
+- Side effects: removes matching handles from `state.magnets` and `state.magnet_to_handle`.
+- Errors: `bad_request` if `handle_ids` contains non-string elements.
 
-**Calls**: `_ok`.
+**Calls**: `_ok`, `_err`.
 
 **Called by**: Rust `commands::forget_magnets`.
-
-**Contract mismatch**: Rust may send `handle_ids`, but this handler does not do selective deletion.
 
 ### `cmd_register_magnets(state: DaemonState, req: dict) -> dict` ([sidecar.py:318](../../../sidecar/sidecar.py#L318))
 
@@ -430,6 +428,8 @@ Produced by `_err`:
 - Params: `handle_id` string; optional `strategy`, `cache_wait`, `min_size_mb`.
 - Returns: success with `status="completed"` and `links`, or `status="pending"` with torrent/progress fields; or stable error.
 - Preconditions: handshake done, token present, handle exists.
+- Timeout budget alignment: `effective_cache_wait` is bounded by `req`'s `cache_wait` baseline (15 if missing in `req`); `deadline = time.monotonic() + effective_cache_wait + 75.0`, keeping Python's budget (max 90s when `req` omits `cache_wait`) strictly within Rust's 105s timeout limit.
+- Session lifecycle: `RealDebrid` client is created with `deadline` and strictly closed via `finally` block on all code paths.
 - Side effects: performs RD HTTP operations through `RealDebrid.process_magnet`.
 - Errors: catches `RealDebridError` and generic exceptions.
 

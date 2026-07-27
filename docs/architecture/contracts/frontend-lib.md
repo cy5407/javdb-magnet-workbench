@@ -211,9 +211,7 @@ Strategy for the "keep N per group" filter step. Semantics implemented in `apply
 - `magnetUtils.test.ts` (line 13) and `settingsValidation.test.ts` use it indirectly via the
   `draft()` helper.
 
-#### `type SortColumn = "code" | "size" | "tags" | "date" | "name"` *(types.ts:151)*
-Note: `"code"` and `"name"` are sorted identically (both compare `row.name`) — see
-[magnetUtils.ts:132](app/src/lib/magnetUtils.ts:132).
+#### `type SortColumn = "size" | "tags" | "date" | "name"` *(types.ts:151)*
 
 #### `type SortDirection = "asc" | "desc"` *(types.ts:152)*
 
@@ -446,8 +444,8 @@ stable per ES2019).
 - Errors: none.
 - Async: no.
 
-**Notes**: `"code"` and `"name"` compare on `row.name` (not on a separate `code` field —
-`MagnetRow` doesn't have one).
+**Notes**: `"name"` compares on `row.name`. The former `"code"` member of `SortColumn` was
+removed (M9 Phase 3) — it was dead code that shared the name-compare branch and had no UI caller.
 
 **Calls**:
 - `Array.prototype.slice`, `Array.prototype.sort`, `parseSizeGb`,
@@ -634,9 +632,9 @@ single retry on rate-limit-flavored errors.
     - `retryWaitRange?: [number, number]` — defaults `[10000, 15000]`.
     - `fetcher?: (url) => Promise<FetchResult>` — defaults to `invoke('fetch_javdb', { url })`.
 - Returns: `Promise<ScrapedGroup[]>` — the final groups array in the input order. Each group
-  has its `status` set to `ok` | `error` | `pending` (only if aborted before its turn) | rare
-  `fetching` if aborted mid-flight. `finished_at` is set whenever the loop body ran for that
-  group.
+  has its `status` set to `ok` | `error` | `pending` (if aborted before or during its turn).
+  If `signal` is aborted after `fetcher` resolves, the result is dropped; `status` stays `pending`
+  and `finished_at` stays `null`. `finished_at` is set only when the group successfully settles to `ok` or `error`.
 - Side effects: invokes `fetch_javdb` (one Tauri command per URL); calls `setTimeout` via
   `realSleep`; reads system clock via `new Date().toISOString()`.
 - Errors: never throws. All per-URL errors are captured into `group.error` (string) and

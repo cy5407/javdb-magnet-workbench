@@ -39,7 +39,7 @@ def create_session():
         "Cache-Control": "max-age=0",
     }
     if HAS_CURL_CFFI:
-        return cffi_requests.Session(impersonate="chrome124", headers=headers, timeout=30.0), "curl_cffi"
+        return cffi_requests.Session(impersonate="chrome124", headers=headers), "curl_cffi"
     headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     session = requests.Session()
     session.headers.update(headers)

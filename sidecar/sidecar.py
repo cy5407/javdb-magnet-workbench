@@ -24,6 +24,7 @@ caller controls log_dir via the JAVDB_LOG_DIR environment variable.
 """
 
 import argparse
+import errno
 import json
 import re
 import sys
@@ -218,21 +219,14 @@ _HANDSHAKE_TOKEN_WARNING = {
 
 
 def cmd_handshake(state: DaemonState, req: dict) -> dict:
-    state.cookies = parse_cookie_string(req.get("cookies", "") or "")
-    # F-04 cross-path leak: if a malformed token slipped past the Rust
-    # guards (e.g. a corrupted keyring entry from an earlier version,
-    # or a hand-crafted handshake), refuse to carry it into state.
-    # rd_send_magnet would otherwise hand the dirty value straight to
-    # the Real-Debrid API. Empty string here means "no token configured"
-    # — cmd_rd_user / cmd_rd_send_magnet already surface that as
-    # rd_no_token, which is the correct user-facing signal.
-    #
-    # Type-guard ordering matters here: a non-string rd_token (number /
-    # list / object from a hand-crafted handshake) MUST NOT reach
-    # _is_valid_rd_token, which would TypeError on len()/iteration and
-    # turn the whole dispatch into an `internal` error envelope. None
-    # and "" are the steady-state "not configured" shapes and stay
-    # silent; anything else of the wrong type is warned and dropped.
+    cookies_raw = req.get("cookies")
+    if isinstance(cookies_raw, str):
+        state.cookies = parse_cookie_string(cookies_raw)
+    else:
+        state.cookies = {}
+
+    # Defensive ordering (F-04): `rd_token` MUST be validated before storing.
+    # Passing a non-string or non-conforming token falls back to "" + warning.
     raw = req.get("rd_token")
     warnings: list[dict] = []
     if raw is None or raw == "":
@@ -245,8 +239,13 @@ def cmd_handshake(state: DaemonState, req: dict) -> dict:
         warnings.append(dict(_HANDSHAKE_TOKEN_WARNING))
         rd_token = ""
     state.rd_token = rd_token
-    state.settings = req.get("settings") or {}
-    state.paths = req.get("paths") or {}
+
+    settings_raw = req.get("settings")
+    state.settings = settings_raw if isinstance(settings_raw, dict) else {}
+
+    paths_raw = req.get("paths")
+    state.paths = paths_raw if isinstance(paths_raw, dict) else {}
+
     state.handshake_done = True
     extra = {"warnings": warnings} if warnings else None
     return _ok(req, extra)
@@ -354,7 +353,11 @@ def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
 
     try:
         session, engine = create_session()
-        result = fetch_magnets(url, session, state.cookies)
+        try:
+            result = fetch_magnets(url, session, state.cookies)
+        finally:
+            if hasattr(session, "close"):
+                session.close()
     except Exception as e:
         # Redact: never echo exception message; type only.
         return _err(req, "network", f"fetch failed: {type(e).__name__}")
@@ -430,13 +433,32 @@ def cmd_resolve_magnets(state: DaemonState, req: dict) -> dict:
 
 
 def cmd_forget_magnets(state: DaemonState, req: dict) -> dict:
-    n = len(state.magnets)
-    state.magnets.clear()
-    # Reverse table must clear with the forward table — otherwise a
-    # later register would falsely "dedupe" against a stale entry
-    # whose handle no longer exists.
-    state.magnet_to_handle.clear()
-    return _ok(req, {"forgot": n})
+    if "handle_ids" not in req or req.get("handle_ids") is None:
+        n = len(state.magnets)
+        state.magnets.clear()
+        state.magnet_to_handle.clear()
+        return _ok(req, {"forgot": n})
+
+    handle_ids = req.get("handle_ids")
+    if not isinstance(handle_ids, list):
+        return _err(req, "bad_request", "handle_ids must be a list of strings")
+
+    if not all(isinstance(hid, str) for hid in handle_ids):
+        return _err(req, "bad_request", "handle_ids must be a list of strings")
+
+    seen = set()
+    forgot = 0
+    for hid in handle_ids:
+        if hid in seen:
+            continue
+        seen.add(hid)
+        if hid in state.magnets:
+            magnet_uri = state.magnets.pop(hid)
+            key = _magnet_dedupe_key(magnet_uri)
+            if state.magnet_to_handle.get(key) == hid:
+                del state.magnet_to_handle[key]
+            forgot += 1
+    return _ok(req, {"forgot": forgot})
 
 
 def cmd_register_magnets(state: DaemonState, req: dict) -> dict:
@@ -463,14 +485,14 @@ def cmd_register_magnets(state: DaemonState, req: dict) -> dict:
 
     for raw in magnets_in:
         if not isinstance(raw, str):
-            invalid.append(str(raw))
+            invalid.append(str(raw)[:64])
             continue
         s = raw.strip()
         if len(s) > MAX_MAGNET_URI_LEN:
             invalid.append(s[:64])   # truncate for invalid list so we don't echo full
             continue
         if not s.lower().startswith("magnet:"):
-            invalid.append(s)
+            invalid.append(s[:64])
             continue
 
         handle_id, deduped = _intern_magnet(state, s)
@@ -486,6 +508,8 @@ def cmd_register_magnets(state: DaemonState, req: dict) -> dict:
 
 def cmd_update_settings(state: DaemonState, req: dict) -> dict:
     new_settings = req.get("settings")
+    if new_settings is not None and not isinstance(new_settings, dict):
+        return _err(req, "bad_request", "settings must be a dict when provided")
     if new_settings is not None:
         state.settings = new_settings
     return _ok(req)
@@ -551,7 +575,6 @@ _RD_ERR_API = "rd_api_error"
 _RD_ERR_NO_TOKEN = "rd_no_token"
 _RD_ERR_MAGNET = "rd_magnet_error"
 _RD_ERR_DOWNLOAD = "rd_download_failed"
-_RD_ERR_NOT_FOUND = "rd_torrent_missing"
 _RD_ERR_INTERNAL = "rd_internal"
 
 _RD_NO_TOKEN_MSG = "RD token not configured"
@@ -560,21 +583,21 @@ _RD_NO_TOKEN_MSG = "RD token not configured"
 def _classify_rd_error(message: str) -> str:
     """Bucket a RealDebridError message into a stable error code."""
     m = (message or "").lower()
-    if "401" in m or "token 無效" in m or ("token" in m and "過期" in m):
-        return _RD_ERR_AUTH
-    if "403" in m or "premium" in m or "權限不足" in m:
-        return _RD_ERR_PREMIUM
-    if "429" in m or ("rate" in m and "limit" in m):
-        return _RD_ERR_RATE
     if "magnet_error" in m or "磁力解析失敗" in m or "磁力錯誤" in m:
         return _RD_ERR_MAGNET
     if "下載失敗" in m or "download failed" in m:
         return _RD_ERR_DOWNLOAD
+    if m.startswith("http 401:") or "token 無效" in m or ("token" in m and "過期" in m):
+        return _RD_ERR_AUTH
+    if m.startswith("http 403:") or "premium" in m or "權限不足" in m:
+        return _RD_ERR_PREMIUM
+    if m.startswith("http 429:") or ("rate" in m and "limit" in m) or "頻率過高" in m:
+        return _RD_ERR_RATE
     return _RD_ERR_API
 
 
 def _rd_client(state: DaemonState, token_override: str | None = None,
-               min_size_mb: int | None = None):
+               min_size_mb: int | None = None, deadline: float | None = None):
     """Build a fresh RealDebrid client. Cheap (just a requests.Session).
 
     `token_override` lets `rd_user` validate a candidate token without
@@ -592,6 +615,8 @@ def _rd_client(state: DaemonState, token_override: str | None = None,
         )
         if min_size_mb is None:
             min_size_mb = 500
+    if deadline is not None:
+        return RealDebrid(token, min_size_mb=min_size_mb, deadline=deadline)
     return RealDebrid(token, min_size_mb=min_size_mb)
 
 
@@ -635,14 +660,20 @@ def cmd_rd_user(state: DaemonState, req: dict) -> dict:
     """Validate token + return account snapshot. Token override allowed
     so the settings UI can probe a candidate token before saving."""
     from realdebrid import RealDebridError
+    if not state.handshake_done:
+        return _err(req, "bad_request", "handshake required before rd_user")
     token_override = req.get("token")
     if token_override is not None and not isinstance(token_override, str):
         return _err(req, "bad_request", "token must be a string when provided")
     if not token_override and not state.rd_token:
         return _err(req, _RD_ERR_NO_TOKEN, _RD_NO_TOKEN_MSG)
     try:
-        client = _rd_client(state, token_override=token_override or None)
-        info = client._request("GET", "/user")
+        deadline = time.monotonic() + 50.0
+        client = _rd_client(state, token_override=token_override or None, deadline=deadline)
+        try:
+            info = client.user()
+        finally:
+            client.close()
     except RealDebridError as e:
         return _err(req, _classify_rd_error(str(e)), str(e))
     except Exception as e:
@@ -730,16 +761,23 @@ def cmd_rd_send_magnet(state: DaemonState, req: dict) -> dict:
         return _err(req, "unknown_handle", "magnet handle not in current session")
 
     strategy = _resolve_strategy(state, req.get("strategy"))
-    cache_wait = _resolve_int_setting(
+    req_cw_raw = req.get("cache_wait")
+    req_cw_base = req_cw_raw if isinstance(req_cw_raw, int) and req_cw_raw >= 1 else 15
+    resolved_cw = _resolve_int_setting(
         state, "cache_wait_seconds", req.get("cache_wait"), 15, min_value=1,
     )
+    cache_wait = min(resolved_cw, req_cw_base)
     min_size_mb = _resolve_int_setting(
         state, "min_size_mb", req.get("min_size_mb"), 500, min_value=0,
     )
 
     try:
-        client = _rd_client(state, min_size_mb=min_size_mb)
-        result = client.process_magnet(magnet, strategy=strategy, cache_wait=cache_wait)
+        deadline = time.monotonic() + cache_wait + 75.0
+        client = _rd_client(state, min_size_mb=min_size_mb, deadline=deadline)
+        try:
+            result = client.process_magnet(magnet, strategy=strategy, cache_wait=cache_wait)
+        finally:
+            client.close()
     except RealDebridError as e:
         return _err(req, _classify_rd_error(str(e)), str(e))
     except Exception as e:
@@ -780,12 +818,12 @@ def cmd_rd_check_pending(state: DaemonState, req: dict) -> dict:
     strategy = _resolve_strategy(state, req.get("strategy"))
 
     try:
-        client = _rd_client(state)
-        # We pass empty magnet — pending entries that still need file
-        # selection cannot be auto-fixed without the original magnet, by
-        # design (pending JSON never holds magnet text). The frontend
-        # surfaces this as "needs reselection" if it ever happens.
-        result = client.check_torrent(torrent_id, strategy=strategy, magnet="")
+        deadline = time.monotonic() + 50.0
+        client = _rd_client(state, deadline=deadline)
+        try:
+            result = client.check_torrent(torrent_id, strategy=strategy, magnet="")
+        finally:
+            client.close()
     except RealDebridError as e:
         return _err(req, _classify_rd_error(str(e)), str(e))
     except Exception as e:
@@ -810,6 +848,10 @@ def cmd_rd_check_pending(state: DaemonState, req: dict) -> dict:
     })
 
 
+def cmd_shutdown(state: DaemonState, req: dict) -> dict:
+    return _ok(req)
+
+
 DISPATCH = {
     "hello": cmd_hello,
     "handshake": cmd_handshake,
@@ -822,6 +864,7 @@ DISPATCH = {
     "update_settings": cmd_update_settings,
     "set_cookies": cmd_set_cookies,
     "cancel": cmd_cancel,
+    "shutdown": cmd_shutdown,
     "rd_user": cmd_rd_user,
     "rd_set_token": cmd_rd_set_token,
     "rd_send_magnet": cmd_rd_send_magnet,
@@ -836,10 +879,6 @@ def dispatch(state: DaemonState, req: dict) -> dict:
     crosses the IPC boundary.
     """
     cmd = req.get("cmd")
-    if cmd == "shutdown":
-        # Caller-side concern: run_daemon breaks out of the loop after
-        # emitting the response. Here we just produce the ack.
-        return _ok(req)
     handler = DISPATCH.get(cmd) if isinstance(cmd, str) else None
     if handler is None:
         return _err(req, "bad_request", f"unknown command: {cmd!r}")
@@ -854,9 +893,14 @@ def dispatch(state: DaemonState, req: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def _emit(stdout: IO[str], obj: dict) -> None:
-    stdout.write(json.dumps(obj, ensure_ascii=False))
-    stdout.write("\n")
-    stdout.flush()
+    try:
+        stdout.write(json.dumps(obj, ensure_ascii=False))
+        stdout.write("\n")
+        stdout.flush()
+    except (BrokenPipeError, OSError) as e:
+        if isinstance(e, BrokenPipeError) or getattr(e, "errno", None) == errno.EPIPE:
+            sys.exit(0)
+        raise
 
 
 def run_daemon(stdin: IO[str], stdout: IO[str],

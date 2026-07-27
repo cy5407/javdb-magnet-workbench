@@ -309,7 +309,7 @@ Each agent surfaced refactor-relevant oddities. Consolidated here.
 
 ### Rust backend (`rust-backend.md` "Notable Findings")
 
-- **`forget_magnets` skips the `ok` check** — silently returns 0 on sidecar failure. Unique among sidecar-wrapping commands. [`commands.rs:155`](../../app/src-tauri/src/commands.rs#L155)
+- ~~**`forget_magnets` skips the `ok` check**~~ **RESOLVED M9 Phase 0-A**: updated `commands.rs` to call `ensure_ok(&resp)?`. [`commands.rs:146`](../../app/src-tauri/src/commands.rs#L146)
 - **No Rust-side logging anywhere.** Sidecar stderr is dropped on the floor. Only `eprintln!` in the codebase is the legacy-token migration. [`sidecar_manager.rs:71`](../../app/src-tauri/src/sidecar_manager.rs#L71)
 - **`SidecarManager` has no `Drop` and no respawn-on-crash.** Once the line-reader task exits, every subsequent `request()` errors out and the user must restart the app.
 - **`block_on` during `.setup`** for the sidecar handshake. Any sidecar slowness delays window open. [`lib.rs:109`](../../app/src-tauri/src/lib.rs#L109)
@@ -322,7 +322,7 @@ Each agent surfaced refactor-relevant oddities. Consolidated here.
 
 ### Frontend lib (`frontend-lib.md`)
 
-- **`sortRows(column="code")` actually sorts by `name`** — `MagnetRow` has no `code` field. Latent bug. [`magnetUtils.ts:132`](../../app/src/lib/magnetUtils.ts#L132)
+- ~~**`sortRows(column="code")` actually sorts by `name`**~~ **RESOLVED M9 Phase 3**: `"code"` removed from `SortColumn` union type. [`magnetUtils.ts`](../../app/src/lib/magnetUtils.ts)
 
 ### App.svelte (`app-svelte.md` "Refactor hotspots")
 
@@ -332,7 +332,7 @@ Each agent surfaced refactor-relevant oddities. Consolidated here.
 
 ### Sidecar runtime (`sidecar-runtime.md`)
 
-- **`cmd_forget_magnets` ignores `handle_ids`** — Rust can send a selective deletion payload, but the live sidecar clears the entire handle table and returns the total old count. This makes the Rust command name/signature more precise than the daemon behavior. [`sidecar.py:308`](../../sidecar/sidecar.py#L308)
+- ~~**`cmd_forget_magnets` ignores `handle_ids`**~~ **RESOLVED M9 Phase 0-B**: updated `cmd_forget_magnets` in `sidecar.py` to support optional `handle_ids` subset deletion, reverse index cleanup, and element type validation. [`sidecar.py:430`](../../sidecar/sidecar.py#L430)
 - **`cmd_cancel` is an acknowledgement only** — it cannot interrupt in-flight JavDB or RD work because the daemon loop is synchronous. User-visible cancellation is currently batch-boundary cancellation in JS/Rust, not Python-level cancellation. [`sidecar.py:364`](../../sidecar/sidecar.py#L364)
 - **`main` accepts `--daemon` but always runs daemon mode** — harmless now, but the CLI shape implies a mode switch that no longer exists. [`sidecar.py:687`](../../sidecar/sidecar.py#L687)
 

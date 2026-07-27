@@ -137,8 +137,8 @@ def setup_logging(debug: bool = False) -> Path:
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("requests").setLevel(logging.WARNING)
 
-    _initialized = True
     _resolved_log_file = log_file
+    _initialized = True
     if chosen_dir is None:
         logging.getLogger(__name__).warning(
             f"All log dir candidates failed; running console-only. Last attempted: {last_attempted}"

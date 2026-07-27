@@ -594,6 +594,41 @@ describe("retrying a pending row through to completion", () => {
       links: ["https://rd.example/aaa"],
     });
   });
+
+  it("retryAllPending displays cancelled summary with original batch count as denominator", async () => {
+    handlers.rd_has_token = () => ({ present: true });
+    handlers.pending_list = () => [
+      pending("t-1", "AAA-001"),
+      pending("t-2", "BBB-002"),
+      pending("t-3", "CCC-003"),
+    ];
+
+    await mountApp();
+    await clickTab(RD_TAB);
+
+    let callCount = 0;
+    handlers.rd_check_pending = (args: any) => {
+      const torrentId = String(args?.torrentId ?? "");
+      callCount++;
+      const cancelBtn = screen.queryByRole("button", { name: "取消" });
+      if (cancelBtn) fireEvent.click(cancelBtn);
+      return {
+        status: "completed",
+        torrent_id: torrentId,
+        name: torrentId,
+        rd_status: "downloaded",
+        progress: 100,
+        links: [{ filename: "x.mkv", download: "https://rd.example/x" }],
+      };
+    };
+    handlers.pending_list = () => [pending("t-2", "BBB-002"), pending("t-3", "CCC-003")];
+
+    await fireEvent.click(screen.getByRole("button", { name: /全部重試/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/已取消：完成 \d+\/3/)).not.toBeNull();
+    });
+  });
 });
 
 // Task.md 2.5 — 清除 is the last of 新增/更換/驗證/清除 to land on the 設定 tab.
@@ -734,5 +769,141 @@ describe("clearing JavDB cookies from the settings tab", () => {
     await mountWithStoredCookies();
     await clickTab(RD_TAB);
     expect(isShown(clearButton(/^清除 cookies$/))).toBe(false);
+  });
+});
+
+describe("Busy Mutual Exclusion", () => {
+  it("disables clearResults while sending to RD and guards handler", async () => {
+    let resolveSend: (val: unknown) => void = () => {};
+    handlers.rd_send_magnet = () => new Promise((res) => { resolveSend = res; });
+    await mountApp();
+    await pasteOneMagnet();
+    await clickTab(RD_TAB);
+
+    const sendBtn = screen.getByRole("button", { name: /送出已勾選 1 筆到 RD/ });
+    await fireEvent.click(sendBtn);
+
+    await clickTab(SEARCH_TAB);
+    const clearBtn = screen.getByRole("button", { name: /清空全部結果/ }) as HTMLButtonElement;
+    expect(clearBtn.disabled).toBe(true);
+
+    await fireEvent.click(clearBtn);
+    expect(tauriMocks.invoke).not.toHaveBeenCalledWith("forget_magnets", expect.anything());
+
+    resolveSend({
+      status: "completed",
+      torrent_id: "t-1",
+      name: "SNOS-192",
+      links: [],
+    });
+    await waitFor(() => {
+      expect(clearBtn.disabled).toBe(false);
+    });
+  });
+});
+
+describe("Theme Management", () => {
+  it("rolls back theme on write_settings failure", async () => {
+    handlers.write_settings = () => {
+      throw new Error("disk full");
+    };
+    await mountApp();
+    await clickTab(SETTINGS_TAB);
+
+    const themeBtn = screen.getByRole("button", { name: /主題：light/ });
+    await fireEvent.click(themeBtn);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /主題：light/ })).not.toBeNull();
+      expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    });
+  });
+
+  it("prevents rapid double clicks with isThemeSaving guard", async () => {
+    let resolveWrite: (val: unknown) => void = () => {};
+    let writeCount = 0;
+    handlers.write_settings = () => {
+      writeCount += 1;
+      return new Promise((res) => { resolveWrite = res; });
+    };
+
+    await mountApp();
+    await clickTab(SETTINGS_TAB);
+
+    const themeBtn = screen.getByRole("button", { name: /主題：light/ });
+    await fireEvent.click(themeBtn);
+    await fireEvent.click(themeBtn);
+
+    expect(writeCount).toBe(1);
+
+    resolveWrite(undefined);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /主題：dark/ })).not.toBeNull();
+    });
+  });
+
+  it("prevents pending mutations (refresh/clear/remove) while busy sending or retrying", async () => {
+    const pending = (torrent_id: string): PendingEntry => ({
+      torrent_id,
+      code: "SNOS-192",
+      name: "SNOS-192",
+      size_label: "1.0 GB",
+      strategy: "smart",
+      added_at: "2026-01-01T00:00:00Z",
+      last_progress: 10,
+      last_rd_status: "downloading",
+      last_checked_at: null,
+    });
+    handlers.pending_list = () => [pending("t-1")];
+    handlers.rd_has_token = () => ({ present: true });
+
+    let resolveSend: (val: unknown) => void = () => {};
+    handlers.rd_send_magnet = () => new Promise((res) => { resolveSend = res; });
+
+    await mountApp();
+    await registerTwo();
+    await clickTab(RD_TAB);
+
+    const sendBtn = screen.getByRole("button", { name: /送出已勾選 \d+ 筆到 RD/ });
+    await fireEvent.click(sendBtn);
+
+    const refreshBtn = screen.getByRole("button", { name: "重讀本機紀錄" }) as HTMLButtonElement;
+    const clearBtn = screen.getByRole("button", { name: "全部清空" }) as HTMLButtonElement;
+    const removeBtn = screen.getByRole("button", { name: "移除" }) as HTMLButtonElement;
+
+    expect(refreshBtn.disabled).toBe(true);
+    expect(clearBtn.disabled).toBe(true);
+
+    tauriMocks.invoke.mockClear();
+    await fireEvent.click(refreshBtn);
+    await fireEvent.click(clearBtn);
+    await fireEvent.click(removeBtn);
+
+    expect(tauriMocks.invoke).not.toHaveBeenCalledWith("pending_list", expect.anything());
+    expect(tauriMocks.invoke).not.toHaveBeenCalledWith("pending_clear", expect.anything());
+    expect(tauriMocks.invoke).not.toHaveBeenCalledWith("pending_remove", expect.anything());
+
+    resolveSend({ status: "completed", torrent_id: "t-1", name: "SNOS-192", links: [] });
+  });
+
+  it("shows 取消中… feedback when canceling RD send", async () => {
+    handlers.rd_has_token = () => ({ present: true });
+    let resolveSend: (val: unknown) => void = () => {};
+    handlers.rd_send_magnet = () => new Promise((res) => { resolveSend = res; });
+
+    await mountApp();
+    await registerTwo();
+    await clickTab(RD_TAB);
+
+    await fireEvent.click(screen.getByRole("button", { name: /送出已勾選 \d+ 筆到 RD/ }));
+    const cancelBtn = screen.getByRole("button", { name: "取消" });
+    await fireEvent.click(cancelBtn);
+
+    expect(screen.getByRole("button", { name: "取消中…" })).not.toBeNull();
+
+    resolveSend({ status: "completed", torrent_id: "t-1", name: "SNOS-192", links: [] });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "取消中…" })).toBeNull();
+    });
   });
 });

@@ -372,12 +372,9 @@ DTO.
 **Contract**:
 - Params: `handle_ids` — list of ids or `None` for "all".
 - Returns: number of handles dropped. Compatible with two field names: `forgot` or `forgotten` ([commands.rs:157-158](app/src-tauri/src/commands.rs:157)).
-- Side effects: sidecar state mutation.
-- Errors: transport errors propagate; **does not check `ok`** — returns 0 if the count field is missing.
+- Errors: transport errors propagate; calls `ensure_ok` so sidecar error envelopes propagate as `Err`.
 - Async: yes.
 - Authorization: requires sidecar.
-
-**Oddity**: this command does NOT check `resp.ok` before reading the count, unlike its siblings. If the sidecar returns `{"ok": false, ...}` this happily returns 0 without surfacing the error.
 
 **Calls**: `sidecar.request("forget_magnets", payload)` → [sidecar_manager.rs:116](app/src-tauri/src/sidecar_manager.rs:116).
 
@@ -1770,7 +1767,7 @@ commands::apply_legacy_import                         (commands.rs:626)
 
 ## 6. Notable Findings / Oddities
 
-- **`forget_magnets` does not check `resp.ok`** before extracting the count ([commands.rs:155-160](app/src-tauri/src/commands.rs:155)). If the sidecar returns `{"ok": false, ...}`, this command silently returns `0`. Unique among the sidecar-wrapping commands — every sibling guards on `ok` and routes to `_err_code` on failure.
+- ~~**`forget_magnets` does not check `resp.ok`**~~ **RESOLVED M9 Phase 0-A**: updated `commands::forget_magnets` ([commands.rs:146](app/src-tauri/src/commands.rs#L146)) to call `ensure_ok(&resp)?`.
 - **No Rust-side logging**. The only diagnostic output is `eprintln!` in one migration path, plus `.expect` panic. Sidecar stderr is dropped on the floor. The comment at [sidecar_manager.rs:73-75](app/src-tauri/src/sidecar_manager.rs:73) acknowledges this as a deferred M6 item.
 - **No graceful sidecar shutdown**. `SidecarManager` has no `Drop` impl and no goodbye message. The child process termination is whatever the OS / plugin-shell does at app exit.
 - **No sidecar respawn on crash**. Once the line-reader task exits, all subsequent `request(...)` calls error with `"sidecar closed before response"` and the user has to restart the app.

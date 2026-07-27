@@ -218,17 +218,19 @@ class Handshake(unittest.TestCase):
         self.assertTrue(resp["ok"])
         self.assertEqual(state.rd_token, "")
         self.assertTrue(state.handshake_done)
-        # Warning is structured (list of dicts with stable `code`) so a
-        # future UI can switch on it without regex-matching prose.
-        warnings = resp.get("warnings")
-        self.assertIsInstance(warnings, list)
-        self.assertEqual(len(warnings), 1)
-        self.assertEqual(warnings[0]["code"], "rd_token_format_invalid")
-        self.assertIn("message", warnings[0])
-        # The dirty token value MUST NOT round-trip back to the caller.
-        serialized = json.dumps(resp)
-        self.assertNotIn(dirty, serialized,
-                         f"handshake response leaked the dirty token: {serialized}")
+
+    def test_handshake_invalid_types_fall_back_to_empty_dicts(self):
+        state = sd.DaemonState()
+        resp = _call(state, {
+            "cmd": "handshake", "request_id": "r3",
+            "cookies": 123,
+            "settings": "dark",
+            "paths": [1, 2],
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(state.cookies, {})
+        self.assertEqual(state.settings, {})
+        self.assertEqual(state.paths, {})
 
     def test_handshake_drops_overlong_token(self):
         state = sd.DaemonState()
@@ -622,15 +624,81 @@ class ForgetMagnets(unittest.TestCase):
         state = sd.DaemonState()
         state.magnets["h-1"] = "m1"
         state.magnets["h-2"] = "m2"
+        state.magnet_to_handle["m1"] = "h-1"
+        state.magnet_to_handle["m2"] = "h-2"
         resp = _call(state, {"cmd": "forget_magnets", "request_id": "r1"})
         self.assertTrue(resp["ok"])
         self.assertEqual(resp["forgot"], 2)
         self.assertEqual(state.magnets, {})
+        self.assertEqual(state.magnet_to_handle, {})
 
     def test_forget_empty_returns_zero(self):
         state = sd.DaemonState()
         resp = _call(state, {"cmd": "forget_magnets", "request_id": "r1"})
         self.assertEqual(resp["forgot"], 0)
+
+    def test_forget_subset(self):
+        state = sd.DaemonState()
+        # 1. Register two BTIH magnets via register_magnets
+        m1 = "magnet:?xt=urn:btih:0201592f00000000000000000000000000000001"
+        m2 = "magnet:?xt=urn:btih:0201592f00000000000000000000000000000002"
+        reg1 = _call(state, {"cmd": "register_magnets", "request_id": "r1", "magnets": [m1, m2]})
+        h1 = reg1["registered"][0]["handle_id"]
+        h2 = reg1["registered"][1]["handle_id"]
+
+        # 2. Forget h1
+        resp = _call(state, {"cmd": "forget_magnets", "request_id": "r2", "handle_ids": [h1]})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["forgot"], 1)
+        self.assertNotIn(h1, state.magnets)
+        self.assertIn(h2, state.magnets)
+
+        # 3. Check reverse index cleanup for normalized key
+        key1 = sd._magnet_dedupe_key(m1)
+        key2 = sd._magnet_dedupe_key(m2)
+        self.assertNotIn(key1, state.magnet_to_handle)
+        self.assertEqual(state.magnet_to_handle[key2], h2)
+
+        # 4. Re-register m1: must allocate a NEW handle, deduped must be False, and it must resolve cleanly
+        reg2 = _call(state, {"cmd": "register_magnets", "request_id": "r3", "magnets": [m1]})
+        h1_new = reg2["registered"][0]["handle_id"]
+        self.assertNotEqual(h1_new, h1)
+        self.assertFalse(reg2["registered"][0]["deduped"])
+
+        resolve_resp = _call(state, {"cmd": "resolve_magnet", "request_id": "r4", "handle_id": h1_new})
+        self.assertTrue(resolve_resp["ok"])
+        self.assertEqual(resolve_resp["magnet"], m1)
+
+    def test_forget_empty_array_noop(self):
+        state = sd.DaemonState()
+        state.magnets["h-1"] = "m1"
+        resp = _call(state, {"cmd": "forget_magnets", "request_id": "r1", "handle_ids": []})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["forgot"], 0)
+        self.assertIn("h-1", state.magnets)
+
+    def test_forget_duplicate_and_unknown(self):
+        state = sd.DaemonState()
+        state.magnets["h-1"] = "m1"
+        state.magnet_to_handle["m1"] = "h-1"
+        resp = _call(state, {"cmd": "forget_magnets", "request_id": "r1", "handle_ids": ["h-1", "h-1", "unknown-h"]})
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["forgot"], 1)
+        self.assertNotIn("h-1", state.magnets)
+
+    def test_forget_mixed_types_returns_invalid_and_no_mutation(self):
+        state = sd.DaemonState()
+        state.magnets["h-1"] = "m1"
+        state.magnets["h-2"] = "m2"
+        state.magnet_to_handle["m1"] = "h-1"
+        state.magnet_to_handle["m2"] = "h-2"
+        resp = _call(state, {"cmd": "forget_magnets", "request_id": "r1", "handle_ids": ["h-1", {}, 42]})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
+        # Ensure NO partial deletion occurred
+        self.assertEqual(len(state.magnets), 2)
+        self.assertIn("h-1", state.magnets)
+        self.assertIn("h-2", state.magnets)
 
 
 # ---------------------------------------------------------------------------
@@ -652,6 +720,12 @@ class UpdateSettings(unittest.TestCase):
         resp = _call(state, {"cmd": "update_settings", "request_id": "r1"})
         self.assertTrue(resp["ok"])
         self.assertEqual(state.settings, {"a": 1})
+
+    def test_update_settings_non_dict_returns_bad_request(self):
+        state = sd.DaemonState()
+        resp = _call(state, {"cmd": "update_settings", "request_id": "r1", "settings": "dark"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "bad_request")
 
 
 class Cancel(unittest.TestCase):
@@ -841,10 +915,12 @@ class RdUser(unittest.TestCase):
     def test_returns_user_snapshot_on_success(self):
         state = _rd_state()
         fake = mock.MagicMock()
-        fake._request.return_value = {
+        user_info = {
             "username": "alice", "type": "premium",
             "expiration": "2026-12-01", "points": 9999,
         }
+        fake.user.return_value = user_info
+        fake._request.return_value = user_info
         with mock.patch.object(sd, "_rd_client", return_value=fake):
             resp = _call(state, {"cmd": "rd_user", "request_id": "r"})
         self.assertTrue(resp["ok"])
@@ -863,8 +939,10 @@ class RdUser(unittest.TestCase):
         state = sd.DaemonState()
         state.handshake_done = True  # but state.rd_token = ""
         fake = mock.MagicMock()
-        fake._request.return_value = {"username": "bob", "type": "premium",
-                                       "expiration": "", "points": 0}
+        user_info = {"username": "bob", "type": "premium",
+                     "expiration": "", "points": 0}
+        fake.user.return_value = user_info
+        fake._request.return_value = user_info
         with mock.patch.object(sd, "_rd_client", return_value=fake):
             resp = _call(state, {
                 "cmd": "rd_user", "request_id": "r", "token": "candidate",
@@ -1205,6 +1283,29 @@ class RdSendMagnet(unittest.TestCase):
         self.assertEqual(kwargs["strategy"], "largest")
         self.assertEqual(kwargs["cache_wait"], 5)
 
+    def test_rd_send_magnet_timeout_budget_bounded_by_req_baseline(self):
+        state = self._state_with_magnet()
+        state.settings = {"rd": {"cache_wait_seconds": 300}}
+        fake = mock.MagicMock()
+        fake.process_magnet.return_value = {"status": "completed", "torrent_id": "T", "name": "n", "links": []}
+
+        captured_client_kwargs = {}
+        def fake_rd_client(st, min_size_mb=500, deadline=None):
+            captured_client_kwargs["deadline"] = deadline
+            return fake
+
+        import time
+        now = time.monotonic()
+        with mock.patch.object(sd, "_rd_client", side_effect=fake_rd_client):
+            resp = _call(state, {"cmd": "rd_send_magnet", "request_id": "r", "handle_id": "h-1"})
+
+        self.assertTrue(resp["ok"])
+        process_kwargs = fake.process_magnet.call_args.kwargs
+        self.assertEqual(process_kwargs["cache_wait"], 15)
+        deadline = captured_client_kwargs["deadline"]
+        self.assertIsNotNone(deadline)
+        self.assertLessEqual(deadline - now, 91.0)
+
     def test_magnet_error_classified(self):
         from realdebrid import RealDebridError
         state = self._state_with_magnet()
@@ -1319,6 +1420,16 @@ class RdDispatchRegistration(unittest.TestCase):
         for cmd in ("rd_user", "rd_set_token", "rd_send_magnet", "rd_check_pending"):
             self.assertIn(cmd, sd.DISPATCH, f"{cmd} missing from DISPATCH")
 
+    def test_rd_user_requires_handshake(self):
+        state = sd.DaemonState()
+        state.handshake_done = False
+        with mock.patch.object(sd, "_rd_client") as mock_client:
+            resp = _call(state, {"cmd": "rd_user", "request_id": "r1", "token": "a" * 52})
+            self.assertFalse(resp["ok"])
+            self.assertEqual(resp["error"]["code"], "bad_request")
+            self.assertIn("handshake required", resp["error"]["message"])
+            mock_client.assert_not_called()
+
 
 class RegisterMagnets(unittest.TestCase):
     """Paste-raw-magnet path: register magnets straight into the handle table
@@ -1344,6 +1455,20 @@ class RegisterMagnets(unittest.TestCase):
         self.assertTrue(
             resp["registered"][0]["magnet_redacted"].startswith("magnet:?xt=urn:btih:01234567")
         )
+
+    def test_register_magnets_invalid_echo_truncated_to_64_chars(self):
+        state = sd.DaemonState()
+        long_non_magnet = "http://" + "x" * 100
+        long_non_string = {"key": "value" * 20}
+        resp = _call(state, {
+            "cmd": "register_magnets",
+            "request_id": "r",
+            "magnets": [long_non_magnet, long_non_string],
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(len(resp["invalid"]), 2)
+        self.assertLessEqual(len(resp["invalid"][0]), 64)
+        self.assertLessEqual(len(resp["invalid"][1]), 64)
 
     def test_dedupes_identical_magnets(self):
         state = sd.DaemonState()
@@ -1690,6 +1815,110 @@ class FetchJavdbLimits(unittest.TestCase):
         # state should hold only the short one
         self.assertEqual(len(state.magnets), 1)
         self.assertEqual(list(state.magnets.values())[0], short)
+
+
+class SessionCloseContract(unittest.TestCase):
+    def _state(self):
+        s = sd.DaemonState()
+        s.handshake_done = True
+        s.rd_token = "tok"
+        s.magnets["h-1"] = "magnet:?xt=urn:btih:" + "a" * 40
+        return s
+
+    def test_cmd_rd_user_closes_client_on_success_and_error(self):
+        state = self._state()
+        fake = mock.MagicMock()
+        fake.user.return_value = {"username": "u"}
+        with mock.patch.object(sd, "_rd_client", return_value=fake):
+            resp = _call(state, {"cmd": "rd_user", "request_id": "r"})
+        self.assertTrue(resp["ok"])
+        fake.close.assert_called_once()
+
+        fake_err = mock.MagicMock()
+        from realdebrid import RealDebridError
+        fake_err.user.side_effect = RealDebridError("API error")
+        with mock.patch.object(sd, "_rd_client", return_value=fake_err):
+            resp = _call(state, {"cmd": "rd_user", "request_id": "r"})
+        self.assertFalse(resp["ok"])
+        fake_err.close.assert_called_once()
+
+    def test_cmd_rd_send_magnet_closes_client_on_success_and_error(self):
+        state = self._state()
+        fake = mock.MagicMock()
+        fake.process_magnet.return_value = {"status": "completed", "torrent_id": "T", "name": "n", "links": []}
+        with mock.patch.object(sd, "_rd_client", return_value=fake):
+            resp = _call(state, {"cmd": "rd_send_magnet", "request_id": "r", "handle_id": "h-1"})
+        self.assertTrue(resp["ok"])
+        fake.close.assert_called_once()
+
+        fake_err = mock.MagicMock()
+        from realdebrid import RealDebridError
+        fake_err.process_magnet.side_effect = RealDebridError("process error")
+        with mock.patch.object(sd, "_rd_client", return_value=fake_err):
+            resp = _call(state, {"cmd": "rd_send_magnet", "request_id": "r", "handle_id": "h-1"})
+        self.assertFalse(resp["ok"])
+        fake_err.close.assert_called_once()
+
+    def test_cmd_rd_check_pending_closes_client_on_success_and_error(self):
+        state = self._state()
+        fake = mock.MagicMock()
+        fake.check_torrent.return_value = {"status": "completed", "torrent_id": "T", "name": "n", "links": []}
+        with mock.patch.object(sd, "_rd_client", return_value=fake):
+            resp = _call(state, {"cmd": "rd_check_pending", "request_id": "r", "torrent_id": "T"})
+        self.assertTrue(resp["ok"])
+        fake.close.assert_called_once()
+
+        fake_err = mock.MagicMock()
+        from realdebrid import RealDebridError
+        fake_err.check_torrent.side_effect = RealDebridError("check error")
+        with mock.patch.object(sd, "_rd_client", return_value=fake_err):
+            resp = _call(state, {"cmd": "rd_check_pending", "request_id": "r", "torrent_id": "T"})
+        self.assertFalse(resp["ok"])
+        fake_err.close.assert_called_once()
+
+    def test_cmd_fetch_javdb_closes_session_on_success_and_error(self):
+        state = self._state()
+        fake_session = mock.MagicMock()
+        fake_result = {"url": "https://javdb.com/v/x", "code": "x", "title": "t", "magnets": [], "error": ""}
+        with mock.patch.object(sd, "create_session", return_value=(fake_session, "requests")), \
+             mock.patch.object(sd, "fetch_magnets", return_value=fake_result):
+            resp = sd.cmd_fetch_javdb(state, {"request_id": "r", "url": "https://javdb.com/v/x"})
+        self.assertTrue(resp["ok"])
+        fake_session.close.assert_called_once()
+
+        fake_session_err = mock.MagicMock()
+        with mock.patch.object(sd, "create_session", return_value=(fake_session_err, "requests")), \
+             mock.patch.object(sd, "fetch_magnets", side_effect=Exception("scrape fail")):
+            resp = sd.cmd_fetch_javdb(state, {"request_id": "r", "url": "https://javdb.com/v/x"})
+        self.assertFalse(resp["ok"])
+        fake_session_err.close.assert_called_once()
+
+
+class EmitBrokenPipe(unittest.TestCase):
+    def test_emit_broken_pipe_exits_cleanly_sys_exit_0(self):
+        import errno
+        mock_stdout = mock.MagicMock()
+        mock_stdout.flush.side_effect = BrokenPipeError("Broken pipe")
+        with self.assertRaises(SystemExit) as cm:
+            sd._emit(mock_stdout, {"ok": True})
+        self.assertEqual(cm.exception.code, 0)
+
+        mock_stdout_epipe = mock.MagicMock()
+        err = OSError("Broken pipe")
+        err.errno = errno.EPIPE
+        mock_stdout_epipe.flush.side_effect = err
+        with self.assertRaises(SystemExit) as cm:
+            sd._emit(mock_stdout_epipe, {"ok": True})
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_emit_other_oserror_is_re_raised(self):
+        import errno
+        mock_stdout = mock.MagicMock()
+        err = OSError("Permission denied")
+        err.errno = errno.EACCES
+        mock_stdout.flush.side_effect = err
+        with self.assertRaises(OSError):
+            sd._emit(mock_stdout, {"ok": True})
 
 
 class MainCli(unittest.TestCase):

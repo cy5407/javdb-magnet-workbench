@@ -241,7 +241,7 @@ describe("scrapeBatch", () => {
     expect(progress).not.toHaveBeenCalled();
   });
 
-  it("AbortSignal stops further URLs", async () => {
+  it("AbortSignal stops further URLs and leaves aborted fetch as pending", async () => {
     const ctrl = new AbortController();
     const urls = ["https://a", "https://b", "https://c"];
     const fetcher = vi.fn(async (u: string) => {
@@ -255,11 +255,35 @@ describe("scrapeBatch", () => {
       retryWaitRange: [0, 0],
       signal: ctrl.signal,
     });
-    // First URL completes, the others should remain pending.
-    expect(out[0].status).toBe("ok");
+    // Aborted fetch is marked pending (not ok/error)
+    expect(out[0].status).toBe("pending");
     expect(out[1].status).toBe("pending");
     expect(out[2].status).toBe("pending");
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects result when signal is aborted after fetcher resolves without setting ok/error status", async () => {
+    const ctrl = new AbortController();
+    const urls = ["https://a"];
+    const fetcher = vi.fn(async (u: string) => {
+      const res = fakeResult(u);
+      ctrl.abort();
+      return res;
+    });
+
+    const progress = vi.fn();
+    const out = await scrapeBatch(urls, progress, {
+      sleep: noSleep,
+      fetcher,
+      delayRange: [0, 0],
+      retryWaitRange: [0, 0],
+      signal: ctrl.signal,
+    });
+
+    expect(out[0].status).toBe("pending");
+    expect(out[0].finished_at).toBeNull();
+    expect(out[0].result).toBeNull();
+    expect(progress).not.toHaveBeenCalled();
   });
 
   it("does not sleep before the first url, sleeps once between two urls", async () => {
