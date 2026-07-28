@@ -276,8 +276,9 @@ def _magnet_dedupe_key(full: str) -> str:
     super-linear), find an `xt` value of the form `urn:btih:<hex>`,
     lowercase the hex and return `btih:<hex>`. If no BTIH can be
     parsed (e.g. v2 `urn:btmh:` or a malformed string that somehow
-    slipped past upstream validation), fall back to the trimmed full
-    string so dedupe still works conservatively.
+    slipped past upstream validation), fall back to `raw:` + trimmed full
+    string so fallback key and btih key live in different namespaces and
+    hostile non-btih inputs cannot forge collisions.
     """
     stripped = full.strip()
     parsed = urllib.parse.urlparse(stripped)
@@ -290,7 +291,9 @@ def _magnet_dedupe_key(full: str) -> str:
         hash_hex = lower[len(_BTIH_PREFIX):]
         if hash_hex and all(c in _HEX_CHARS for c in hash_hex):
             return "btih:" + hash_hex
-    return stripped
+    return "raw:" + stripped if stripped else ""
+
+
 
 
 def _intern_magnet(state: DaemonState, full: str) -> tuple[str, bool]:
@@ -378,6 +381,10 @@ def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
         full = m.get("magnet", "")
         if not isinstance(full, str) or len(full) > MAX_MAGNET_URI_LEN:
             continue   # silently drop oversized — the page itself is malicious
+        if not full.lower().startswith("magnet:"):
+            continue   # F-xx: hostile page may serve non-magnet hrefs; the
+                       # register path enforces the same prefix, so both writers
+                       # into the handle table agree.
         # Intern via the reverse table so a magnet that already has a
         # handle (e.g. re-fetch of the same JavDB page, or previously
         # registered by the paste path) keeps its existing handle_id.
@@ -596,6 +603,21 @@ def _classify_rd_error(message: str) -> str:
     return _RD_ERR_API
 
 
+def _rd_settings(state: DaemonState) -> dict:
+    """Nested `rd` settings, guaranteed dict.
+
+    `settings` itself is type-guarded at the handshake/update_settings
+    boundary, but the nested `rd` key is not — a truthy non-dict (string,
+    list) would otherwise reach `.get()` and turn every RD command into an
+    opaque `internal` envelope until settings are replaced.
+    """
+    settings = state.settings
+    if not isinstance(settings, dict):
+        return {}
+    rd = settings.get("rd")
+    return rd if isinstance(rd, dict) else {}
+
+
 def _rd_client(state: DaemonState, token_override: str | None = None,
                min_size_mb: int | None = None, deadline: float | None = None):
     """Build a fresh RealDebrid client. Cheap (just a requests.Session).
@@ -608,7 +630,7 @@ def _rd_client(state: DaemonState, token_override: str | None = None,
     if not token:
         raise RealDebridError("RD_API_TOKEN not configured")
     if min_size_mb is None:
-        rd_settings = (state.settings or {}).get("rd") or {}
+        rd_settings = _rd_settings(state)
         min_size_mb = _coerce_int_setting(
             rd_settings.get("min_size_mb"),
             min_value=0,
@@ -623,7 +645,7 @@ def _rd_client(state: DaemonState, token_override: str | None = None,
 def _resolve_strategy(state: DaemonState, override: str | None) -> str:
     if isinstance(override, str) and override:
         return override
-    rd_settings = (state.settings or {}).get("rd") or {}
+    rd_settings = _rd_settings(state)
     s = rd_settings.get("file_pick")
     return s if isinstance(s, str) and s else "smart"
 
@@ -649,11 +671,12 @@ def _resolve_int_setting(
     result = _coerce_int_setting(override, min_value=min_value)
     if result is not None:
         return result
-    rd_settings = (state.settings or {}).get("rd") or {}
+    rd_settings = _rd_settings(state)
     result = _coerce_int_setting(rd_settings.get(key), min_value=min_value)
     if result is not None:
         return result
     return default
+
 
 
 def cmd_rd_user(state: DaemonState, req: dict) -> dict:
@@ -762,11 +785,17 @@ def cmd_rd_send_magnet(state: DaemonState, req: dict) -> dict:
 
     strategy = _resolve_strategy(state, req.get("strategy"))
     req_cw_raw = req.get("cache_wait")
-    req_cw_base = req_cw_raw if isinstance(req_cw_raw, int) and req_cw_raw >= 1 else 15
+    # `type(...) is int` (not isinstance) so bools don't slip through, matching
+    # _coerce_int_setting.
+    req_has_cw = type(req_cw_raw) is int and req_cw_raw >= 1
     resolved_cw = _resolve_int_setting(
         state, "cache_wait_seconds", req.get("cache_wait"), 15, min_value=1,
     )
-    cache_wait = min(resolved_cw, req_cw_base)
+    # The Rust caller computes its timeout budget from the request payload:
+    # `cache_wait + 90` when present, `15 + 90` when omitted (sidecar_manager.rs
+    # timeout_for). Our deadline must stay inside whichever budget Rust used, so
+    # only clamp to 15 when the request actually omitted the field.
+    cache_wait = resolved_cw if req_has_cw else min(resolved_cw, 15)
     min_size_mb = _resolve_int_setting(
         state, "min_size_mb", req.get("min_size_mb"), 500, min_value=0,
     )

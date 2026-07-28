@@ -276,6 +276,16 @@ class RequestRateLimit(unittest.TestCase):
         self.assertEqual(mock_req.call_count, 2)
         mock_sleep.assert_not_called()
 
+    def test_429_gives_up_after_3_retries(self):
+        resps = [_resp(429, headers={"Retry-After": "1"}) for _ in range(4)]
+        with mock.patch.object(self.rd.session, "request", side_effect=resps) as mock_req, \
+             mock.patch("realdebrid.time.sleep") as mock_sleep:
+            with self.assertRaises(RealDebridError) as cm:
+                self.rd._request("GET", "/torrents")
+        self.assertIn("HTTP 429", str(cm.exception))
+        self.assertEqual(mock_req.call_count, 4)
+        self.assertEqual(mock_sleep.call_count, 3)
+
 
 # ---------------------------------------------------------------------------
 # add_magnet / select_files / delete_torrent thin wrappers

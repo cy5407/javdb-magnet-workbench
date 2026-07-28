@@ -907,3 +907,155 @@ describe("Theme Management", () => {
     });
   });
 });
+
+describe("Settings Write Exclusion & Theme Rollback (Item 4)", () => {
+  it("settingsWriteBusy blocks concurrent settings writers", async () => {
+    let resolveWrite: (val: unknown) => void = () => {};
+    let writeCount = 0;
+    handlers.write_settings = () => {
+      writeCount += 1;
+      return new Promise((res) => { resolveWrite = res; });
+    };
+
+    await mountApp();
+    await clickTab(SETTINGS_TAB);
+
+    // 1. Trigger toggleTheme -> starts theme saving
+    const themeBtn = screen.getByRole("button", { name: /主題：light/ });
+    await fireEvent.click(themeBtn);
+    expect(writeCount).toBe(1);
+
+    // Expand settings section while busy
+    const expandBtns = screen.getAllByRole("button", { name: /展開/ });
+    // Expand legacy section (first expand button)
+    await fireEvent.click(expandBtns[0]);
+
+    // Input in legacy section should be disabled by settingsWriteBusy
+    const legacyInput = screen.getByPlaceholderText(/程式語言/) as HTMLInputElement;
+    expect(legacyInput.disabled).toBe(true);
+
+    resolveWrite(undefined);
+  });
+
+  it("does not mutate new settings object on theme rollback after reference replacement", async () => {
+    let rejectWrite: (err: Error) => void = () => {};
+    handlers.write_settings = () => new Promise((_, rej) => { rejectWrite = rej; });
+
+    await mountApp();
+    await clickTab(SETTINGS_TAB);
+
+    const themeBtn = screen.getByRole("button", { name: /主題：light/ });
+    await fireEvent.click(themeBtn);
+
+    // Simulate concurrent reload replacing settings object with a new object (e.g. theme "dark")
+    const newSettings: Settings = {
+      version: 1,
+      ui: { theme: "dark", scale: "auto" },
+      rd: { api_token: "", file_pick: "smart", min_size_mb: 0, cache_wait_seconds: 5 },
+    };
+    handlers.read_settings = () => newSettings;
+
+    // Trigger write failure
+    rejectWrite(new Error("write failed"));
+
+    await waitFor(() => {
+      // canonical newSettings should remain "dark", not rolled back to "light"
+      expect(newSettings.ui.theme).toBe("dark");
+    });
+  });
+});
+
+describe("Stale Handle Forget on Scrape (Item 6)", () => {
+  it("forgets ONLY web group handles on startScrape, excluding manual group handles", async () => {
+    let forgetArgs: { handleIds: string[] } | null = null;
+    handlers.forget_magnets = (args) => {
+      forgetArgs = args as { handleIds: string[] };
+      return (args?.handleIds as string[]).length;
+    };
+    handlers.fetch_javdb = (args) => ({
+      engine: "javdb",
+      url: (args?.url as string) || "https://javdb.com/v/ABC123",
+      code: "ABC-123",
+      title: "Title",
+      magnet_count: 1,
+      magnets: [
+        { handle_id: "web-h-1", name: "ABC-123", size: "1 GB", tags: ["HD"], date: "2026-01-01", magnet_redacted: "magnet:?xt=urn:btih:web1…" },
+      ],
+    });
+
+    await mountApp();
+    // Register 1 manual magnet -> manual group with h-1
+    await pasteOneMagnet();
+
+    // 1st scrape: web URL
+    const urlBox = screen.getByPlaceholderText(/https:\/\/javdb/);
+    await fireEvent.input(urlBox, { target: { value: "https://javdb.com/v/ABC123" } });
+    await fireEvent.click(screen.getByRole("button", { name: "開始擷取" }));
+
+    await waitFor(() => {
+      expect(tauriMocks.invoke).toHaveBeenCalledWith("fetch_javdb", expect.anything());
+    });
+
+
+
+    // Reset forgetArgs before 2nd scrape
+    forgetArgs = null;
+
+    // 2nd scrape: another web URL
+    await fireEvent.input(urlBox, { target: { value: "https://javdb.com/v/XYZ789" } });
+    await fireEvent.click(screen.getByRole("button", { name: "開始擷取" }));
+
+    await waitFor(() => {
+      expect(forgetArgs).not.toBeNull();
+      expect(forgetArgs!.handleIds).toEqual(["web-h-1"]);
+      expect(forgetArgs!.handleIds).not.toContain("h-1");
+    });
+  });
+
+  it("does not call forget_magnets when there are no web groups", async () => {
+    let forgetCalled = false;
+    handlers.forget_magnets = () => {
+      forgetCalled = true;
+      return 0;
+    };
+
+    await mountApp();
+    await pasteOneMagnet(); // only manual group
+
+    const urlBox = screen.getByPlaceholderText(/https:\/\/javdb/);
+    await fireEvent.input(urlBox, { target: { value: "https://javdb.com/v/ABC123" } });
+    await fireEvent.click(screen.getByRole("button", { name: "開始擷取" }));
+
+    expect(forgetCalled).toBe(false);
+  });
+
+  it("proceeds with scrape even if forget_magnets throws", async () => {
+    handlers.forget_magnets = () => {
+      throw new Error("RPC error");
+    };
+    let fetchCalled = false;
+    handlers.fetch_javdb = (args) => {
+      fetchCalled = true;
+      return {
+        engine: "javdb",
+        url: (args?.url as string) || "https://javdb.com/v/ABC123",
+        code: "ABC-123",
+        title: "T",
+        magnet_count: 1,
+        magnets: [{ handle_id: "w-1", name: "A", size: "1 GB", tags: [], date: "2026-01-01", magnet_redacted: "m" }],
+      };
+    };
+
+    await mountApp();
+    const urlBox = screen.getByPlaceholderText(/https:\/\/javdb/);
+    await fireEvent.input(urlBox, { target: { value: "https://javdb.com/v/ABC123" } });
+    await fireEvent.click(screen.getByRole("button", { name: "開始擷取" }));
+    await waitFor(() => { expect(fetchCalled).toBe(true); });
+
+    // Scrape again
+    fetchCalled = false;
+    await fireEvent.input(urlBox, { target: { value: "https://javdb.com/v/XYZ789" } });
+    await fireEvent.click(screen.getByRole("button", { name: "開始擷取" }));
+    await waitFor(() => { expect(fetchCalled).toBe(true); });
+  });
+});

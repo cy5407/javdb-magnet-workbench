@@ -44,13 +44,13 @@ const RD_SEND_TIMEOUT_SLACK_SECS: u64 = 90;
 /// Hard ceiling on `cache_wait` accepted from the frontend. Keeps the
 /// per-request budget bounded (300 + 90 = 390s max). Mirrors the
 /// frontend `validateCacheWaitSeconds` ceiling.
-const MAX_RD_CACHE_WAIT_SECS: u64 = 300;
+pub(crate) const MAX_RD_CACHE_WAIT_SECS: u64 = 300;
 
 /// Floor on `cache_wait`. Mirrors the frontend `validateCacheWaitSeconds`
 /// floor — anything lower is almost certainly a frontend bug, not user
 /// intent, and we'd rather refuse than start an RD round-trip we'll
 /// likely abandon.
-const MIN_RD_CACHE_WAIT_SECS: u64 = 5;
+pub(crate) const MIN_RD_CACHE_WAIT_SECS: u64 = 5;
 
 /// Default `cache_wait` when the frontend omits the field (matches the
 /// frontend default in `app/src/App.svelte` settings init).

@@ -478,5 +478,40 @@ class RdSendMagnetSettingsWiring(unittest.TestCase):
         self.assertNotIn("secret-leak-here", resp["error"]["internal"])
 
 
+# ---------------------------------------------------------------------------
+# Non-dict rd settings safety
+# ---------------------------------------------------------------------------
+
+class NonDictRdSettingsHandling(unittest.TestCase):
+    def test_non_dict_rd_settings_does_not_break_rd_commands(self):
+        state = sd.DaemonState()
+        sd.dispatch(state, {"cmd": "handshake", "request_id": "r0", "cookies": "", "rd_token": "tok", "settings": {}, "paths": {}})
+        sd.dispatch(state, {"cmd": "update_settings", "request_id": "r1", "settings": {"rd": "pwn"}})
+        resp = sd.dispatch(state, {"cmd": "rd_user", "request_id": "r2"})
+        if not resp["ok"]:
+            self.assertNotIn(resp["error"]["code"], [sd._RD_ERR_INTERNAL, "internal"])
+
+    def test_non_dict_rd_settings_list_variant(self):
+        state = sd.DaemonState()
+        sd.dispatch(state, {"cmd": "handshake", "request_id": "r0", "cookies": "", "rd_token": "tok", "settings": {}, "paths": {}})
+        sd.dispatch(state, {"cmd": "update_settings", "request_id": "r1", "settings": {"rd": [1, 2]}})
+        resp = sd.dispatch(state, {"cmd": "rd_user", "request_id": "r2"})
+        if not resp["ok"]:
+            self.assertNotIn(resp["error"]["code"], [sd._RD_ERR_INTERNAL, "internal"])
+
+    def test_rd_settings_helper_returns_dict(self):
+        state = sd.DaemonState()
+        state.settings = None
+        self.assertEqual(sd._rd_settings(state), {})
+        state.settings = "not-a-dict"
+        self.assertEqual(sd._rd_settings(state), {})
+        state.settings = {"rd": "string-rd"}
+        self.assertEqual(sd._rd_settings(state), {})
+        state.settings = {"rd": [1, 2]}
+        self.assertEqual(sd._rd_settings(state), {})
+        state.settings = {"rd": {"min_size_mb": 500}}
+        self.assertEqual(sd._rd_settings(state), {"min_size_mb": 500})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

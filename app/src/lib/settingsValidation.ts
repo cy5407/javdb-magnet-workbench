@@ -5,9 +5,10 @@
 // errors keyed by a stable id the UI uses to render inline messages.
 //
 // These functions are deliberately pure: no Tauri imports, no DOM, no
-// side effects. The Rust side enforces the same shape on persist via
-// `Settings`'s deserializer + `without_secrets` — frontend validation
-// is just an early gate to disable Save and surface a friendly message.
+// side effects. The Rust side clamps RD numerics on persist (`clamp_rd_settings` in
+// settings.rs) and blanks `api_token` via `without_secrets`; frontend
+// validation is the early gate that surfaces a friendly message before
+// the value is silently clamped.
 
 import type { Settings } from "./types";
 

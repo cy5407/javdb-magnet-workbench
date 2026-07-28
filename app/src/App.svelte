@@ -162,6 +162,11 @@
   let settingsMessage = $state("");
   let settingsMessageKind = $state<"ok" | "error" | "info">("info");
 
+  // Any settings.json writer excludes the others — write_settings is a
+  // whole-file overwrite with no merge, so interleaved writes silently
+  // revert whichever fields the loser had changed.
+  let settingsWriteBusy = $derived(isThemeSaving || settingsSaving || legacyBusy);
+
   function applyTheme(t: Theme) {
     document.documentElement.dataset.theme = t;
   }
@@ -242,7 +247,7 @@
   });
 
   async function toggleTheme() {
-    if (isThemeSaving) return;
+    if (settingsWriteBusy) return;
     if (settings === null) {
       statusMessage = "設定尚未載入";
       return;
@@ -251,6 +256,7 @@
     const oldSettingsTheme = settings.ui.theme;
     const oldDraftTheme = settingsDraft ? settingsDraft.ui.theme : undefined;
     const newTheme = theme === "light" ? "dark" : "light";
+    const settingsRef = settings;
 
     isThemeSaving = true;
     theme = newTheme;
@@ -265,7 +271,9 @@
       statusMessage = `主題已儲存：${newTheme}`;
     } catch (e) {
       theme = oldTheme;
-      settings.ui.theme = oldSettingsTheme;
+      if (settings === settingsRef) {
+        settings.ui.theme = oldSettingsTheme;
+      }
       if (settingsDraft && oldDraftTheme !== undefined) {
         settingsDraft.ui.theme = oldDraftTheme;
       }
@@ -296,6 +304,16 @@
       return;
     }
 
+    // Web groups are about to be replaced — release their handles so the
+    // sidecar's handle table doesn't grow across repeated scrapes. Manual
+    // groups survive, so their handles must NOT be forgotten.
+    const staleIds: string[] = [];
+    for (const g of groups) {
+      if (!isManualGroup(g) && g.result) {
+        for (const m of g.result.magnets) staleIds.push(m.handle_id);
+      }
+    }
+
     // Initialize the result slots so the UI can render placeholders before
     // any fetch completes. Manual (pasted) groups survive the scrape and
     // ride at the array TAIL — applyScrapeProgressForRun writes results by
@@ -310,6 +328,15 @@
       })),
       ...groups.filter(isManualGroup),
     ];
+    if (staleIds.length > 0) {
+      try {
+        await invoke("forget_magnets", { handleIds: staleIds });
+      } catch (e) {
+        // Best-effort: a failed release only costs sidecar memory, and the
+        // handles are already unreachable from the UI.
+        console.warn("forget_magnets (stale scrape handles) failed:", e);
+      }
+    }
     scrapeProgress = { done: 0, total: urls.length };
     isScraping = true;
     const runId = ++scrapeRunId;
@@ -598,10 +625,11 @@
         });
         statusMessage = `已清空 ${forgotten} 筆磁力 handle`;
       } catch (e) {
-        // Don't surface as an error — UI is already cleared, sidecar will GC
-        // stale handles on its own eventually.
+        // Don't surface as an error — the UI is already cleared and the handles
+        // are unreachable from it. The sidecar has no GC, so a failed release
+        // just leaves them resident until the process exits.
         console.warn("forget_magnets failed:", e);
-        statusMessage = "結果已清空（sidecar 之後會自動 GC）";
+        statusMessage = "結果已清空";
       }
     } else {
       statusMessage = "結果已清空";
@@ -1261,6 +1289,7 @@
   }
 
   async function saveSettings() {
+    if (settingsWriteBusy) return;
     if (!settingsDraft) return;
     if (!settingsValid) {
       settingsMessage = "請先修正紅字欄位";
@@ -1308,6 +1337,7 @@
   }
 
   async function applyLegacyImportConfirmed() {
+    if (settingsWriteBusy) return;
     legacyError = "";
     legacyReport = null;
     const dir = legacyPath.trim();
@@ -1540,7 +1570,7 @@
 
   <section hidden={activeTab !== "settings"}>
     <h2>主題</h2>
-    <button onclick={toggleTheme} disabled={isThemeSaving}>
+    <button onclick={toggleTheme} disabled={settingsWriteBusy}>
       主題：{theme}（點擊切換）
     </button>
   </section>
@@ -1618,11 +1648,11 @@
           bind:value={legacyPath}
           placeholder="例如：C:\Users\you\Desktop\程式語言\爬蟲"
           spellcheck="false"
-          disabled={legacyBusy}
+          disabled={settingsWriteBusy}
         />
         <button
           onclick={previewLegacyImport}
-          disabled={legacyBusy || !legacyPath.trim()}
+          disabled={settingsWriteBusy || !legacyPath.trim()}
           class:flash-ok={flash.keys.has("legacy-preview")}
         >
           {legacyBusy
@@ -1633,7 +1663,7 @@
         </button>
         <button
           onclick={applyLegacyImportConfirmed}
-          disabled={legacyBusy || !legacyPreview || !legacyPreview.source_dir_valid}
+          disabled={settingsWriteBusy || !legacyPreview || !legacyPreview.source_dir_valid}
           class:flash-ok={flash.keys.has("legacy-apply")}
         >
           {flash.keys.has("legacy-apply") ? "已匯入 ✓" : "匯入"}
@@ -1816,7 +1846,7 @@
       <div class="row">
         <button
           onclick={saveSettings}
-          disabled={!settingsValid || settingsSaving}
+          disabled={!settingsValid || settingsWriteBusy}
           class:flash-ok={flash.keys.has("settings-save")}
         >
           {settingsSaving
@@ -1825,7 +1855,7 @@
               ? "已儲存 ✓"
               : "儲存設定"}
         </button>
-        <button onclick={revertSettingsDraft} disabled={settingsSaving}>還原</button>
+        <button onclick={revertSettingsDraft} disabled={settingsWriteBusy}>還原</button>
       </div>
       {#if settingsMessage}
         <p class="inline-msg" data-kind={settingsMessageKind}>{settingsMessage}</p>

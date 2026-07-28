@@ -547,6 +547,68 @@ class FetchJavdb(unittest.TestCase):
         self.assertEqual(resp["error"]["code"], "network")
         self.assertIn("HTTP 500", resp["error"]["message"])
 
+    def test_fetch_javdb_drops_non_magnet_href(self):
+        with mock.patch.object(sd, "create_session",
+                               return_value=(mock.MagicMock(), "mock_engine")), \
+             mock.patch.object(sd, "fetch_magnets") as mock_fetch:
+            mock_fetch.return_value = {
+                "url": "https://javdb.com/v/x",
+                "code": "XYZ-123",
+                "title": "fixture",
+                "error": "",
+                "magnets": [
+                    {"name": "evil1", "size": "1GB", "tags": [], "date": "",
+                     "magnet": "https://evil.example/pwn"},
+                    {"name": "evil2", "size": "1GB", "tags": [], "date": "",
+                     "magnet": "javascript:alert(1)"},
+                ],
+            }
+            resp = _call(self.state, {"cmd": "fetch_javdb", "request_id": "r1",
+                                      "url": "https://javdb.com/v/x"})
+
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["result"]["magnets"], [])
+        self.assertEqual(self.state.magnets, {})
+
+    def test_fetch_javdb_non_magnet_cannot_collide_with_real_magnet(self):
+        poison_magnet = "btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+        real_magnet = "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a&dn=REAL"
+        with mock.patch.object(sd, "create_session",
+                               return_value=(mock.MagicMock(), "mock_engine")), \
+             mock.patch.object(sd, "fetch_magnets") as mock_fetch:
+            mock_fetch.return_value = {
+                "url": "https://javdb.com/v/x",
+                "code": "XYZ-123",
+                "title": "fixture",
+                "error": "",
+                "magnets": [
+                    {"name": "poison", "size": "1GB", "tags": [], "date": "",
+                     "magnet": poison_magnet},
+                    {"name": "real", "size": "1GB", "tags": [], "date": "",
+                     "magnet": real_magnet},
+                ],
+            }
+            resp = _call(self.state, {"cmd": "fetch_javdb", "request_id": "r1",
+                                      "url": "https://javdb.com/v/x"})
+
+        self.assertTrue(resp["ok"])
+        magnets = resp["result"]["magnets"]
+        self.assertEqual(len(magnets), 1)
+        real_handle = magnets[0]["handle_id"]
+        resolve_resp = _call(self.state, {"cmd": "resolve_magnet", "request_id": "r2",
+                                          "handle_id": real_handle})
+        self.assertTrue(resolve_resp["ok"])
+        self.assertTrue(resolve_resp["magnet"].startswith("magnet:"))
+
+    def test_dedupe_key_fallback_is_namespaced(self):
+        non_btih = "some-non-btih-string"
+        key = sd._magnet_dedupe_key(non_btih)
+        self.assertTrue(key.startswith("raw:"))
+        btih_key = sd._magnet_dedupe_key("magnet:?xt=urn:btih:some-non-btih-string")
+        self.assertNotEqual(key, btih_key)
+
+
+
 
 # ---------------------------------------------------------------------------
 # resolve_magnet / resolve_magnets / forget_magnets
@@ -1283,7 +1345,30 @@ class RdSendMagnet(unittest.TestCase):
         self.assertEqual(kwargs["strategy"], "largest")
         self.assertEqual(kwargs["cache_wait"], 5)
 
-    def test_rd_send_magnet_timeout_budget_bounded_by_req_baseline(self):
+    def test_cache_wait_from_settings_respected_when_request_provides_value(self):
+        state = self._state_with_magnet()
+        state.settings = {"rd": {"cache_wait_seconds": 120}}
+        fake = mock.MagicMock()
+        fake.process_magnet.return_value = {"status": "completed", "torrent_id": "T", "name": "n", "links": []}
+
+        captured_client_kwargs = {}
+        def fake_rd_client(st, min_size_mb=500, deadline=None):
+            captured_client_kwargs["deadline"] = deadline
+            return fake
+
+        import time
+        now = time.monotonic()
+        with mock.patch.object(sd, "_rd_client", side_effect=fake_rd_client):
+            resp = _call(state, {"cmd": "rd_send_magnet", "request_id": "r", "handle_id": "h-1", "cache_wait": 120})
+
+        self.assertTrue(resp["ok"])
+        process_kwargs = fake.process_magnet.call_args.kwargs
+        self.assertEqual(process_kwargs["cache_wait"], 120)
+        deadline = captured_client_kwargs["deadline"]
+        self.assertIsNotNone(deadline)
+        self.assertGreaterEqual(deadline - now, 190.0)
+
+    def test_cache_wait_clamped_to_15_when_request_omits_field(self):
         state = self._state_with_magnet()
         state.settings = {"rd": {"cache_wait_seconds": 300}}
         fake = mock.MagicMock()
@@ -1305,6 +1390,19 @@ class RdSendMagnet(unittest.TestCase):
         deadline = captured_client_kwargs["deadline"]
         self.assertIsNotNone(deadline)
         self.assertLessEqual(deadline - now, 91.0)
+
+    def test_cache_wait_bool_not_treated_as_int(self):
+        state = self._state_with_magnet()
+        state.settings = {"rd": {"cache_wait_seconds": 15}}
+        fake = mock.MagicMock()
+        fake.process_magnet.return_value = {"status": "completed", "torrent_id": "T", "name": "n", "links": []}
+
+        with mock.patch.object(sd, "_rd_client", return_value=fake):
+            resp = _call(state, {"cmd": "rd_send_magnet", "request_id": "r", "handle_id": "h-1", "cache_wait": True})
+
+        self.assertTrue(resp["ok"])
+        process_kwargs = fake.process_magnet.call_args.kwargs
+        self.assertEqual(process_kwargs["cache_wait"], 15)
 
     def test_magnet_error_classified(self):
         from realdebrid import RealDebridError
@@ -1688,11 +1786,12 @@ class RegisterMagnets(unittest.TestCase):
             sd._magnet_dedupe_key("magnet:?xt=urn:btih:DEADBEEF&dn=A"),
             "btih:deadbeef",
         )
-        # No btih → fallback
+        # No btih → fallback (namespaced with raw:)
         self.assertEqual(
             sd._magnet_dedupe_key("  magnet:?xt=urn:sha1:abc  "),
-            "magnet:?xt=urn:sha1:abc",
+            "raw:magnet:?xt=urn:sha1:abc",
         )
+
         # Empty fallback
         self.assertEqual(sd._magnet_dedupe_key("   "), "")
 
