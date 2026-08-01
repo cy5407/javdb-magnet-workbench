@@ -1164,12 +1164,22 @@ def main(argv: list[str]) -> int:
     # app_logging's fallback chain (JAVDB_LOG_DIR > %LOCALAPPDATA%); the Rust
     # caller is responsible for setting the env var if a specific path is
     # required.
+    import logging
+
     from app_logging import setup_logging
     log_file = setup_logging()
-    # The outcome log rides in the same directory debug.log resolved to, so a
-    # console-only fallback (no writable candidate) silently disables it rather
-    # than inventing a path of its own.
-    rd_outcome_log.configure(log_file.parent if log_file else None)
+    # The outcome log rides in whatever directory debug.log resolved to; if
+    # logging itself could not get a file, we must NOT invent a path of our own.
+    #
+    # Truthiness of `log_file` is not that signal: setup_logging returns the
+    # LAST ATTEMPTED path even when every candidate failed and it degraded to
+    # console-only. Trusting it there put `rd_outcomes.jsonl` in the process's
+    # current working directory — on Linux, where neither JAVDB_LOG_DIR nor
+    # LOCALAPPDATA is set, that is every single run. Ask the root logger whether
+    # a file handler actually got attached instead.
+    file_backed = any(isinstance(h, logging.FileHandler)
+                      for h in logging.getLogger().handlers)
+    rd_outcome_log.configure(log_file.parent if (log_file and file_backed) else None)
 
     run_daemon(sys.stdin, sys.stdout)
     return 0

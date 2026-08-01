@@ -335,6 +335,59 @@ class E2EDisabled(unittest.TestCase):
             self.assertTrue((log_dir / "debug.log").exists())
 
 
+class E2EConsoleOnlyFallback(unittest.TestCase):
+    """沒有任何可寫的 log 目錄時，不得在工作目錄裡自己造一個檔。
+
+    `setup_logging()` 在降級成 console-only 時**仍然回傳**最後嘗試的路徑，所以
+    「log_file 是不是 truthy」不是可用的判斷依據。在 Linux 上（JAVDB_LOG_DIR 與
+    LOCALAPPDATA 都不存在）每一次啟動都會走到這條路。
+    """
+
+    def test_no_log_dir_means_no_file_anywhere(self):
+        seq = [_info("downloaded", progress=100, links=[])]
+        with tempfile.TemporaryDirectory() as cwd, _Server(seq) as srv:
+            site = Path(cwd) / "site"
+            site.mkdir()
+            (site / "sitecustomize.py").write_text(
+                "import os, sys\n"
+                "sys.path.insert(0, os.environ['E2E_REPO_ROOT'])\n"
+                "import realdebrid\n"
+                "realdebrid.API_BASE = os.environ['E2E_RD_BASE']\n",
+                encoding="utf-8",
+            )
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.pathsep.join([str(site), str(ROOT)])
+            env["E2E_REPO_ROOT"] = str(ROOT)
+            env["E2E_RD_BASE"] = srv.base
+            # 兩個候選都拿掉 → app_logging 必然降級成 console-only
+            env.pop("JAVDB_LOG_DIR", None)
+            env.pop("LOCALAPPDATA", None)
+            env.pop("JAVDB_RD_LOG", None)
+            work = Path(cwd) / "work"
+            work.mkdir()
+
+            proc = subprocess.Popen(
+                [sys.executable, str(ROOT / "sidecar" / "sidecar.py"), "--daemon"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", env=env, cwd=str(work), bufsize=1,
+            )
+            try:
+                proc.stdin.write(json.dumps(
+                    {"cmd": "hello", "request_id": "h0", "protocol_version": 1}) + "\n")
+                proc.stdin.flush()
+                self.assertTrue(json.loads(proc.stdout.readline())["ok"])
+            finally:
+                proc.stdin.close()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+
+            # 送出仍必須可用，只是不留紀錄；而工作目錄必須乾乾淨淨
+            self.assertEqual(sorted(p.name for p in work.iterdir()), [],
+                             "console-only 時在 CWD 造了檔案")
+
+
 class E2EReportOverRealLog(unittest.TestCase):
     """報表腳本必須讀得懂真的跑出來的檔案，不是只讀得懂測試捏造的 dict。"""
 
