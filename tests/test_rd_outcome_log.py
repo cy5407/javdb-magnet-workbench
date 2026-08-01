@@ -443,6 +443,41 @@ class DedupeTest(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertEqual(kept[0]["label"], "miss")     # 保留的是最早那筆
 
+    def test_terminal_failure_does_not_poison_a_later_independent_send(self):
+        """終態失敗會先刪掉 RD torrent，後一筆不是第一次送出所造的 cache。
+
+        舊 dedupe 把 terminal miss 也放進 seen，導致後來真正命中的獨立嘗試
+        被當成「自造命中」丟掉，恰好抹去規則可能隨時間改善的證據。
+        """
+        rows = rd_log_report.label_sends([
+            send(btih8="aaaa", outcome="error", error_code="rd_magnet_error",
+                 ts="2026-08-01T10:00:00.000+08:00"),
+            send(btih8="aaaa", outcome="completed", elapsed_ms=10,
+                 ts="2026-08-01T11:00:00.000+08:00"),
+            # Once a retained send really has seeded RD, later observations
+            # are self-created and should still be removed.
+            send(btih8="aaaa", outcome="completed", elapsed_ms=5,
+                 ts="2026-08-01T12:00:00.000+08:00"),
+        ], 5000)
+        kept, dropped = rd_log_report.dedupe_first_per_btih(rows)
+        self.assertEqual([r["label"] for r in kept], ["miss", "hit"])
+        self.assertEqual(dropped, 1)
+
+    def test_environment_error_also_never_seeds_the_low_level_dedupe_helper(self):
+        """build_report removes environment errors before dedupe, but the
+        helper itself must not silently assume every caller already filtered.
+        An API error cannot prove a torrent survived in RD.
+        """
+        rows = rd_log_report.label_sends([
+            send(btih8="aaaa", outcome="error", error_code="rd_rate_limited",
+                 ts="2026-08-01T10:00:00.000+08:00"),
+            send(btih8="aaaa", outcome="completed", elapsed_ms=10,
+                 ts="2026-08-01T11:00:00.000+08:00"),
+        ], 5000)
+        kept, dropped = rd_log_report.dedupe_first_per_btih(rows)
+        self.assertEqual([r["label"] for r in kept], ["error", "hit"])
+        self.assertEqual(dropped, 0)
+
     def test_blank_btih_rows_are_all_kept(self):
         rows = rd_log_report.label_sends(
             [send(btih8=""), send(btih8=""), send(btih8="")], 5000)
@@ -566,11 +601,12 @@ class GroupMetaTest(unittest.TestCase):
         self.state = sd.DaemonState()
         self.state.handshake_done = True
 
-    def _fetch(self, magnets):
+    def _fetch(self, magnets, *, batch_id="batch-a"):
         with mock.patch.object(sd, "create_session", return_value=(mock.MagicMock(), "test")), \
              mock.patch.object(sd, "fetch_magnets", return_value=_fetch_result(magnets)):
             resp = sd.dispatch(self.state, {"cmd": "fetch_javdb", "request_id": "r1",
-                                            "url": "https://javdb.com/v/x"})
+                                            "url": "https://javdb.com/v/x",
+                                            "batch_id": batch_id})
         self.assertTrue(resp["ok"], resp)
         return resp["result"]["magnets"]
 
@@ -640,6 +676,112 @@ class GroupMetaTest(unittest.TestCase):
         meta = self.state.magnet_meta[rows[0]["handle_id"]]
         self.assertEqual(meta["source"], "javdb")
         self.assertEqual(meta["name"], "REAL-001")
+
+    def test_new_ui_batch_reattributes_handle_kept_alive_by_manual_row(self):
+        """startScrape replaces every web group but preserves a shared manual
+        handle. The next UI batch must therefore replace the old web metadata,
+        even though the underlying magnet handle intentionally survives.
+        """
+        first = self._fetch([
+            {"name": "OLD-001", "size": "9GB", "tags": ["高清"],
+             "date": "2025-01-01", "magnet": M1},
+        ], batch_id="batch-old")
+        hid = first[0]["handle_id"]
+        sd.dispatch(self.state, {"cmd": "register_magnets", "request_id": "p1",
+                                 "magnets": [M1 + "&dn=PASTED"]})
+
+        self._fetch([
+            {"name": "NEW-999", "size": "1GB", "tags": [],
+             "date": "2026-05-05", "magnet": M1},
+        ], batch_id="batch-new")
+
+        meta = self.state.magnet_meta[hid]
+        self.assertEqual(meta["name"], "NEW-999")
+        self.assertEqual(meta["code"], "ABC-123")
+        self.assertEqual(meta["tags"], [])
+
+    def test_new_batch_downgrades_shared_handle_when_new_web_rows_omit_it(self):
+        first = self._fetch([
+            {"name": "OLD-001", "size": "9GB", "tags": ["高清"],
+             "date": "2025-01-01", "magnet": M1},
+        ], batch_id="batch-old")
+        hid = first[0]["handle_id"]
+        sd.dispatch(self.state, {"cmd": "register_magnets", "request_id": "p1",
+                                 "magnets": [M1 + "&dn=PASTED"]})
+
+        self._fetch([
+            {"name": "OTHER", "size": "2GB", "tags": [],
+             "date": "2026-06-01", "magnet": M2},
+        ], batch_id="batch-new")
+
+        self.assertEqual(self.state.magnet_meta[hid]["source"], "manual")
+        self.assertEqual(self.state.magnet_meta[hid]["name"], "PASTED")
+        self.assertEqual(self.state.magnet_meta[hid]["date_rank"], None)
+
+    def test_rejected_first_url_still_begins_the_new_metadata_batch(self):
+        first = self._fetch([
+            {"name": "OLD-001", "size": "9GB", "tags": ["高清"],
+             "date": "2025-01-01", "magnet": M1},
+        ], batch_id="batch-old")
+        hid = first[0]["handle_id"]
+        sd.dispatch(self.state, {"cmd": "register_magnets", "request_id": "p1",
+                                 "magnets": [M1 + "&dn=PASTED"]})
+
+        resp = sd.dispatch(self.state, {"cmd": "fetch_javdb", "request_id": "bad",
+                                        "url": "https://javdb521.com/v/B",
+                                        "batch_id": "batch-new"})
+        self.assertFalse(resp["ok"])
+        self.assertEqual(self.state.magnet_meta[hid]["source"], "manual")
+        self.assertIsNone(self.state.magnet_meta[hid]["date_rank"])
+
+    def test_production_send_logs_post_batch_manual_source_without_internal_id(self):
+        import tempfile
+
+        first = self._fetch([
+            {"name": "OLD-001", "size": "9GB", "tags": ["高清"],
+             "date": "2025-01-01", "magnet": M1},
+        ], batch_id="batch-old")
+        hid = first[0]["handle_id"]
+        sd.dispatch(self.state, {"cmd": "register_magnets", "request_id": "p1",
+                                 "magnets": [M1 + "&dn=PASTED"]})
+        sd.dispatch(self.state, {"cmd": "fetch_javdb", "request_id": "bad",
+                                 "url": "https://javdb521.com/v/B",
+                                 "batch_id": "batch-new"})
+        self.state.rd_token = "tok"
+        fake = mock.MagicMock()
+        fake.process_magnet.return_value = {
+            "status": "pending", "torrent_id": "T", "name": "n",
+            "rd_status": "queued", "progress": 0, "files_selected": True,
+        }
+        with tempfile.TemporaryDirectory() as d:
+            rd_outcome_log.reset_for_tests()
+            rd_outcome_log.configure(Path(d))
+            with mock.patch.object(sd, "_rd_client", return_value=fake):
+                resp = sd.dispatch(self.state, {
+                    "cmd": "rd_send_magnet", "request_id": "send", "handle_id": hid,
+                })
+            self.assertTrue(resp["ok"], resp)
+            row = json.loads((Path(d) / "rd_outcomes.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(row["source"], "manual")
+            self.assertEqual(row["name"], "PASTED")
+            self.assertNotIn("_batch_id", row)
+        rd_outcome_log.reset_for_tests()
+
+    def test_duplicate_btih_in_one_group_uses_first_visible_rows_ranks(self):
+        """The frontend sends first occurrence metadata for a shared handle;
+        rank maps must use that same canonical row instead of the last duplicate.
+        """
+        rows = self._fetch([
+            {"name": "FIRST", "size": "9GB", "tags": [],
+             "date": "2025-01-01", "magnet": M1},
+            {"name": "SECOND", "size": "1GB", "tags": [],
+             "date": "2026-01-01", "magnet": M1 + "&dn=SECOND"},
+        ])
+        meta = self.state.magnet_meta[rows[0]["handle_id"]]
+        self.assertEqual(meta["name"], "FIRST")
+        self.assertEqual(meta["group_size"], 1)
+        self.assertEqual(meta["date_rank"], 1)
+        self.assertEqual(meta["size_rank"], 1)
 
     def test_group_seq_increments_across_fetches(self):
         self._fetch([{"name": "a", "size": "1GB", "tags": [], "date": "2026-01-01",

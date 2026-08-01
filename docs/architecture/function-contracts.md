@@ -149,7 +149,7 @@ App.svelte::handleScrape (click "抓取")          (app/src/App.svelte)
 └── lib/scraper.ts::scrapeBatch                  (app/src/lib/scraper.ts)
     │   AbortSignal checked between urls
     └── for each url:
-        ├── invoke('fetch_javdb', { url })       → commands::fetch_javdb (commands.rs)
+        ├── invoke('fetch_javdb', { url, batchId }) → commands::fetch_javdb (commands.rs)
         │   └── SidecarManager::request          (sidecar_manager.rs)
         │       ├── write JSON line to sidecar stdin
         │       └── await line on stdout channel
@@ -163,6 +163,11 @@ App.svelte::handleScrape (click "抓取")          (app/src/App.svelte)
         ├── callback(onProgress, { url, ok, magnets|error })
         └── App.svelte $state.scrapeResults.push(...)
 ```
+
+`batchId` is stable across every URL and rate-limit retry in one `scrapeBatch` call, then
+changes for the next call. The sidecar uses it to keep first-occurrence metadata within the
+currently visible batch while allowing a shared manual/web handle to be reattributed after
+`startScrape` replaces the old web groups.
 
 ### Flow 3 — Send batch to Real-Debrid
 

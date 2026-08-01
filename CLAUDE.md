@@ -5,24 +5,23 @@
 - Python：`.venv/bin/python -m pytest tests/ -q`
 - 前端：`cd app && npx vitest run`
 - 型別：`cd app && npm run check`（svelte-check，0 errors 0 warnings 才算過）
-- Rust：`cd app/src-tauri && cargo test --lib` —— **keyring 那道編譯錯誤已於
-  2026-08-01 修掉**（`Cargo.toml` 的 features 按平台拆開）。在 Linux 上仍需一份
-  `app/src-tauri/binaries/sidecar-x86_64-unknown-linux-gnu` 才能通過 build script；
-  用 PyInstaller 產一份即可（見
-  [`docs/platform/linux-support.md`](docs/platform/linux-support.md) §2），
-  之後 **81 passed / 0 failed**。這個 gate 不再是「無法使用」，動 Rust 前請先
-  把它跑起來，不要再預設跳過。
+- Rust（Linux lib gate）：在 `app/src-tauri` 執行
+  `TAURI_CONFIG='{"bundle":{"externalBin":[]}}' cargo test --lib`。覆寫只讓 lib
+  unit tests 不受 Tauri 打包期的 externalBin 存在檢查阻擋；正式 build 仍必須提供
+  Linux sidecar（見 [`docs/platform/linux-support.md`](docs/platform/linux-support.md) §2）。
+  keyring 測試需要可用的使用者 D-Bus／Secret Service。2026-08-01 實測
+  **81 passed / 0 failed**。
 - 驗收以機器可比對方式核對 baseline：既有測試案例不得刪除或弱化；刻意的
   行為契約變更允許改測試，但須說明舊期待、Red 原因與新期待。
 
-### 目前 baseline（2026-08-01，commit `e77ac4d`）
+### 目前 baseline（2026-08-01）
 
 | Gate | 結果 |
 |---|---|
-| `pytest tests/ -q` | 394 passed, 6 subtests |
-| `npx vitest run` | 9 files / 253 tests |
+| `pytest tests/ -q` | 415 passed, 6 subtests |
+| `npx vitest run` | 9 files / 255 tests |
 | `npm run check` | 189 files, 0 errors 0 warnings |
-| `cargo test --lib` | 81 passed（Linux 上需先產一份 sidecar binary，見 linux-support.md §2） |
+| Linux `TAURI_CONFIG='{"bundle":{"externalBin":[]}}' cargo test --lib` | 81 passed（需可用 D-Bus keyring） |
 
 ## 契約文件同步
 

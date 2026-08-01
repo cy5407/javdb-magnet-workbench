@@ -186,3 +186,13 @@ grep -nE 'magnet:\?xt|urn:btih' <log_dir>/rd_outcomes.jsonl   # 預期無輸出
    解析度正則，是 §2 尾句與 §3 表頭「判定（報表腳本）」刻意設計的分工——假設寫在報表、
    觀測寫在日誌，才能不改格式就重跑舊資料檢驗新規則。這不是偏離，是規格意圖，
    但原文措辭容易被讀成「整個 Python 都不得有規則」，在此澄清。
+
+4. **§9.2 的「第二次必定命中」過強**：只有成功加入或保留 pending torrent 的觀測
+   才足以讓後續送出成為疑似自造命中。`outcome="error"` 不能證明 RD 留下 torrent；
+   終態失敗路徑還會主動刪除。因此目前報表讓 error 列保留、但不以它啟動後續去重。
+
+5. **同日修正 v1 metadata 的唯一候選語義**：初版可能在重複 BTIH 時混用「第一列
+   欄位」與「最後一列 rank」。目前 `group_size`、`date_rank`、`size_rank` 全部以
+   frontend 可見的 first-occurrence unique handles 計算；跨 scrape batch 的共享 manual
+   handle 也會依新畫面降級或重新歸屬。欄位集合與格式未變，故維持 schema v1；分析
+   早於此修正的同日資料時，不應假設 duplicate-BTIH rank 具上述一致性。

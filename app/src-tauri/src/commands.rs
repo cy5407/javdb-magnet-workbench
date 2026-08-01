@@ -36,9 +36,10 @@ pub async fn sidecar_ping(sidecar: State<'_, SidecarManager>) -> Result<Value, S
 pub async fn fetch_javdb(
     sidecar: State<'_, SidecarManager>,
     url: String,
+    batch_id: String,
 ) -> Result<Value, String> {
     let resp = sidecar
-        .request("fetch_javdb", json!({ "url": url }))
+        .request("fetch_javdb", json!({ "url": url, "batch_id": batch_id }))
         .await?;
     if !resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
         let msg = resp

@@ -142,9 +142,10 @@ def label_sends(events: list[dict], threshold_ms: int) -> list[dict]:
 def dedupe_first_per_btih(rows: list[dict]) -> tuple[list[dict], int]:
     """每個 btih8 只採計最早的一次觀測。
 
-    第二次送出同一個 magnet 必定命中 —— 因為第一次是使用者自己把它放進 RD 的。
-    不排除的話，愛用的片子會系統性地把命中率灌高。btih8 為空（無法解析）的列
-    一律保留，因為它們彼此無法判定是否重複。
+    一次成功加入或保留 pending torrent 後，後續送出可能命中使用者自己造出的
+    cache，因此排除。反之，error 列不能證明 RD 留下了 torrent；它不會建立
+    去除後續觀測所需的前提。btih8 為空（無法解析）的列一律保留，因為它們彼此
+    無法判定是否重複。
     """
     rows_sorted = sorted(rows, key=lambda r: (r.get("ts") or ""))
     seen: set[str] = set()
@@ -152,11 +153,17 @@ def dedupe_first_per_btih(rows: list[dict]) -> tuple[list[dict], int]:
     dropped = 0
     for r in rows_sorted:
         key = r.get("btih8") or ""
+        failed_send = r.get("outcome") == "error"
         if key:
             if key in seen:
                 dropped += 1
                 continue
-            seen.add(key)
+            # A failed request cannot prove that RD retained a torrent. Some
+            # terminal paths explicitly delete it; environment failures may
+            # not have created one at all. Be conservative and only let a
+            # successful/pending observation seed the repeat filter.
+            if not failed_send:
+                seen.add(key)
         kept.append(r)
     return kept, dropped
 
@@ -300,8 +307,9 @@ def build_report(events: list[dict], threshold_ms: int, min_n: int,
         out.append("  環境錯誤明細：" + "、".join(
             f"{k} {v}" for k, v in sorted(codes.items(), key=lambda kv: -kv[1])))
     if dropped:
-        out.append(f"已排除重複送出的同一 magnet {dropped} 筆 —— 第二次必定命中，"
-                   f"因為第一次是你自己放進 RD 的（--include-repeats 可保留）")
+        out.append(f"已排除重複送出的同一 magnet {dropped} 筆 —— 前一次已在 RD 留下"
+                   f" torrent，後續可能是自造命中（--include-repeats 可保留；終態失敗"
+                   f"會刪除 torrent，不會污染下一次觀測）")
     out.append(f"「秒回」門檻：elapsed_ms < {threshold_ms}")
     out.append("")
 

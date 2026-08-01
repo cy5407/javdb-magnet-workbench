@@ -31,6 +31,8 @@ _spec.loader.exec_module(sd)
 
 def _call(state: sd.DaemonState, req: dict) -> dict:
     """Helper: dispatch a request through the daemon, return response dict."""
+    if req.get("cmd") == "fetch_javdb" and "batch_id" not in req:
+        req = {**req, "batch_id": "protocol-test-batch"}
     return sd.dispatch(state, req)
 
 
@@ -377,6 +379,15 @@ class FetchJavdb(unittest.TestCase):
                              "url": "https://javdb.com/v/x"})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error"]["code"], "bad_request")
+
+    def test_fetch_requires_a_bounded_nonempty_batch_id(self):
+        for bad in (None, "", 123, "x" * (sd.MAX_SCRAPE_BATCH_ID_LEN + 1)):
+            resp = sd.dispatch(self.state, {
+                "cmd": "fetch_javdb", "request_id": "r-batch",
+                "url": "https://javdb.com/v/x", "batch_id": bad,
+            })
+            self.assertFalse(resp["ok"], bad)
+            self.assertEqual(resp["error"]["code"], "bad_request", bad)
 
     def test_fetch_validates_url(self):
         resp = _call(self.state, {"cmd": "fetch_javdb", "request_id": "r1",
@@ -1308,6 +1319,20 @@ class RdSendMagnet(unittest.TestCase):
         self.assertEqual(kwargs["strategy"], "smart")
         self.assertEqual(kwargs["cache_wait"], 15)
 
+    def test_unicode_digit_override_falls_back_without_internal_error(self):
+        state = self._state_with_magnet()
+        fake = mock.MagicMock()
+        fake.process_magnet.return_value = {
+            "status": "completed", "torrent_id": "T", "name": "n", "links": [],
+        }
+        with mock.patch.object(sd, "_rd_client", return_value=fake):
+            resp = _call(state, {
+                "cmd": "rd_send_magnet", "request_id": "r", "handle_id": "h-1",
+                "cache_wait": "²",
+            })
+        self.assertTrue(resp["ok"], resp)
+        self.assertEqual(fake.process_magnet.call_args.kwargs["cache_wait"], 15)
+
     def test_pending_path(self):
         state = self._state_with_magnet()
         fake = mock.MagicMock()
@@ -1889,7 +1914,8 @@ class FetchJavdbLimits(unittest.TestCase):
              mock.patch.object(sd, "create_session",
                                return_value=(mock.MagicMock(), "requests")):
             resp = sd.cmd_fetch_javdb(state, {"request_id": "r",
-                                              "url": "https://javdb.com/v/x"})
+                                              "url": "https://javdb.com/v/x",
+                                              "batch_id": "limits-batch"})
         self.assertTrue(resp["ok"])
         self.assertEqual(resp["result"]["magnet_count"], sd.MAX_FETCH_MAGNETS)
         self.assertEqual(len(state.magnets), sd.MAX_FETCH_MAGNETS)
@@ -1908,7 +1934,8 @@ class FetchJavdbLimits(unittest.TestCase):
              mock.patch.object(sd, "create_session",
                                return_value=(mock.MagicMock(), "requests")):
             resp = sd.cmd_fetch_javdb(state, {"request_id": "r",
-                                              "url": "https://javdb.com/v/x"})
+                                              "url": "https://javdb.com/v/x",
+                                              "batch_id": "limits-batch"})
         self.assertTrue(resp["ok"])
         self.assertEqual(resp["result"]["magnet_count"], 1)
         # state should hold only the short one
@@ -1981,14 +2008,20 @@ class SessionCloseContract(unittest.TestCase):
         fake_result = {"url": "https://javdb.com/v/x", "code": "x", "title": "t", "magnets": [], "error": ""}
         with mock.patch.object(sd, "create_session", return_value=(fake_session, "requests")), \
              mock.patch.object(sd, "fetch_magnets", return_value=fake_result):
-            resp = sd.cmd_fetch_javdb(state, {"request_id": "r", "url": "https://javdb.com/v/x"})
+            resp = sd.cmd_fetch_javdb(state, {
+                "request_id": "r", "url": "https://javdb.com/v/x",
+                "batch_id": "close-batch",
+            })
         self.assertTrue(resp["ok"])
         fake_session.close.assert_called_once()
 
         fake_session_err = mock.MagicMock()
         with mock.patch.object(sd, "create_session", return_value=(fake_session_err, "requests")), \
              mock.patch.object(sd, "fetch_magnets", side_effect=Exception("scrape fail")):
-            resp = sd.cmd_fetch_javdb(state, {"request_id": "r", "url": "https://javdb.com/v/x"})
+            resp = sd.cmd_fetch_javdb(state, {
+                "request_id": "r", "url": "https://javdb.com/v/x",
+                "batch_id": "close-batch",
+            })
         self.assertFalse(resp["ok"])
         fake_session_err.close.assert_called_once()
 

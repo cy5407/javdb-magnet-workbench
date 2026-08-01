@@ -539,5 +539,86 @@ class NonDictRdSettingsHandling(unittest.TestCase):
         self.assertEqual(sd._rd_settings(state), {"min_size_mb": 500})
 
 
+class RuntimeSettingsBounds(unittest.TestCase):
+    """Every sidecar state writer must enforce the same RD bounds as Rust.
+
+    `read_settings` only returns a clamped copy to the WebView. Startup sends
+    the on-disk JSON through handshake first, and pending retry later consumes
+    that sidecar copy without a frontend min_size override.
+    """
+
+    def test_handshake_clamps_values_before_pending_retry_can_consume_them(self):
+        state = sd.DaemonState()
+        resp = sd.dispatch(state, {
+            "cmd": "handshake", "request_id": "h", "cookies": "",
+            "rd_token": "tok", "paths": {},
+            "settings": {"rd": {"cache_wait_seconds": 9999,
+                                 "min_size_mb": 5_000_000}},
+        })
+        self.assertTrue(resp["ok"], resp)
+        self.assertEqual(state.settings["rd"]["cache_wait_seconds"], 300)
+        self.assertEqual(state.settings["rd"]["min_size_mb"], 1_000_000)
+
+    def test_update_settings_clamps_below_floor_and_above_ceiling(self):
+        state = sd.DaemonState()
+        state.handshake_done = True
+        resp = sd.dispatch(state, {
+            "cmd": "update_settings", "request_id": "u",
+            "settings": {"rd": {"cache_wait_seconds": 1,
+                                 "min_size_mb": 5_000_000}},
+        })
+        self.assertTrue(resp["ok"], resp)
+        self.assertEqual(state.settings["rd"]["cache_wait_seconds"], 5)
+        self.assertEqual(state.settings["rd"]["min_size_mb"], 1_000_000)
+
+    def test_negative_persisted_values_clamp_to_the_nearest_floor(self):
+        state = sd.DaemonState()
+        resp = sd.dispatch(state, {
+            "cmd": "handshake", "request_id": "h", "cookies": "",
+            "rd_token": "tok", "paths": {},
+            "settings": {"rd": {"cache_wait_seconds": -1,
+                                 "min_size_mb": -20}},
+        })
+        self.assertTrue(resp["ok"], resp)
+        self.assertEqual(state.settings["rd"]["cache_wait_seconds"], 5)
+        self.assertEqual(state.settings["rd"]["min_size_mb"], 0)
+
+    def test_malformed_numeric_strings_cannot_break_startup_handshake(self):
+        state = sd.DaemonState()
+        resp = sd.dispatch(state, {
+            "cmd": "handshake", "request_id": "h", "cookies": "",
+            "rd_token": "tok", "paths": {},
+            "settings": {"rd": {"cache_wait_seconds": "--5",
+                                 "min_size_mb": "²"}},
+        })
+        self.assertTrue(resp["ok"], resp)
+        self.assertTrue(state.handshake_done)
+        self.assertNotIn("cache_wait_seconds", state.settings["rd"])
+        self.assertNotIn("min_size_mb", state.settings["rd"])
+
+    def test_pending_retry_client_receives_the_handshake_clamped_value(self):
+        import realdebrid
+
+        state = sd.DaemonState()
+        sd.dispatch(state, {
+            "cmd": "handshake", "request_id": "h", "cookies": "",
+            "rd_token": "tok", "paths": {},
+            "settings": {"rd": {"min_size_mb": 5_000_000}},
+        })
+        observed = []
+
+        def fake_check(client, torrent_id, **_kwargs):
+            observed.append(client.min_size_mb)
+            return {"status": "pending", "torrent_id": torrent_id,
+                    "name": "n", "progress": 0, "rd_status": "queued"}
+
+        with mock.patch.object(realdebrid.RealDebrid, "check_torrent",
+                               autospec=True, side_effect=fake_check):
+            resp = sd.dispatch(state, {"cmd": "rd_check_pending",
+                                       "request_id": "r", "torrent_id": "T"})
+        self.assertTrue(resp["ok"], resp)
+        self.assertEqual(observed, [1_000_000])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

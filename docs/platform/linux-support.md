@@ -19,14 +19,15 @@
 | 5 | 憑證儲存需要 keyring daemon | 無頭環境會失敗 | 環境相依 |
 | 6 | 打包腳本寫死 Windows | 無法產出 Linux 安裝檔 | 建置流程 |
 
-實測結論：修好 1 與 2 之後 `cargo check` 通過（僅剩 1 個 dead-code warning），
-`cargo test --lib` **81 passed / 0 failed**。
+實測結論：正式 build／package 仍須修好 1 與 2。若目的只是執行 Rust lib gate，
+可用 `TAURI_CONFIG='{"bundle":{"externalBin":[]}}' cargo test --lib` 排除打包期
+externalBin 檢查；在可用的 D-Bus keyring 環境下 **81 passed / 0 failed**。
 
 ---
 
 ## 1. `Cargo.toml` 的 keyring features（✅ 已於 2026-08-01 修正）
 
-> **狀態更新**：下述修法已套用並驗證——`cargo test --lib` 在 Linux 上
+> **狀態更新**：下述修法已套用並驗證——上述 Linux lib gate 在
 > **81 passed / 0 failed**。修正的動機是要驗證另一項 P1（`clamp_rd_settings`
 > 未掛到 read_settings），而驗證 Rust 修改的前提就是讓 Rust 編得起來。
 > 本節保留原始診斷過程作為紀錄。
@@ -170,12 +171,13 @@ Tauri v2 在 Linux 需要 WebKitGTK。本次驗證機器上皆已具備：
 - **GUI 實際啟動與操作**：只做到 `cargo check` / `cargo test --lib` 與 sidecar
   協定 smoke，**沒有真的把視窗開起來點過**。
 - **Windows 迴歸**：第 1 項的 Cargo.toml 修改未在 Windows 上實測。
-- **keyring 在 Linux 的實際讀寫**：只確認編譯通過，未實跑存取憑證。
+- **無 D-Bus／無 Secret Service 的降級行為**：尚未提供或驗證。具備 D-Bus keyring
+  的 Linux 環境已由 12 個 Rust cookies 端對端測試驗證實際讀寫與還原。
 - **打包產出**：未實際產生 Linux 安裝檔。
 
 ## 若決定支援 Linux，建議順序
 
-1. 先修第 3 項（`JAVDB_LOG_DIR`）——它同時改善 Windows 的正確性，且與平台移植無關。
-2. 再修第 1 項，讓 `cargo test --lib` 這個 gate 在 Linux 開發機上可用
-   （目前 CLAUDE.md 記載此 gate 被跳過，Rust 端變更只能人工細審）。
+1. 第 1 項已完成；Linux 開發機可用文件開頭列出的 `TAURI_CONFIG=... cargo test --lib`
+   執行 Rust lib gate。
+2. 先修第 3 項（`JAVDB_LOG_DIR`）——它同時改善 Windows 的正確性，且與平台移植無關。
 3. 第 2、4、5、6 項屬於「真的要出 Linux 版」才需要，不必為了開發便利而做。

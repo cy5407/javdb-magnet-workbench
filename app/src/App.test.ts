@@ -381,7 +381,10 @@ describe("per-URL scrape outcome on the search tab", () => {
     await fireEvent.input(urlBox, { target: { value: `${URL_A}\n` } });
     await fireEvent.click(screen.getByRole("button", { name: "開始擷取" }));
     await waitFor(() => {
-      expect(tauriMocks.invoke).toHaveBeenCalledWith("fetch_javdb", { url: URL_A });
+      expect(tauriMocks.invoke).toHaveBeenCalledWith("fetch_javdb", {
+        url: URL_A,
+        batchId: expect.any(String),
+      });
     });
   };
 
@@ -1074,7 +1077,10 @@ describe("Stale Handle Forget on Scrape (Item 6)", () => {
     await fireEvent.click(screen.getByRole("button", { name: "開始擷取" }));
 
     await waitFor(() => {
-      expect(tauriMocks.invoke).toHaveBeenCalledWith("fetch_javdb", { url: "https://javdb.com/v/XYZ789" });
+      expect(tauriMocks.invoke).toHaveBeenCalledWith("fetch_javdb", {
+        url: "https://javdb.com/v/XYZ789",
+        batchId: expect.any(String),
+      });
     });
     // Releasing it would leave the still-rendered, still-checked pasted row
     // pointing at a dead handle — unrecoverable, since the full magnet only
@@ -1185,7 +1191,10 @@ describe("RD hit-priority narrowing and pre-send triage", () => {
     await fireEvent.input(urlBox, { target: { value: `${RD_URL}\n` } });
     await fireEvent.click(screen.getByRole("button", { name: "開始擷取" }));
     await waitFor(() => {
-      expect(tauriMocks.invoke).toHaveBeenCalledWith("fetch_javdb", { url: RD_URL });
+      expect(tauriMocks.invoke).toHaveBeenCalledWith("fetch_javdb", {
+        url: RD_URL,
+        batchId: expect.any(String),
+      });
     });
   };
 

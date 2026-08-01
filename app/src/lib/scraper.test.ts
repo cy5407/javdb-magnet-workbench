@@ -151,7 +151,7 @@ describe("scrapeBatch", () => {
   const noSleep = vi.fn().mockResolvedValue(undefined);
 
   it("calls fetcher once per url, in order", async () => {
-    const fetcher = vi.fn(async (url: string) => fakeResult(url));
+    const fetcher = vi.fn(async (url: string, _batchId: string) => fakeResult(url));
     const progress = vi.fn();
     const out = await scrapeBatch(
       ["https://javdb.com/v/A", "https://javdb.com/v/B"],
@@ -162,6 +162,9 @@ describe("scrapeBatch", () => {
       "https://javdb.com/v/A",
       "https://javdb.com/v/B",
     ]);
+    const batchIds = fetcher.mock.calls.map((c) => c[1]);
+    expect(batchIds[0]).toEqual(expect.any(String));
+    expect(batchIds[1]).toBe(batchIds[0]);
     expect(out).toHaveLength(2);
     expect(out[0].status).toBe("ok");
     expect(out[1].status).toBe("ok");
@@ -321,7 +324,10 @@ describe("scrapeBatch", () => {
       },
     );
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher).toHaveBeenCalledWith("https://javdb.com/v/A");
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://javdb.com/v/A",
+      expect.any(String),
+    );
     expect(sleep).toHaveBeenCalledTimes(1);
     expect(out[0].status).toBe("ok");
     expect(out[1].status).toBe("pending");
@@ -361,6 +367,17 @@ describe("scrapeBatch", () => {
   it("uses default fetcher/delays/retry when options are omitted", async () => {
     const out = await scrapeBatch([], () => {});
     expect(out).toEqual([]);
+  });
+
+  it("uses a fresh metadata batch id for each scrapeBatch call", async () => {
+    const fetcher = vi.fn(async (url: string, _batchId: string) => fakeResult(url));
+    await scrapeBatch(["https://javdb.com/v/A"], () => {}, {
+      fetcher, delayRange: [0, 0], retryWaitRange: [0, 0],
+    });
+    await scrapeBatch(["https://javdb.com/v/B"], () => {}, {
+      fetcher, delayRange: [0, 0], retryWaitRange: [0, 0],
+    });
+    expect(fetcher.mock.calls[0][1]).not.toBe(fetcher.mock.calls[1][1]);
   });
 
   // Cover the catch branch `e instanceof Error ? e.message : String(e)` — the

@@ -275,7 +275,7 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
 
 ---
 
-### `pub async fn fetch_javdb(sidecar: State<'_, SidecarManager>, url: String) -> Result<Value, String>`  *(commands.rs:34)*
+### `pub async fn fetch_javdb(sidecar, url, batch_id) -> Result<Value, String>`
 
 **Purpose**: Trigger the sidecar's JavDB page scrape for a given URL; return the `result` payload (already redacted by the sidecar).
 
@@ -283,6 +283,9 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
 - Params:
   - `sidecar` — managed state.
   - `url` — JavDB page URL. No client-side validation; sidecar enforces the JavDB origin policy.
+  - `batch_id` — required frontend scrape-batch id, forwarded as `batch_id`. All URLs/retries
+    in one visible batch share it; a later batch uses a fresh id. The sidecar rejects an empty
+    id or one longer than 128 characters.
 - Returns: the `result` JSON value from the response. `Value::Null` if missing.
 - Side effects: sidecar RPC + whatever HTTP/cookie work the sidecar performs (out of scope here).
 - Errors: returns `Err(String)` containing either the sidecar's `error.message` ([commands.rs:42](app/src-tauri/src/commands.rs:42)) or a transport error.
@@ -290,7 +293,7 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
 - Authorization: requires the sidecar to have been handshake'd (it was, by `run()`).
 
 **Calls**:
-- `sidecar.request("fetch_javdb", json!({"url": url}))` → [sidecar_manager.rs:116](app/src-tauri/src/sidecar_manager.rs:116).
+- `sidecar.request("fetch_javdb", json!({"url": url, "batch_id": batch_id}))`.
 
 **Called by**: frontend.
 

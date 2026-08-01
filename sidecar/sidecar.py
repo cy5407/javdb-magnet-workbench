@@ -58,6 +58,15 @@ SIDECAR_VERSION = "0.1.0"
 MAX_FETCH_MAGNETS = 1000      # cap on magnets returned by one cmd_fetch_javdb
 MAX_REGISTER_MAGNETS = 1000   # cap on magnets accepted by one cmd_register_magnets
 MAX_MAGNET_URI_LEN = 4096     # cap on a single magnet URI length (bytes)
+MAX_SCRAPE_BATCH_ID_LEN = 128
+
+# KEEP IN SYNC with app/src-tauri/src/{settings,sidecar_manager}.rs and the
+# frontend validators. The sidecar is a second settings boundary: startup
+# handshake receives the JSON file before read_settings returns a clamped copy
+# to the WebView, and pending retry later reads this state directly.
+MIN_RD_CACHE_WAIT_SECS = 5
+MAX_RD_CACHE_WAIT_SECS = 300
+MAX_RD_MIN_SIZE_MB = 1_000_000
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +202,11 @@ class DaemonState:
         # time because only the rows the user actually sends reach the log —
         # the group can never be reconstructed afterwards.
         self.magnet_meta: dict[str, dict] = {}
+        # Manual rows can share a BTIH/handle with a JavDB row. Keep their
+        # sparse metadata separately so starting a new web batch can downgrade
+        # a surviving manual-only handle after the old web groups disappear.
+        self.manual_meta: dict[str, dict] = {}
+        self.active_scrape_batch_id: str | None = None
         # Monotonic per-session counter so two fetches of the same JAV code
         # stay distinguishable in the log.
         self.fetch_seq = 0
@@ -273,7 +287,7 @@ def cmd_handshake(state: DaemonState, req: dict) -> dict:
     state.rd_token = rd_token
 
     settings_raw = req.get("settings")
-    state.settings = settings_raw if isinstance(settings_raw, dict) else {}
+    state.settings = _normalize_runtime_settings(settings_raw)
 
     paths_raw = req.get("paths")
     state.paths = paths_raw if isinstance(paths_raw, dict) else {}
@@ -378,7 +392,12 @@ def _is_javdb_host(host: str) -> bool:
 _NO_DATE_SORT_KEY = "9999-99-99"
 
 
-def _record_group_meta(state: DaemonState, code: str, rows: list[dict]) -> None:
+def _record_group_meta(
+    state: DaemonState,
+    code: str,
+    rows: list[dict],
+    batch_id: str | None = None,
+) -> None:
     """Remember each row's scraped fields + its rank inside this fetch.
 
     Ranks are 1-based: `date_rank` 1 = oldest upload, `size_rank` 1 = largest
@@ -391,15 +410,33 @@ def _record_group_meta(state: DaemonState, code: str, rows: list[dict]) -> None:
     frozen verdict would lock old log rows into whatever the rules were the
     day they were written.
     """
-    by_date = sorted(rows, key=lambda r: (r.get("date") or _NO_DATE_SORT_KEY))
+    # One handle is one sendable candidate. The frontend dedupes by handle and
+    # keeps the first visible occurrence, so ranks and metadata must be based
+    # on that same canonical row. Dict comprehensions over the raw rows used to
+    # keep the LAST duplicate's rank while the loop below kept the FIRST row's
+    # fields, producing impossible combinations such as "oldest row, rank 2".
+    canonical_rows: list[dict] = []
+    seen_handles: set[str] = set()
+    for row in rows:
+        hid = row["handle_id"]
+        if hid in seen_handles:
+            continue
+        seen_handles.add(hid)
+        canonical_rows.append(row)
+
+    by_date = sorted(canonical_rows, key=lambda r: (r.get("date") or _NO_DATE_SORT_KEY))
     date_rank = {r["handle_id"]: i + 1 for i, r in enumerate(by_date)}
-    by_size = sorted(rows, key=lambda r: parse_size_gb(r.get("size") or ""), reverse=True)
+    by_size = sorted(
+        canonical_rows,
+        key=lambda r: parse_size_gb(r.get("size") or ""),
+        reverse=True,
+    )
     size_rank = {r["handle_id"]: i + 1 for i, r in enumerate(by_size)}
 
-    for r in rows:
+    for r in canonical_rows:
         hid = r["handle_id"]
         prev = state.magnet_meta.get(hid)
-        # An earlier JavDB group in this session already claimed this handle
+        # An earlier JavDB group in this visible scrape batch already claimed this handle
         # (same BTIH on two pages — a re-release or a compilation). Keep the
         # first claim: the frontend attributes the row first-occurrence-wins
         # with web groups at the array head (rowClassByHandle,
@@ -408,7 +445,8 @@ def _record_group_meta(state: DaemonState, code: str, rows: list[dict]) -> None:
         # log a class the user never saw — and rank is unrecoverable once
         # overwritten. Manual metadata is the opposite case and must still be
         # upgraded: it only ever carries a `dn=`.
-        if prev is not None and prev.get("source") == "javdb":
+        if (prev is not None and prev.get("source") == "javdb"
+                and prev.get("_batch_id") == batch_id):
             continue
         state.magnet_meta[hid] = {
             "code": code,
@@ -417,17 +455,53 @@ def _record_group_meta(state: DaemonState, code: str, rows: list[dict]) -> None:
             "tags": list(r.get("tags", []) or []),
             "date": r.get("date", ""),
             "source": "javdb",
+            # Internal ownership marker only; rd_outcome_log copies an
+            # explicit allowlist of public metadata fields and never emits it.
+            "_batch_id": batch_id,
             "group_seq": state.fetch_seq,
-            "group_size": len(rows),
+            "group_size": len(canonical_rows),
             "date_rank": date_rank[hid],
             "size_rank": size_rank[hid],
         }
+
+
+def _begin_scrape_meta_batch(state: DaemonState, batch_id: str | None) -> None:
+    """Align metadata ownership with the frontend's replace-all web batch.
+
+    startScrape forgets web-only handles but deliberately retains handles also
+    shown by a manual row. If the new batch never returns that BTIH, no fetch
+    can overwrite its old JavDB metadata; restore the separately-held manual
+    metadata at the batch boundary so the outcome log matches the rows still
+    visible. A repeated URL/retry in the same batch is a no-op.
+    """
+    if batch_id is None or batch_id == state.active_scrape_batch_id:
+        return
+    for hid, meta in list(state.magnet_meta.items()):
+        if meta.get("source") != "javdb":
+            continue
+        manual = state.manual_meta.get(hid)
+        if manual is None:
+            state.magnet_meta.pop(hid, None)
+        else:
+            state.magnet_meta[hid] = dict(manual)
+    state.active_scrape_batch_id = batch_id
 
 
 def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
     if not state.handshake_done:
         return _err(req, "bad_request", "handshake required before fetch_javdb")
     url = req.get("url")
+    batch_id = req.get("batch_id")
+    if (
+        not isinstance(batch_id, str)
+        or not batch_id
+        or len(batch_id) > MAX_SCRAPE_BATCH_ID_LEN
+    ):
+        return _err(req, "bad_request", "batch_id must be a non-empty bounded string")
+    # The frontend has already replaced its web groups by the time this RPC is
+    # made. Reset ownership before URL validation as well as before network I/O:
+    # an allowlist rejection is still a settled first row of the new batch.
+    _begin_scrape_meta_batch(state, batch_id)
     # Require https:// — JavDB itself serves over TLS, so accepting plain
     # http:// here would only enable MITM / Cloudflare-bypass attempts
     # against the user's cookies, never a legitimate fetch. Sonar's
@@ -490,7 +564,12 @@ def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
         })
 
     state.fetch_seq += 1
-    _record_group_meta(state, result.get("code", "") or "", magnets_out)
+    _record_group_meta(
+        state,
+        result.get("code", "") or "",
+        magnets_out,
+        batch_id=batch_id,
+    )
 
     return _ok(req, {
         "result": {
@@ -539,6 +618,8 @@ def cmd_forget_magnets(state: DaemonState, req: dict) -> dict:
         state.magnets.clear()
         state.magnet_to_handle.clear()
         state.magnet_meta.clear()
+        state.manual_meta.clear()
+        state.active_scrape_batch_id = None
         return _ok(req, {"forgot": n})
 
     handle_ids = req.get("handle_ids")
@@ -560,6 +641,7 @@ def cmd_forget_magnets(state: DaemonState, req: dict) -> dict:
             if state.magnet_to_handle.get(key) == hid:
                 del state.magnet_to_handle[key]
             state.magnet_meta.pop(hid, None)
+            state.manual_meta.pop(hid, None)
             forgot += 1
     return _ok(req, {"forgot": forgot})
 
@@ -600,24 +682,27 @@ def cmd_register_magnets(state: DaemonState, req: dict) -> dict:
 
         handle_id, deduped = _intern_magnet(state, s)
         dn = extract_magnet_dn(s)
-        # Only fill in metadata this handle does not already have. Pasting a
-        # magnet that a JavDB fetch already returned yields the SAME handle
-        # (the table is keyed by BTIH), and the pasted row knows nothing but a
-        # `dn=` — overwriting would throw away real tags/date/rank and make the
-        # log claim the row had no metadata when it did.
+        # Keep a separate sparse backup even when JavDB metadata currently wins.
+        # A later scrape replaces all web groups but retains shared manual
+        # handles; if the new web batch omits this BTIH, the backup becomes the
+        # truthful metadata for the still-visible manual row.
+        manual_meta = {
+            "code": "",
+            "name": dn,
+            "size": "",
+            "tags": [],
+            "date": "",
+            "source": "manual",
+            "group_seq": None,
+            "group_size": None,
+            "date_rank": None,
+            "size_rank": None,
+        }
+        # First manual occurrence wins, matching the frontend's stable group
+        # order when the same handle is pasted again.
+        state.manual_meta.setdefault(handle_id, manual_meta)
         if handle_id not in state.magnet_meta:
-            state.magnet_meta[handle_id] = {
-                "code": "",
-                "name": dn,
-                "size": "",
-                "tags": [],
-                "date": "",
-                "source": "manual",
-                "group_seq": None,
-                "group_size": None,
-                "date_rank": None,
-                "size_rank": None,
-            }
+            state.magnet_meta[handle_id] = dict(state.manual_meta[handle_id])
         registered.append({
             "handle_id": handle_id,
             "magnet_redacted": redact_magnet(s),
@@ -633,7 +718,7 @@ def cmd_update_settings(state: DaemonState, req: dict) -> dict:
     if new_settings is not None and not isinstance(new_settings, dict):
         return _err(req, "bad_request", "settings must be a dict when provided")
     if new_settings is not None:
-        state.settings = new_settings
+        state.settings = _normalize_runtime_settings(new_settings)
     return _ok(req)
 
 
@@ -733,6 +818,60 @@ def _rd_settings(state: DaemonState) -> dict:
     return rd if isinstance(rd, dict) else {}
 
 
+def _parse_decimal_int(value) -> int | None:
+    """Parse a JSON integer/string without letting malformed text escape.
+
+    `str.isdigit()` is not an int() safety check: Unicode superscripts return
+    true but cannot be parsed, and stripping '-' accepts strings like '--5'.
+    """
+    if type(value) is int:
+        return value
+    if not isinstance(value, str) or not value:
+        return None
+    digits = value[1:] if value.startswith("-") else value
+    if not digits or not digits.isascii() or not digits.isdigit():
+        return None
+    try:
+        return int(value, 10)
+    except ValueError:
+        return None
+
+
+def _normalize_runtime_settings(settings) -> dict:
+    """Copy settings and clamp persisted RD numerics at the sidecar boundary.
+
+    This function protects both writers of state.settings (handshake and
+    update_settings). Request-local overrides have their own parsing path;
+    cache_wait is bounded there, while min_size_mb is intentionally forwarded
+    as a non-negative integer and remains capped here for persisted settings.
+    """
+    if not isinstance(settings, dict):
+        return {}
+    normalized = dict(settings)
+    rd_raw = settings.get("rd")
+    if not isinstance(rd_raw, dict):
+        return normalized
+    rd = dict(rd_raw)
+    bounds = {
+        "cache_wait_seconds": (MIN_RD_CACHE_WAIT_SECS, MAX_RD_CACHE_WAIT_SECS),
+        "min_size_mb": (0, MAX_RD_MIN_SIZE_MB),
+    }
+    for key, (floor, ceiling) in bounds.items():
+        if key not in rd:
+            continue
+        # Parse any signed integer first, then clamp. Using `floor` as
+        # the parser minimum would discard cache_wait=1 and fall back to 15,
+        # whereas Rust's persisted-settings contract deliberately maps it to
+        # the nearest valid value (5).
+        value = _parse_decimal_int(rd.get(key))
+        if value is None:
+            rd.pop(key, None)
+        else:
+            rd[key] = max(floor, min(value, ceiling))
+    normalized["rd"] = rd
+    return normalized
+
+
 def _rd_client(state: DaemonState, token_override: str | None = None,
                min_size_mb: int | None = None, deadline: float | None = None):
     """Build a fresh RealDebrid client. Cheap (just a requests.Session).
@@ -766,13 +905,8 @@ def _resolve_strategy(state: DaemonState, override: str | None) -> str:
 
 
 def _coerce_int_setting(value, *, min_value: int) -> int | None:
-    if type(value) is int and value >= min_value:
-        return value
-    if isinstance(value, str) and value.isdigit():
-        parsed = int(value)
-        if parsed >= min_value:
-            return parsed
-    return None
+    parsed = _parse_decimal_int(value)
+    return parsed if parsed is not None and parsed >= min_value else None
 
 
 def _resolve_int_setting(

@@ -33,6 +33,11 @@ Reference for the live Python JSON-lines daemon in [`sidecar/sidecar.py`](../../
   log, dropped alongside the handle in `cmd_forget_magnets`. Group ranks have to be
   computed at fetch time: only the rows the user actually sends reach the log, so
   "was this the oldest of the five?" is unanswerable afterwards.
+- `manual_meta`: sparse manual-row backup keyed by handle. At a new scrape-batch
+  boundary, a shared handle is restored to this metadata before new web results arrive;
+  this covers the case where the new web batch omits that BTIH entirely.
+- `active_scrape_batch_id`: prevents retries and later URLs in the same batch from
+  resetting first-occurrence metadata while allowing the next replace-all batch to do so.
 - `fetch_seq`: monotonic per-session fetch counter, so two fetches of the same JAV
   code stay distinguishable in the log
 - `start_time` for `ping`
@@ -239,17 +244,22 @@ coexist in one send.)
 
 **Called by**: `cmd_rd_send_magnet`, `cmd_rd_check_pending`.
 
-### `_record_group_meta(state: DaemonState, code: str, rows: list[dict]) -> None`
+### `_record_group_meta(state, code, rows, batch_id=None) -> None`
 
 **Purpose**: Store each fetched row's raw fields plus its 1-based rank inside that fetch.
 
 **Contract**:
+- Duplicate handles are canonicalized first-occurrence-wins, matching the frontend's visible
+  row. `group_size`, `date_rank`, and `size_rank` all use that unique-handle set.
 - `date_rank` 1 = oldest upload; missing dates sort last via `_NO_DATE_SORT_KEY`
   (`"9999-99-99"`). A raw `""` compares below every ISO date, which would hand
   rank 1 to every undated row — same sentinel and same reasoning as the frontend's
   `rdPriority.rdDateKey`.
 - `size_rank` 1 = largest, via `javdb_scraper.parse_size_gb`.
-- Side effects: writes `state.magnet_meta`.
+- In the same `batch_id`, the first JavDB group that claims a handle wins. A later batch may
+  overwrite it, while manual-only metadata may still be upgraded to JavDB metadata.
+- Side effects: writes `state.magnet_meta`. `_batch_id` is an internal ownership marker and is
+  excluded by the outcome logger's public-field allowlist.
 
 **Deliberately stores raw values only** — no prefix match, no HD verdict. The
 heuristic's single source of truth is `app/src/lib/rdPriority.ts`, and a frozen
@@ -257,6 +267,37 @@ verdict would lock old log rows into whatever the rules were the day they were
 written. See [the outcome-log spec §2](../../specs/2026-08-01-rd-outcome-log.md).
 
 **Called by**: `cmd_fetch_javdb`.
+
+### `_begin_scrape_meta_batch(state, batch_id) -> None`
+
+**Purpose**: Reconcile sidecar metadata when the frontend replaces all visible web groups.
+
+**Contract**:
+- A repeated id is a no-op.
+- On a fresh id, old JavDB-only metadata is removed; a handle also owned by a manual row is
+  downgraded to its separately stored manual metadata.
+- Called before URL validation, so a rejected first URL still settles ownership for the new
+  visible batch.
+
+**Called by**: `cmd_fetch_javdb`.
+
+### `_parse_decimal_int(value) -> int | None`
+
+**Purpose**: Parse JSON integer or strict ASCII decimal-string settings (optional single minus,
+no whitespace) without throwing. Booleans, malformed text, and Unicode-only digits return `None`.
+
+**Called by**: `_normalize_runtime_settings`, `_coerce_int_setting`.
+
+### `_normalize_runtime_settings(settings) -> dict`
+
+**Purpose**: Copy persisted settings and enforce the sidecar's RD numeric bounds.
+
+**Contract**:
+- Non-dicts become `{}`; unrelated keys and unknown RD keys are preserved.
+- Signed integer values clamp to `cache_wait_seconds` 5–300 and `min_size_mb` 0–1,000,000.
+  Invalid types are removed so downstream readers use their defaults.
+- This is the common boundary for both writers of `state.settings`: handshake and
+  `update_settings`.
 
 ---
 
@@ -281,7 +322,9 @@ written. See [the outcome-log spec §2](../../specs/2026-08-01-rd-outcome-log.md
 **Purpose**: Load startup cookies, token, settings, and paths into sidecar memory.
 
 **Contract**:
-- Params: optional `cookies` string, `rd_token`, `settings`, `paths`.
+- Params: optional `cookies` string, `rd_token`, `settings`, `paths`. Persisted RD numeric
+  settings are copied and clamped before entering `state.settings` (`cache_wait_seconds`
+  5–300; `min_size_mb` 0–1,000,000), because pending retry consumes this state directly.
 - Returns: success envelope.
 - Side effects: mutates `state.cookies`, `state.rd_token`, `state.settings`, `state.paths`, `state.handshake_done`.
 - Errors: none raised.
@@ -307,10 +350,13 @@ written. See [the outcome-log spec §2](../../specs/2026-08-01-rd-outcome-log.md
 **Purpose**: Scrape one JavDB URL and intern returned magnets.
 
 **Contract**:
-- Params: `url` must be a `https://` string.
+- Params: `url` must be a `https://` string; required `batch_id` must be a non-empty string
+  of at most 128 characters.
 - Returns: success with `result.engine`, `url`, `code`, `title`, `magnet_count`, `magnets[]`; or errors `bad_request`, `cloudflare_block`, `network`.
 - Preconditions: `state.handshake_done` must be true.
-- Side effects: creates an HTTP session, performs network I/O, may add handles to `state.magnets` / `state.magnet_to_handle`.
+- Side effects: creates an HTTP session, performs network I/O, may add handles to
+  `state.magnets` / `state.magnet_to_handle`, and records first-occurrence metadata per
+  `batch_id`. A new batch may reattribute an intentionally surviving shared handle.
 - Errors: catches all exceptions from `create_session` / `fetch_magnets` and redacts type only.
 
 **Calls**: `create_session`, `fetch_magnets`, `_intern_magnet`, `redact_magnet`, `_ok`, `_err`.
@@ -378,12 +424,13 @@ written. See [the outcome-log spec §2](../../specs/2026-08-01-rd-outcome-log.md
 **Purpose**: Refresh in-memory settings after Rust persists settings.
 
 **Contract**:
-- Params: optional `settings`; non-null value replaces `state.settings`.
+- Params: optional `settings`; non-null dict replaces `state.settings` after the same RD
+  numeric normalization used by `cmd_handshake`.
 - Returns: success.
 - Side effects: may mutate `state.settings`.
 - Errors: none expected.
 
-**Calls**: `_ok`.
+**Calls**: `_normalize_runtime_settings`, `_ok`.
 
 **Called by**: Rust `commands::update_sidecar_settings`.
 

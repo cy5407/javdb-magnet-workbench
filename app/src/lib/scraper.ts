@@ -107,13 +107,20 @@ export interface ScrapeOptions {
   delayRange?: [number, number];
   retryWaitRange?: [number, number];
   /** Invoke override (tests inject a fake) */
-  fetcher?: (url: string) => Promise<FetchResult>;
+  fetcher?: (url: string, batchId: string) => Promise<FetchResult>;
 }
 
 // Production wrapper around Tauri invoke; unit tests always inject a fake fetcher.
 /* c8 ignore next 2 */
-const defaultFetcher = (url: string): Promise<FetchResult> =>
-  invoke<FetchResult>("fetch_javdb", { url });
+const defaultFetcher = (url: string, batchId: string): Promise<FetchResult> =>
+  invoke<FetchResult>("fetch_javdb", { url, batchId });
+
+// A sidecar lives exactly as long as this frontend session, so a monotonic
+// process-local id is sufficient. All URLs and retries in one scrapeBatch call
+// share the id; a later call gets a new one. The sidecar uses this to keep
+// first-occurrence metadata within a visible batch without pinning metadata
+// from a web group that startScrape has already replaced.
+let nextScrapeBatchId = 0;
 
 function parseBatchWithFilter(raw: string, filterRe: RegExp): string[] {
   if (!raw) return [];
@@ -151,7 +158,8 @@ export function parseMagnetBatch(raw: string): string[] {
 
 interface ResolvedScrapeOptions {
   sleep: SleepFn;
-  fetcher: (url: string) => Promise<FetchResult>;
+  fetcher: (url: string, batchId: string) => Promise<FetchResult>;
+  batchId: string;
   delayRange: [number, number];
   retryWaitRange: [number, number];
   signal?: AbortSignal;
@@ -161,6 +169,7 @@ function resolveScrapeOptions(opts: ScrapeOptions): ResolvedScrapeOptions {
   return {
     sleep: opts.sleep ?? realSleep,
     fetcher: opts.fetcher ?? defaultFetcher,
+    batchId: `scrape-${++nextScrapeBatchId}`,
     delayRange: opts.delayRange ?? [DELAY_MIN_MS, DELAY_MAX_MS],
     retryWaitRange: opts.retryWaitRange ?? [RETRY_WAIT_MIN_MS, RETRY_WAIT_MAX_MS],
     signal: opts.signal,
@@ -178,7 +187,7 @@ async function fetchGroupWithRetry(
   // attempt 0 = first try; attempt 1 = single retry after rate-limit
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      group.result = await resolved.fetcher(group.url);
+      group.result = await resolved.fetcher(group.url, resolved.batchId);
       if (resolved.signal?.aborted) {
         group.result = null;
         group.status = "pending";

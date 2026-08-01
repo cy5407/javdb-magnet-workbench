@@ -72,7 +72,7 @@ Only two `invoke` call sites live inside `lib/*`. Every other backend call origi
 
 | Command name | File:line | Payload | Return type | Wrapper function |
 |--------------|-----------|---------|-------------|------------------|
-| `fetch_javdb` | [scraper.ts:65](app/src/lib/scraper.ts:65) | `{ url: string }` | `FetchResult` | `defaultFetcher` (private) used by `scrapeBatch` |
+| `fetch_javdb` | [scraper.ts](../../../app/src/lib/scraper.ts) | `{ url: string, batchId: string }` | `FetchResult` | `defaultFetcher` (private) used by `scrapeBatch` |
 | `rd_send_magnet` | [rdSender.ts:58](app/src/lib/rdSender.ts:58) | `{ handleId: string, options: RdSendOptions }` | `RdSendOutcome` | `defaultFetcher` (private) used by `sendBatch` |
 | `rd_check_pending` | [rdSender.ts:64](app/src/lib/rdSender.ts:64) | `{ torrentId: string, strategy?: string }` | `RdCheckOutcome` | `defaultCheckFetcher` (private) used by `retryPending` |
 
@@ -882,18 +882,21 @@ either class would nag the user about batches with nothing wrong with them.
 
 Batch driver for `fetch_javdb`. Sequential, paced, single-retry on rate-limit-flavored errors.
 
-Module-level constants ([scraper.ts:14-24](app/src/lib/scraper.ts:14)):
+Module-level constants:
 - `DELAY_MIN_MS = 3000`, `DELAY_MAX_MS = 6000` — between-request jitter range.
 - `RETRY_WAIT_MIN_MS = 10000`, `RETRY_WAIT_MAX_MS = 15000` — back-off range after a 429.
 - `RATE_LIMIT_PATTERNS` — regex array (`\b429\b`, `rate-limit`, `cloudflare`, `too many requests`).
 
 Module-level private values:
-- `realSleep: SleepFn` at [scraper.ts:42](app/src/lib/scraper.ts:42) — `setTimeout`-based.
-- `defaultFetcher` at [scraper.ts:64](app/src/lib/scraper.ts:64) — wraps the `fetch_javdb` invoke.
+- `realSleep: SleepFn` — `setTimeout`-based.
+- `defaultFetcher` — wraps the `fetch_javdb` invoke.
+- `nextScrapeBatchId` — process-local monotonic id. One id is shared by every URL/retry in a
+  `scrapeBatch` call; the next call receives a fresh id so sidecar metadata ownership follows
+  the currently visible web batch rather than the lifetime of a deduped handle.
 
 ---
 
-#### `isRateLimitError(message: string): boolean` *(scraper.ts:26)*
+#### `isRateLimitError(message: string): boolean`
 
 **Purpose**: Decide whether an error message looks like a rate-limit (so `scrapeBatch` should
 back off and retry once).
@@ -1003,7 +1006,8 @@ single retry on rate-limit-flavored errors.
     - `sleep?: SleepFn` — defaults to `realSleep`. Tests inject a no-op.
     - `delayRange?: [number, number]` — between-request range. Defaults `[3000, 6000]`.
     - `retryWaitRange?: [number, number]` — defaults `[10000, 15000]`.
-    - `fetcher?: (url) => Promise<FetchResult>` — defaults to `invoke('fetch_javdb', { url })`.
+    - `fetcher?: (url, batchId) => Promise<FetchResult>` — defaults to
+      `invoke('fetch_javdb', { url, batchId })`.
 - Returns: `Promise<ScrapedGroup[]>` — the final groups array in the input order. Each group
   has its `status` set to `ok` | `error` | `pending` (if aborted before or during its turn).
   If `signal` is aborted after `fetcher` resolves, the result is dropped; `status` stays `pending`
@@ -1020,7 +1024,7 @@ back-off + retry. A second failure is recorded as `error`. Non-rate-limit errors
 immediately (no retry).
 
 **Calls**:
-- `@tauri-apps/api/core::invoke('fetch_javdb', { url })` via `defaultFetcher` — [scraper.ts:65](app/src/lib/scraper.ts:65)
+- `@tauri-apps/api/core::invoke('fetch_javdb', { url, batchId })` via `defaultFetcher`.
 - `randomDelayMs` (both pacing and retry-wait)
 - `isRateLimitError`
 - `realSleep` / injected `sleep`
