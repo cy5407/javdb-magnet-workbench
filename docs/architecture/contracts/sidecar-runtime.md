@@ -17,6 +17,8 @@ Reference for the live Python JSON-lines daemon in [`sidecar/sidecar.py`](../../
 | `realdebrid.RealDebrid` | `_rd_client` | Performs all RD HTTP requests. |
 | `realdebrid.RealDebridError` | RD commands | Stable error bucketing. |
 | `app_logging.setup_logging` | `main` | Initializes logging before handshake. |
+| `javdb_scraper.parse_size_gb` | `_record_group_meta` | Ranks a fetch's rows by file size for the outcome log. |
+| `rd_outcome_log` | `main`, RD commands | Appends one JSONL observation per send / check to `rd_outcomes.jsonl`. Every entry point swallows its own failures — the outcome log must never be able to fail a send. |
 
 ### State Model
 
@@ -25,9 +27,21 @@ Reference for the live Python JSON-lines daemon in [`sidecar/sidecar.py`](../../
 - handshake snapshot: `cookies`, `rd_token`, `settings`, `paths`
 - magnet handle table: `handle_id -> full magnet`
 - reverse dedupe table: normalized magnet key -> handle_id
+- `magnet_meta`: `handle_id -> {code, name, size, tags, date, source, group_seq,
+  group_size, date_rank, size_rank}` — the scraped row as it looked at fetch time.
+  Written by `cmd_fetch_javdb` / `cmd_register_magnets`, read ONLY by the outcome
+  log, dropped alongside the handle in `cmd_forget_magnets`. Group ranks have to be
+  computed at fetch time: only the rows the user actually sends reach the log, so
+  "was this the oldest of the five?" is unanswerable afterwards.
+- `fetch_seq`: monotonic per-session fetch counter, so two fetches of the same JAV
+  code stay distinguishable in the log
 - `start_time` for `ping`
 
-Nothing is persisted by the sidecar. Pending torrent state lives in Rust (`pending.rs`), and settings/token persistence lives in Rust (`settings.rs`, `secret_store.rs`).
+The sidecar persists no protocol state. The one thing it does write is the
+append-only outcome log (`rd_outcomes.jsonl`, next to `debug.log`) — a diagnostic
+side channel that nothing reads back at runtime. Pending torrent state lives in
+Rust (`pending.rs`), and settings/token persistence lives in Rust (`settings.rs`,
+`secret_store.rs`).
 
 ---
 
@@ -194,6 +208,54 @@ Produced by `_err`:
 **Calls**: `_magnet_dedupe_key`, `uuid.uuid4`.
 
 **Called by**: `cmd_fetch_javdb`, `cmd_register_magnets`.
+
+### `_btih8(uri: str) -> str`
+
+**Purpose**: First 8 hex chars of a magnet's BTIH, lower-cased — the join key for the outcome log.
+
+**Contract**:
+- Params: full magnet URI. Unparseable / empty → `""`.
+- Returns: bare hex, e.g. `"0201592f"`. Same 8-char convention as `realdebrid._extract_magnet_hash`.
+- Errors: none.
+
+**Why not `redact_magnet()`**: that returns `magnet:?xt=urn:btih:<8hex>...`, and the
+release redaction gates ([log-redaction-verification.md:23](../../troubleshooting/log-redaction-verification.md),
+[m6a-release-smoke.md:53](../../sessions/m6a-release-smoke.md)) grep the whole log
+directory for exactly `magnet:\?xt|urn:btih` expecting zero hits. Bare hex carries
+the same joining power without turning a passing gate into a permanent false alarm.
+
+**Called by**: `cmd_rd_send_magnet`.
+
+### `_elapsed_ms(started: float) -> int`
+
+**Purpose**: Milliseconds since a `time.monotonic()` mark, floored at 0.
+
+**Why monotonic**: `elapsed_ms` is the field that separates "RD already had this
+cached" from "RD downloaded it while we waited" — `time.time()` would let a clock
+adjustment corrupt exactly that distinction. (Note `process_magnet`'s own
+`cache_wait` budget *does* use wall clock, `realdebrid.py:327`; the two clocks
+coexist in one send.)
+
+**Called by**: `cmd_rd_send_magnet`, `cmd_rd_check_pending`.
+
+### `_record_group_meta(state: DaemonState, code: str, rows: list[dict]) -> None`
+
+**Purpose**: Store each fetched row's raw fields plus its 1-based rank inside that fetch.
+
+**Contract**:
+- `date_rank` 1 = oldest upload; missing dates sort last via `_NO_DATE_SORT_KEY`
+  (`"9999-99-99"`). A raw `""` compares below every ISO date, which would hand
+  rank 1 to every undated row — same sentinel and same reasoning as the frontend's
+  `rdPriority.rdDateKey`.
+- `size_rank` 1 = largest, via `javdb_scraper.parse_size_gb`.
+- Side effects: writes `state.magnet_meta`.
+
+**Deliberately stores raw values only** — no prefix match, no HD verdict. The
+heuristic's single source of truth is `app/src/lib/rdPriority.ts`, and a frozen
+verdict would lock old log rows into whatever the rules were the day they were
+written. See [the outcome-log spec §2](../../specs/2026-08-01-rd-outcome-log.md).
+
+**Called by**: `cmd_fetch_javdb`.
 
 ---
 
@@ -430,7 +492,8 @@ Produced by `_err`:
 - Preconditions: handshake done, token present, handle exists.
 - Timeout budget alignment: `effective_cache_wait` is bounded by `req`'s `cache_wait` baseline (15 if missing in `req`); `deadline = time.monotonic() + effective_cache_wait + 75.0`, keeping Python's budget (max 90s when `req` omits `cache_wait`) strictly within Rust's 105s timeout limit.
 - Session lifecycle: `RealDebrid` client is created with `deadline` and strictly closed via `finally` block on all code paths.
-- Side effects: performs RD HTTP operations through `RealDebrid.process_magnet`.
+- Side effects: performs RD HTTP operations through `RealDebrid.process_magnet`; appends exactly one `event:"send"` row to the outcome log on **every** exit path — completed, pending and error alike. Dropping the error rows would bias the hit-rate tables upward, so failures are observations too.
+- Passes `observer=trail.append` into `process_magnet` to capture the RD status transitions; the returned dict only carries the terminal status, so without the callback there is no way to tell "queued behind other downloads" from "actively downloading".
 - Errors: catches `RealDebridError` and generic exceptions.
 
 **Calls**: `_resolve_strategy`, `_resolve_int_setting`, `_rd_client`, `RealDebrid.process_magnet`, `_classify_rd_error`, `_ok`, `_err`.

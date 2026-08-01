@@ -598,7 +598,11 @@ Module-level constants ([rdPriority.ts:27-46](app/src/lib/rdPriority.ts:27)):
   `includes` on the lower-cased name, *not* `startsWith`: JavDB sometimes renders a row as
   `"[javdb.com]hhd800.com@ABC-123"`, where a prefix test would silently miss. Hardcoded on
   purpose — a user-editable list would need a settings round-trip through Rust + sidecar.
-- `HD_RESOLUTION_RX = /(?:2160p|1080p|4k|uhd|(?<=\d{1,4}x)(?:2160|1080))(?![a-z0-9])/i` —
+- `HD_RESOLUTION_RX = /(?:2160p|1080p|4k|uhd|(?<=\dx)(?:2160|1080))(?![a-z0-9])/i` —
+  The lookbehind is fixed-width on purpose: Python's `re` rejects the variable-width
+  form, and `scripts/rd_log_report.py` must carry a behaviourally identical copy to
+  score the RD outcome log. Only the two characters before the number decide the
+  match, so `\dx` and `\d{1,4}x` are equivalent here.
   private. Every alternative is a fixed-width literal and the lookbehind is bounded, so there is
   no unbounded repetition to backtrack over (same Sonar super-linear-backtracking concern that
   bounded magnetUtils' `SIZE_*_RX`). Two boundaries carry the rule:

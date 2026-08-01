@@ -40,7 +40,11 @@ export const RD_CACHE_PREFIXES: readonly string[] = ["hhd800.com@", "489155.com@
 //     is still caught by JavDB's 高清 tag, while a false HD row survives the
 //     hd_only filter, wears the badge, and lands in the pre-send "high
 //     likelihood" bucket with nothing left to catch it.
-const HD_RESOLUTION_RX = /(?:2160p|1080p|4k|uhd|(?<=\d{1,4}x)(?:2160|1080))(?![a-z0-9])/i;
+// The lookbehind is deliberately fixed-width (`\dx`, not `\d{1,4}x`): Python's
+// `re` rejects variable-width lookbehind, and scripts/rd_log_report.py has to
+// carry a behaviourally identical copy of this rule to score the outcome log.
+// Only the two characters before the number decide the match anyway.
+const HD_RESOLUTION_RX = /(?:2160p|1080p|4k|uhd|(?<=\dx)(?:2160|1080))(?![a-z0-9])/i;
 
 /**
  * Sentinel date key for rows with no upload date. It has to sort AFTER every

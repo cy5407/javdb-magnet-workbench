@@ -45,6 +45,7 @@ Code that actually executes when an end-user runs `javdbmagnet.exe` and clicks s
 | Sidecar runtime daemon | `sidecar/sidecar.py` | [`contracts/sidecar-runtime.md`](contracts/sidecar-runtime.md) |
 | JavDB scraper library | `javdb_scraper.py` (M9; imported by sidecar daemon + tests; pure HTTP+parse, zero Tk/app_logging deps) | [`contracts/python-legacy.md`](contracts/python-legacy.md) §`javdb_scraper.py` |
 | RD client + logging helpers | `realdebrid.py`, `app_logging.py` (imported by sidecar daemon) | [`contracts/python-legacy.md`](contracts/python-legacy.md) |
+| RD outcome log | `rd_outcome_log.py` (imported by sidecar daemon; appends `rd_outcomes.jsonl` next to `debug.log`) | [`contracts/sidecar-runtime.md`](contracts/sidecar-runtime.md) §1 + [spec](../specs/2026-08-01-rd-outcome-log.md) |
 
 ### Bucket 2 — Build scripts (contract owners, build-time only)
 
@@ -56,6 +57,7 @@ Code that runs at build/packaging time, not at user runtime. Contracts matter be
 | Sidecar packaging | `spikes/pyinstaller_sidecar/build_sidecar.py` | [`contracts/sidecar.md`](contracts/sidecar.md) |
 | Frontend config | `app/vite.config.ts`, `app/src/vite-env.d.ts` | Noted in [`frontend-lib.md`](contracts/frontend-lib.md); no business logic |
 | Release pipeline | `scripts/build-release.ps1` | Self-documenting; sequenced in the README of [`contracts/sidecar.md`](contracts/sidecar.md) |
+| Outcome-log analysis | `scripts/rd_log_report.py` | Offline only — never imported by the app. This is where the *hypotheses* live: it carries its own copy of the prefix list and resolution regex so alternative rules can be scored against existing logs without a format change. Divergence from `rdPriority.ts` is the intended use, not a defect. |
 
 ### Bucket 3 — Retired Python (historical reference only)
 

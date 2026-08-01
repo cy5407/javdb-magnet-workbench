@@ -140,8 +140,48 @@ app 內「JavDB Cookies」區塊有「**打開資料目錄**」與「**打開 lo
 - `.env`、`.env.*`、`cookies.txt`：含登入憑證
 - `pending_torrents.json`：含你曾經送過 RD 的 torrent id（可能透露你下載偏好）
 - `logs/`：含 timestamped diagnostic 資料
+- `logs/rd_outcomes.jsonl`：**送出成效日誌**。累積型，每送出一筆就多一行，含番號、
+  檔名與上傳日期——比 `pending_torrents.json` 更完整地反映你的觀看紀錄。設
+  `JAVDB_RD_LOG=0` 可完全關閉（見下節）。
 
 Repo 的 `.gitignore` 已擋下以上路徑，但若你的工作目錄外另有備份 / 雲端同步，請手動排除。
+
+---
+
+## RD 命中優先與成效日誌
+
+送到 RD 的磁力若別人已上傳過，RD 會立刻回快取並產生 https 直連；否則落入 pending，
+得反覆等待重試。app 在**送出前**用本地規則預判命中機率——RD 已於 2024 移除
+`instantAvailability` 端點，所以這是啟發式推測，不是查詢。
+
+規則優先序：轉載站前綴（`hhd800.com@` / `489155.com@`）＋高清 ＞ 最早上傳的高清
+＞ 全組皆非高清時標 ⚠ 且不自動勾選。挑選分頁的「每組只留：RD 命中優先」與
+「只勾選 RD 優先候選」按鈕會依此收斂；送出前若批次含低機率列會先顯示摘要。
+
+### 這套規則準不準？用日誌自己驗
+
+每次送出與重試的結果會寫進 `logs/rd_outcomes.jsonl`（一行一次觀測）。跑報表：
+
+```bash
+python scripts/rd_log_report.py                     # 自動尋找 log 目錄
+python scripts/rd_log_report.py --log <path> --threshold-ms 5000
+```
+
+報表把結果分成三類而不是成功／失敗兩類：**秒回**（RD 本來就有）、**慢但完成**
+（RD 在你等待期間才下載完，或 pending 後重試才好）、**沒人有**。這個區分是必要的
+——`completed` 本身混了前兩者，而分界線取決於你的 `cache_wait` 設定。
+
+報表另有兩道防呆：
+
+- **樣本偏斜警告**：一鍵勾選會把送出收斂到推薦那筆。若你只送推薦的，日誌裡就
+  沒有對照組，命中率再漂亮也**無法證明規則有效**。偶爾走「全部送出」而不是
+  「只送高機率」，才會累積到對照樣本。
+- **排除自造命中**：同一磁力送第二次必定命中——因為第一次是你自己放進 RD 的。
+  預設只採計每個磁力的首次觀測（`--include-repeats` 可保留）。
+
+### 關閉
+
+設環境變數 `JAVDB_RD_LOG=0`，sidecar 就完全不寫這個檔（`debug.log` 不受影響）。
 
 ---
 

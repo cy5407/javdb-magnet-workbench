@@ -45,7 +45,8 @@ if str(ROOT) not in sys.path:  # pragma: no cover — module-init path tweak, ru
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from javdb_scraper import create_session, fetch_magnets  # noqa: E402
+from javdb_scraper import create_session, fetch_magnets, parse_size_gb  # noqa: E402
+import rd_outcome_log  # noqa: E402
 
 PROTOCOL_VERSION = 1
 SIDECAR_VERSION = "0.1.0"
@@ -80,6 +81,27 @@ def redact_magnet(uri: str) -> str:
     if m:
         return f"magnet:?xt=urn:btih:{m.group(1)[:8]}..."
     return "magnet:..." if uri.lower().startswith("magnet:") else "<not-a-magnet>"
+
+
+def _btih8(uri: str) -> str:
+    """First 8 hex chars of the BTIH, lower-cased. `""` when unparseable.
+
+    A join key for the outcome log that is deliberately NOT `redact_magnet()`
+    output: that returns `magnet:?xt=urn:btih:<8hex>...`, and the release
+    redaction gates (log-redaction-verification.md:23, m6a-release-smoke.md:53)
+    grep the whole log directory for exactly `magnet:\\?xt|urn:btih` expecting
+    zero hits. Bare hex carries the same joining power without tripping them.
+    Same 8-char convention realdebrid._extract_magnet_hash already uses.
+    """
+    if not uri:
+        return ""
+    m = _REDACT_MAGNET_RX.match(uri)
+    return m.group(1)[:8].lower() if m else ""
+
+
+def _elapsed_ms(started: float) -> int:
+    """Milliseconds since a `time.monotonic()` mark, floored at 0."""
+    return max(0, int((time.monotonic() - started) * 1000))
 
 
 def extract_magnet_dn(uri: str) -> str:
@@ -164,6 +186,16 @@ class DaemonState:
         # "send to RD" path could still double-bill for cosmetically
         # different but semantically identical magnets.
         self.magnet_to_handle: dict[str, str] = {}
+        # handle_id -> the JavDB row as scraped (name/size/tags/date/code) plus
+        # its rank inside the group it came from. Kept ONLY so the outcome log
+        # can record what the row looked like at send time; nothing in the
+        # protocol reads it back. Group ranks have to be computed here at fetch
+        # time because only the rows the user actually sends reach the log —
+        # the group can never be reconstructed afterwards.
+        self.magnet_meta: dict[str, dict] = {}
+        # Monotonic per-session counter so two fetches of the same JAV code
+        # stay distinguishable in the log.
+        self.fetch_seq = 0
         self.start_time = time.time()
 
 
@@ -333,6 +365,47 @@ def _is_javdb_host(host: str) -> bool:
     return host == _JAVDB_ALLOWED_HOST or host.endswith("." + _JAVDB_ALLOWED_HOST)
 
 
+# Sort key for a missing upload date. Must sort AFTER every real ISO date:
+# a raw "" compares as smaller than "2019-01-01", which would hand rank 1
+# ("earliest upload") to every row JavDB left undated. Same sentinel and same
+# reasoning as the frontend's rdPriority.rdDateKey.
+_NO_DATE_SORT_KEY = "9999-99-99"
+
+
+def _record_group_meta(state: DaemonState, code: str, rows: list[dict]) -> None:
+    """Remember each row's scraped fields + its rank inside this fetch.
+
+    Ranks are 1-based: `date_rank` 1 = oldest upload, `size_rank` 1 = largest
+    file. They are computed HERE rather than at analysis time because the log
+    only ever sees the rows the user chose to send — "was this the oldest of
+    the five?" is unanswerable once the other four are gone.
+
+    Deliberately stores raw scraped values only. No prefix matching, no HD
+    verdict: the heuristic's single source of truth is rdPriority.ts, and a
+    frozen verdict would lock old log rows into whatever the rules were the
+    day they were written.
+    """
+    by_date = sorted(rows, key=lambda r: (r.get("date") or _NO_DATE_SORT_KEY))
+    date_rank = {r["handle_id"]: i + 1 for i, r in enumerate(by_date)}
+    by_size = sorted(rows, key=lambda r: parse_size_gb(r.get("size") or ""), reverse=True)
+    size_rank = {r["handle_id"]: i + 1 for i, r in enumerate(by_size)}
+
+    for r in rows:
+        hid = r["handle_id"]
+        state.magnet_meta[hid] = {
+            "code": code,
+            "name": r.get("name", ""),
+            "size": r.get("size", ""),
+            "tags": list(r.get("tags", []) or []),
+            "date": r.get("date", ""),
+            "source": "javdb",
+            "group_seq": state.fetch_seq,
+            "group_size": len(rows),
+            "date_rank": date_rank[hid],
+            "size_rank": size_rank[hid],
+        }
+
+
 def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
     if not state.handshake_done:
         return _err(req, "bad_request", "handshake required before fetch_javdb")
@@ -398,6 +471,9 @@ def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
             "magnet_redacted": redact_magnet(full),
         })
 
+    state.fetch_seq += 1
+    _record_group_meta(state, result.get("code", "") or "", magnets_out)
+
     return _ok(req, {
         "result": {
             "engine": engine,
@@ -444,6 +520,7 @@ def cmd_forget_magnets(state: DaemonState, req: dict) -> dict:
         n = len(state.magnets)
         state.magnets.clear()
         state.magnet_to_handle.clear()
+        state.magnet_meta.clear()
         return _ok(req, {"forgot": n})
 
     handle_ids = req.get("handle_ids")
@@ -464,6 +541,7 @@ def cmd_forget_magnets(state: DaemonState, req: dict) -> dict:
             key = _magnet_dedupe_key(magnet_uri)
             if state.magnet_to_handle.get(key) == hid:
                 del state.magnet_to_handle[key]
+            state.magnet_meta.pop(hid, None)
             forgot += 1
     return _ok(req, {"forgot": forgot})
 
@@ -503,10 +581,29 @@ def cmd_register_magnets(state: DaemonState, req: dict) -> dict:
             continue
 
         handle_id, deduped = _intern_magnet(state, s)
+        dn = extract_magnet_dn(s)
+        # Only fill in metadata this handle does not already have. Pasting a
+        # magnet that a JavDB fetch already returned yields the SAME handle
+        # (the table is keyed by BTIH), and the pasted row knows nothing but a
+        # `dn=` — overwriting would throw away real tags/date/rank and make the
+        # log claim the row had no metadata when it did.
+        if handle_id not in state.magnet_meta:
+            state.magnet_meta[handle_id] = {
+                "code": "",
+                "name": dn,
+                "size": "",
+                "tags": [],
+                "date": "",
+                "source": "manual",
+                "group_seq": None,
+                "group_size": None,
+                "date_rank": None,
+                "size_rank": None,
+            }
         registered.append({
             "handle_id": handle_id,
             "magnet_redacted": redact_magnet(s),
-            "name": extract_magnet_dn(s),
+            "name": dn,
             "deduped": deduped,
         })
 
@@ -800,27 +897,73 @@ def cmd_rd_send_magnet(state: DaemonState, req: dict) -> dict:
         state, "min_size_mb", req.get("min_size_mb"), 500, min_value=0,
     )
 
+    # Outcome-log bookkeeping. monotonic (not time.time) because elapsed is the
+    # field that separates "RD already had it" from "RD downloaded it while we
+    # waited" — a wall-clock jump would silently corrupt exactly that.
+    started = time.monotonic()
+    trail: list[str] = []
+    meta = state.magnet_meta.get(handle_id)
+    log_ctx = {
+        "btih8": _btih8(magnet),
+        "meta": meta,
+        "cache_wait": cache_wait,
+        "file_pick": strategy,
+        "min_size_mb": min_size_mb,
+    }
+
     try:
         deadline = time.monotonic() + cache_wait + 75.0
         client = _rd_client(state, min_size_mb=min_size_mb, deadline=deadline)
         try:
-            result = client.process_magnet(magnet, strategy=strategy, cache_wait=cache_wait)
+            result = client.process_magnet(
+                magnet, strategy=strategy, cache_wait=cache_wait,
+                observer=trail.append,
+            )
         finally:
             client.close()
     except RealDebridError as e:
-        return _err(req, _classify_rd_error(str(e)), str(e))
+        code = _classify_rd_error(str(e))
+        # Failures are observations too: a magnet that RD refuses outright is a
+        # different phenomenon from one that merely queues, and dropping the
+        # error rows would bias the hit-rate tables upward.
+        rd_outcome_log.log_send(
+            outcome="error", elapsed_ms=_elapsed_ms(started), status_trail=trail,
+            rd_status=trail[-1] if trail else "", error_code=code, **log_ctx,
+        )
+        return _err(req, code, str(e))
     except Exception as e:
+        rd_outcome_log.log_send(
+            outcome="error", elapsed_ms=_elapsed_ms(started), status_trail=trail,
+            rd_status=trail[-1] if trail else "", error_code=_RD_ERR_INTERNAL, **log_ctx,
+        )
         return _err(req, _RD_ERR_INTERNAL, f"{type(e).__name__}: <redacted>")
 
     status = result.get("status")
     if status == "completed":
+        links = result.get("links", [])
+        rd_outcome_log.log_send(
+            outcome="completed", elapsed_ms=_elapsed_ms(started), status_trail=trail,
+            torrent_id=result.get("torrent_id", ""),
+            # process_magnet's completed dict carries no status field; the last
+            # thing the poll loop saw is what got us here.
+            rd_status=trail[-1] if trail else "",
+            files_selected=True, link_count=len(links), **log_ctx,
+        )
         return _ok(req, {
             "status": "completed",
             "torrent_id": result.get("torrent_id", ""),
             "name": result.get("name", ""),
-            "links": result.get("links", []),
+            "links": links,
         })
     # pending
+    rd_outcome_log.log_send(
+        outcome="pending", elapsed_ms=_elapsed_ms(started), status_trail=trail,
+        torrent_id=result.get("torrent_id", ""),
+        rd_status=result.get("rd_status", ""),
+        progress=result.get("progress", 0),
+        files_selected=bool(result.get("files_selected", False)),
+        **log_ctx,
+    )
     return _ok(req, {
         "status": "pending",
         "torrent_id": result.get("torrent_id", ""),
@@ -846,6 +989,7 @@ def cmd_rd_check_pending(state: DaemonState, req: dict) -> dict:
         return _err(req, "bad_request", "torrent_id must be a non-empty string")
     strategy = _resolve_strategy(state, req.get("strategy"))
 
+    started = time.monotonic()
     try:
         deadline = time.monotonic() + 50.0
         client = _rd_client(state, deadline=deadline)
@@ -854,20 +998,46 @@ def cmd_rd_check_pending(state: DaemonState, req: dict) -> dict:
         finally:
             client.close()
     except RealDebridError as e:
-        return _err(req, _classify_rd_error(str(e)), str(e))
+        code = _classify_rd_error(str(e))
+        rd_outcome_log.log_check(
+            outcome="error", elapsed_ms=_elapsed_ms(started),
+            torrent_id=torrent_id, error_code=code,
+        )
+        return _err(req, code, str(e))
     except Exception as e:
+        rd_outcome_log.log_check(
+            outcome="error", elapsed_ms=_elapsed_ms(started),
+            torrent_id=torrent_id, error_code=_RD_ERR_INTERNAL,
+        )
         return _err(req, _RD_ERR_INTERNAL, f"{type(e).__name__}: <redacted>")
 
     status = result.get("status")
     if status == "completed":
+        links = result.get("links", [])
+        # Joined to the original send row by torrent_id. This pair is the only
+        # thing that separates "pending, done four minutes later" from
+        # "pending, still nothing days on" — without it every pending row in
+        # the log looks identical.
+        rd_outcome_log.log_check(
+            outcome="completed", elapsed_ms=_elapsed_ms(started),
+            torrent_id=torrent_id, rd_status="downloaded",
+            progress=100, link_count=len(links),
+        )
         return _ok(req, {
             "status": "completed",
             "torrent_id": torrent_id,
             "name": result.get("name", ""),
-            "links": result.get("links", []),
+            "links": links,
         })
     if status == "missing":
+        rd_outcome_log.log_check(
+            outcome="missing", elapsed_ms=_elapsed_ms(started), torrent_id=torrent_id,
+        )
         return _ok(req, {"status": "missing", "torrent_id": torrent_id})
+    rd_outcome_log.log_check(
+        outcome="pending", elapsed_ms=_elapsed_ms(started), torrent_id=torrent_id,
+        rd_status=result.get("rd_status", ""), progress=result.get("progress", 0),
+    )
     return _ok(req, {
         "status": "pending",
         "torrent_id": torrent_id,
@@ -995,7 +1165,11 @@ def main(argv: list[str]) -> int:
     # caller is responsible for setting the env var if a specific path is
     # required.
     from app_logging import setup_logging
-    setup_logging()
+    log_file = setup_logging()
+    # The outcome log rides in the same directory debug.log resolved to, so a
+    # console-only fallback (no writable candidate) silently disables it rather
+    # than inventing a path of its own.
+    rd_outcome_log.configure(log_file.parent if log_file else None)
 
     run_daemon(sys.stdin, sys.stdout)
     return 0

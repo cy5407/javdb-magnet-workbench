@@ -301,6 +301,7 @@ class RealDebrid:
         strategy: str = "smart",
         cache_wait: int = 15,
         progress: Optional[Callable[[str], None]] = None,
+        observer: Optional[Callable[[str], None]] = None,
     ) -> dict:
         """加磁力 → 選檔案 → 等待 cache_wait 秒 → 判定快取狀態
 
@@ -310,7 +311,21 @@ class RealDebrid:
 
         注意：未快取或解析中（magnet_conversion）都會保留 RD 上的 torrent，回傳 pending
         只有 magnet_error 會真正刪除並丟出例外
+
+        `observer` 是純觀測用的可選 callback：每輪拿到 RD status 就回報一次，讓
+        呼叫端能記錄狀態轉移（rd_outcome_log 用它區分「RD 端排隊」與「實際在
+        下載」——回傳的 dict 只有終局 status，看不出中間走過哪裡）。刻意做成
+        callback 而不是擴充回傳 dict：回傳值會經 sidecar → Rust 的 tagged enum
+        反序列化，而 Rust 在開發機上編不過，改回傳結構等於交付無法驗證的東西。
+        observer 丟出的例外一律吞掉，記錄失敗不得影響送出。
         """
+        def observe(status: str):
+            if observer and status:
+                try:
+                    observer(status)
+                except Exception:
+                    pass
+
         def log(msg: str):
             logger.info(msg)
             if progress:
@@ -334,6 +349,7 @@ class RealDebrid:
             info = self.torrent_info(torrent_id)
             last_status = info.get("status", "")
             last_progress = info.get("progress", 0)
+            observe(last_status)
 
             self._raise_if_terminal_failure(torrent_id, last_status, info)
 

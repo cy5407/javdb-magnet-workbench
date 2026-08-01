@@ -424,7 +424,7 @@ Tagged exception for all RD client failures (auth, permission, rate-limit, HTTP 
 
 ---
 
-#### `process_magnet(self, magnet, strategy="smart", cache_wait=15, progress=None) -> dict`  *([realdebrid.py:215](../../../realdebrid.py#L215))*
+#### `process_magnet(self, magnet, strategy="smart", cache_wait=15, progress=None, observer=None) -> dict`  *([realdebrid.py:215](../../../realdebrid.py#L215))*
 
 **Purpose**: End-to-end flow: add magnet → poll until `waiting_files_selection` → call `pick_files`+`select_files` → poll until `cache_wait` budget exhausted. If RD returns `downloaded`, collect unrestricted links. Otherwise, leave the torrent on RD and return `pending`.
 
@@ -434,6 +434,7 @@ Tagged exception for all RD client failures (auth, permission, rate-limit, HTTP 
   - `strategy: str` — forwarded to `pick_files`.
   - `cache_wait: int = 15` — max seconds to wait for a `downloaded` verdict.
   - `progress: Optional[Callable[[str], None]]` — UI status callback (also gets `logger.info`).
+  - `observer: Optional[Callable[[str], None]]` — pure-observation callback fired with the raw RD `status` on every poll, so a caller can record the transition trail. Added for `rd_outcome_log`: the returned dict only carries the terminal status, which cannot distinguish "queued behind other downloads" from "actively downloading". Deliberately a callback rather than an extra return field — the return value crosses sidecar → Rust's tagged `RdSendOutcome` enum, and Rust cannot be compiled on the dev machine, so changing that shape would mean shipping something unverifiable. Exceptions raised by `observer` are swallowed: recording must never fail a send.
 - Returns: dict with shape
   - completed → `{"status": "completed", "name", "torrent_id", "links": [...]}`
   - pending → `{"status": "pending", "name", "torrent_id", "progress", "rd_status", "files_selected"}`
