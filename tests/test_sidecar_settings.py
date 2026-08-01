@@ -483,21 +483,47 @@ class RdSendMagnetSettingsWiring(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class NonDictRdSettingsHandling(unittest.TestCase):
-    def test_non_dict_rd_settings_does_not_break_rd_commands(self):
+    """`settings["rd"]` 被塞成非 dict 時，RD 指令不得炸成 internal error。
+
+    這兩則刻意走完整的 cmd_rd_user → _rd_client → _rd_settings production path，
+    但把最外層的 HTTP 換掉。**不能 mock `_rd_client`** —— 呼叫 `_rd_settings` 的
+    正是它，mock 掉就把要測的東西一起測沒了；改 mock `RealDebrid.user`，client
+    仍由真的 `_rd_client` 用真的 `_rd_settings` 建出來。
+
+    原版沒有 mock，會用假 token 對 api.real-debrid.com 發真請求：離線環境一律
+    假失敗（rd_internal，與真回歸長得一模一樣），有網路時則對第三方正式服務
+    製造無謂流量。斷言也曾是條件式的（`if not resp["ok"]`），請求萬一成功就
+    什麼都不驗。
+    """
+
+    def _rd_user_with_broken_rd_setting(self, rd_value):
+        from unittest import mock
+        import realdebrid
         state = sd.DaemonState()
-        sd.dispatch(state, {"cmd": "handshake", "request_id": "r0", "cookies": "", "rd_token": "tok", "settings": {}, "paths": {}})
-        sd.dispatch(state, {"cmd": "update_settings", "request_id": "r1", "settings": {"rd": "pwn"}})
-        resp = sd.dispatch(state, {"cmd": "rd_user", "request_id": "r2"})
-        if not resp["ok"]:
-            self.assertNotIn(resp["error"]["code"], [sd._RD_ERR_INTERNAL, "internal"])
+        sd.dispatch(state, {"cmd": "handshake", "request_id": "r0", "cookies": "",
+                            "rd_token": "tok", "settings": {}, "paths": {}})
+        sd.dispatch(state, {"cmd": "update_settings", "request_id": "r1",
+                            "settings": {"rd": rd_value}})
+        with mock.patch.object(realdebrid.RealDebrid, "user",
+                               return_value={"username": "u", "type": "premium",
+                                             "expiration": "2030-01-01", "points": 0}) as m:
+            resp = sd.dispatch(state, {"cmd": "rd_user", "request_id": "r2"})
+        return resp, m
+
+    def test_non_dict_rd_settings_does_not_break_rd_commands(self):
+        resp, m = self._rd_user_with_broken_rd_setting("pwn")
+        self.assertTrue(resp["ok"], resp)
+        m.assert_called_once()
 
     def test_non_dict_rd_settings_list_variant(self):
-        state = sd.DaemonState()
-        sd.dispatch(state, {"cmd": "handshake", "request_id": "r0", "cookies": "", "rd_token": "tok", "settings": {}, "paths": {}})
-        sd.dispatch(state, {"cmd": "update_settings", "request_id": "r1", "settings": {"rd": [1, 2]}})
-        resp = sd.dispatch(state, {"cmd": "rd_user", "request_id": "r2"})
-        if not resp["ok"]:
-            self.assertNotIn(resp["error"]["code"], [sd._RD_ERR_INTERNAL, "internal"])
+        resp, m = self._rd_user_with_broken_rd_setting([1, 2])
+        self.assertTrue(resp["ok"], resp)
+        m.assert_called_once()
+
+    def test_broken_rd_setting_would_be_caught(self):
+        """反向斷言：確認上面兩則真的有鑑別力。若 _rd_settings 沒有把非 dict
+        正規化成 {}，_rd_client 讀 min_size_mb 時就會炸成 rd_internal。"""
+        self.assertEqual(sd._rd_settings(type("S", (), {"settings": {"rd": "pwn"}})()), {})
 
     def test_rd_settings_helper_returns_dict(self):
         state = sd.DaemonState()

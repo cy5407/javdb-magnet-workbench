@@ -37,7 +37,15 @@ DEFAULT_MIN_N = 10
 # 而言那是「等了」，不是「秒回」。門檻可調，因為它取決於你的網路與 cache_wait。
 DEFAULT_THRESHOLD_MS = 5000
 
+# realdebrid._raise_if_terminal_failure 只在這兩種 RD 終態丟例外，它們代表
+# 「RD 端這個磁力拿不到檔案」——對使用者等同「沒人有」，規格 §3 明文歸入 miss。
+# 其餘 error（token 過期、429、API 5xx）與磁力本身無關：把它們算進分母會讓
+# 環境問題看起來像「這個磁力沒人有」，所以留在分母外並單獨報數。
+TERMINAL_FAILURE_CODES = {"rd_magnet_error", "rd_download_failed"}
+
 LABELS = ("hit", "slow", "miss")
+_UNSET = object()
+
 LABEL_ZH = {"hit": "秒回", "slow": "慢但完成", "miss": "沒人有"}
 
 
@@ -83,12 +91,18 @@ def label_sends(events: list[dict], threshold_ms: int) -> list[dict]:
     下載完」，而分界線是 cache_wait 設定值 —— 只看 outcome 欄位，同一個 magnet
     在不同設定下會被歸到不同類。
     """
-    completed_checks: set[str] = set()
+    # torrent_id -> 最晚一次 completed check 的時間。保留時間是必要的：只存
+    # id 的話，任何一次 completed check 都能把「時間更晚的」send 救成 slow。
+    completed_checks: dict[str, Optional[datetime]] = {}
     for e in events:
         if e.get("event") == "check" and e.get("outcome") == "completed":
             tid = e.get("torrent_id") or ""
-            if tid:
-                completed_checks.add(tid)
+            if not tid:
+                continue
+            ts = _parse_ts(e.get("ts"))
+            prev = completed_checks.get(tid, _UNSET)
+            if prev is _UNSET or (ts is not None and (prev is None or ts > prev)):
+                completed_checks[tid] = ts
 
     out: list[dict] = []
     for e in events:
@@ -96,14 +110,29 @@ def label_sends(events: list[dict], threshold_ms: int) -> list[dict]:
             continue
         outcome = e.get("outcome")
         if outcome == "error":
-            label = "error"
+            # 終態失敗 = RD 拿不到這個磁力 = 沒人有。環境錯誤則不可歸因。
+            label = "miss" if e.get("error_code") in TERMINAL_FAILURE_CODES else "error"
         elif outcome == "completed":
             elapsed = e.get("elapsed_ms")
-            elapsed = elapsed if isinstance(elapsed, (int, float)) else 0
-            label = "hit" if elapsed < threshold_ms else "slow"
+            # 缺欄位或非數字一律當「不是秒回」。舊版當成 0（→ hit）是錯的方向：
+            # 這份報表唯一的產出就是命中率，容錯不該往灌高的那一邊倒。
+            label = ("hit" if isinstance(elapsed, (int, float))
+                     and not isinstance(elapsed, bool)
+                     and elapsed < threshold_ms else "slow")
         else:
             tid = e.get("torrent_id") or ""
-            label = "slow" if tid and tid in completed_checks else "miss"
+            label = "miss"
+            if tid and tid in completed_checks:
+                # 只有「不早於這次 send」的 check 才算把它救回來。
+                check_ts = completed_checks[tid]
+                send_ts = _parse_ts(e.get("ts"))
+                if check_ts is None or send_ts is None:
+                    label = "slow"          # 時間不可解析 → 退回舊行為
+                else:
+                    try:
+                        label = "slow" if check_ts >= send_ts else "miss"
+                    except TypeError:
+                        label = "slow"      # naive/aware 混用
         row = dict(e)
         row["label"] = label
         out.append(row)
@@ -262,7 +291,14 @@ def build_report(events: list[dict], threshold_ms: int, min_n: int,
     out.append("RD 送出成效報表")
     out.append("=" * 72)
     out.append(f"事件總數 {len(events)}；送出 {len(labeled)}；納入統計 {len(scored)}；"
-               f"錯誤 {len(errors)}（不計入命中率）")
+               f"環境錯誤 {len(errors)}（token／速率限制／API 錯誤，與磁力無關，"
+               f"不計入命中率；磁力終態失敗已計入「沒人有」）")
+    if errors:
+        codes = defaultdict(int)
+        for r in errors:
+            codes[r.get("error_code") or "(無碼)"] += 1
+        out.append("  環境錯誤明細：" + "、".join(
+            f"{k} {v}" for k, v in sorted(codes.items(), key=lambda kv: -kv[1])))
     if dropped:
         out.append(f"已排除重複送出的同一 magnet {dropped} 筆 —— 第二次必定命中，"
                    f"因為第一次是你自己放進 RD 的（--include-repeats 可保留）")

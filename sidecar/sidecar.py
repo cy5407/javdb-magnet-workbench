@@ -398,6 +398,18 @@ def _record_group_meta(state: DaemonState, code: str, rows: list[dict]) -> None:
 
     for r in rows:
         hid = r["handle_id"]
+        prev = state.magnet_meta.get(hid)
+        # An earlier JavDB group in this session already claimed this handle
+        # (same BTIH on two pages — a re-release or a compilation). Keep the
+        # first claim: the frontend attributes the row first-occurrence-wins
+        # with web groups at the array head (rowClassByHandle,
+        # buildSelectedSendItems), so the code/tags/rank the user actually
+        # acted on are the FIRST group's. Recording the second group's would
+        # log a class the user never saw — and rank is unrecoverable once
+        # overwritten. Manual metadata is the opposite case and must still be
+        # upgraded: it only ever carries a `dn=`.
+        if prev is not None and prev.get("source") == "javdb":
+            continue
         state.magnet_meta[hid] = {
             "code": code,
             "name": r.get("name", ""),

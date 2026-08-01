@@ -34,8 +34,19 @@
 ### 文件整併
 
 `Task.md`（四分頁 + RD 完成時間 MVP）與 `docs/Task.md`（多模型審查 P1/P2/P3 修補）
-在逐條驗證全數完成後刪除——前者 15 項、後者 11 項，均以程式碼與測試實際核對，
-不是憑檔頭標記。只留執行紀錄（本檔與 `implementation-notes.md`）。
+在逐條驗證全數完成後刪除——前者 24 項 checklist、後者 11 個 P1/P2/P3 條目。
+只留執行紀錄（本檔與 `implementation-notes.md`）。
+
+**更正（2026-08-01 稍後）**：本段原寫「前者 15 項」，那是刪除當下所跑的檢查
+條數，不是 `Task.md` 內的項目數（實際 24 條 `- [ ]`）。原檔已刪，後人無法自行
+核對，因此在此明確更正。
+
+`Task.md` 的「完成定義」另含三條無法由程式碼或測試證明的人工項目——Windows
+Tauri GUI 實際操作、真實 pending → retry → completed 流程、重建 portable EXE
+確認四分頁與完成時間存在於執行檔中。這三條**已於 2026-07-26 完成並記錄在
+merge commit `d9e8032`**（「Portable EXE built and manually accepted against a
+real pending → retry → completed run.」）。刪除當下的紀錄沒有引用這筆，導致
+外部審查誤判為「人工驗收從未進行」；在此補上出處。
 
 刪除前先把兩條**只存在於 `docs/Task.md`** 的「刻意不做」決策移進活躍位置，
 否則刪掉的不只是清單而是知識：

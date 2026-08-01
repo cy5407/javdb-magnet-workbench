@@ -102,7 +102,9 @@ User 點出第一次總結講太滿，後續補：
 
 ## [2026-06-01] `docs/Task.md` 與 Codex `tool-scan` skill 準備
 
-> `docs/Task.md` 已於 2026-08-01 驗收通過後刪除（P1/P2/P3 共 11 項全數完成）。
+> `docs/Task.md` 已於 2026-08-01 驗收通過後刪除（P1 三項、P2 五項全數完成；
+> P3 為選配 hardening，其中 P3-3 首條未實作，該檔自述 P3-3「不是主線完成
+> 條件」）。
 > 以下段落保留原樣作為當時的決策紀錄。該檔中兩條「刻意不做」的理由已移入
 > `sidecar/sidecar.py::_is_javdb_host` 與
 > `docs/architecture/contracts/python-legacy.md` 的 `check_torrent` 條目。

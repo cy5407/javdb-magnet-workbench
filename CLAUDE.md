@@ -5,13 +5,13 @@
 - Python：`.venv/bin/python -m pytest tests/ -q`
 - 前端：`cd app && npx vitest run`
 - 型別：`cd app && npm run check`（svelte-check，0 errors 0 warnings 才算過）
-- Rust：`cd app/src-tauri && cargo test --lib` —— **本機（Linux）預設編不過**，
-  但**不是無解**。2026-08-01 實測確認只需兩項修改即可通過：`Cargo.toml` 的
-  keyring features 按平台拆開，加上一份 Linux sidecar binary；修好後
-  **81 passed / 0 failed**。細節與逐步驗證見
-  [`docs/platform/linux-support.md`](docs/platform/linux-support.md)。
-  在未套用該修改前，Rust 端變更以人工細審代替，並在回報中註明此 gate 被跳過——
-  但不得再宣稱它「無法修復」。
+- Rust：`cd app/src-tauri && cargo test --lib` —— **keyring 那道編譯錯誤已於
+  2026-08-01 修掉**（`Cargo.toml` 的 features 按平台拆開）。在 Linux 上仍需一份
+  `app/src-tauri/binaries/sidecar-x86_64-unknown-linux-gnu` 才能通過 build script；
+  用 PyInstaller 產一份即可（見
+  [`docs/platform/linux-support.md`](docs/platform/linux-support.md) §2），
+  之後 **81 passed / 0 failed**。這個 gate 不再是「無法使用」，動 Rust 前請先
+  把它跑起來，不要再預設跳過。
 - 驗收以機器可比對方式核對 baseline：既有測試案例不得刪除或弱化；刻意的
   行為契約變更允許改測試，但須說明舊期待、Red 原因與新期待。
 
@@ -22,7 +22,7 @@
 | `pytest tests/ -q` | 394 passed, 6 subtests |
 | `npx vitest run` | 9 files / 253 tests |
 | `npm run check` | 189 files, 0 errors 0 warnings |
-| `cargo test --lib` | 81 passed（需先套用 linux-support.md 的兩項修改） |
+| `cargo test --lib` | 81 passed（Linux 上需先產一份 sidecar binary，見 linux-support.md §2） |
 
 ## 契約文件同步
 

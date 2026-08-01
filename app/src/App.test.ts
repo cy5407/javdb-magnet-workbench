@@ -1019,6 +1019,69 @@ describe("Stale Handle Forget on Scrape (Item 6)", () => {
     });
   });
 
+  /**
+   * The case above uses disjoint handles (web-h-1 vs h-1), so it only proves
+   * the GROUP-level filter works. The sidecar keys handles by BTIH, so a
+   * pasted magnet whose BTIH matches a scraped one shares the handle — and a
+   * per-group filter releases it while the manual row is still on screen.
+   * Without this case the aliasing bug passes every existing assertion.
+   */
+  it("keeps a handle a surviving manual group still shows, even across a scrape", async () => {
+    // Collected into an array rather than a nullable single value: TS narrows
+    // a `let x = null` that is only reassigned inside a callback back to
+    // `null`, and the property read then fails svelte-check.
+    const forgotten: string[] = [];
+    handlers.forget_magnets = (args) => {
+      const ids = (args?.handleIds as string[]) ?? [];
+      forgotten.push(...ids);
+      return ids.length;
+    };
+    // Same BTIH on both sides → sidecar hands back the same handle_id.
+    handlers.register_magnets = () => ({
+      registered: [
+        {
+          handle_id: "h-shared",
+          magnet_redacted: "magnet:?xt=urn:btih:abc…",
+          name: "SHARED-001",
+          deduped: true,
+        },
+      ],
+      invalid: [] as string[],
+    });
+    handlers.fetch_javdb = (args) => ({
+      engine: "test",
+      url: (args?.url as string) ?? "",
+      code: "SHARED-001",
+      title: "T",
+      magnet_count: 1,
+      magnets: [{
+        handle_id: "h-shared", name: "SHARED-001.mp4", size: "1 GB",
+        tags: [], date: "2026-01-01", magnet_redacted: "magnet:?xt=urn:btih:abc…",
+      }],
+    });
+
+    await mountApp();
+    const urlBox = screen.getByPlaceholderText(/https:\/\/javdb/);
+    await fireEvent.input(urlBox, { target: { value: "https://javdb.com/v/ABC123" } });
+    await fireEvent.click(screen.getByRole("button", { name: "開始擷取" }));
+    await waitFor(() => {
+      expect(tauriMocks.invoke).toHaveBeenCalledWith("fetch_javdb", expect.anything());
+    });
+    await pasteOneMagnet();
+
+    forgotten.length = 0;
+    await fireEvent.input(urlBox, { target: { value: "https://javdb.com/v/XYZ789" } });
+    await fireEvent.click(screen.getByRole("button", { name: "開始擷取" }));
+
+    await waitFor(() => {
+      expect(tauriMocks.invoke).toHaveBeenCalledWith("fetch_javdb", { url: "https://javdb.com/v/XYZ789" });
+    });
+    // Releasing it would leave the still-rendered, still-checked pasted row
+    // pointing at a dead handle — unrecoverable, since the full magnet only
+    // ever existed inside the sidecar.
+    expect(forgotten).not.toContain("h-shared");
+  });
+
   it("does not call forget_magnets when there are no web groups", async () => {
     let forgetCalled = false;
     handlers.forget_magnets = () => {

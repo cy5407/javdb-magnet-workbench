@@ -1,6 +1,9 @@
 # RD 送出成效日誌規格
 
-日期：2026-08-01　狀態：已與使用者對齊，待實作
+日期：2026-08-01　狀態：**已實作**（commit `1cd0410`，修正 `e77ac4d`）。
+現行行為以程式碼為準：`rd_outcome_log.py`、`sidecar/sidecar.py::cmd_rd_send_magnet`、
+`scripts/rd_log_report.py`；契約見 `docs/architecture/contracts/sidecar-runtime.md` §1。
+本檔為歷史存檔，只補「實作偏離」段（§12），不回頭改寫正文。
 
 ## 1. 目的
 
@@ -164,3 +167,22 @@ grep -nE 'magnet:\?xt|urn:btih' <log_dir>/rd_outcomes.jsonl   # 預期無輸出
 - 不在 Python 複製任何啟發式規則。
 - 不做設定頁 UI 開關（用環境變數）。
 - 不自動上傳、不做遙測外送——純本機檔案。
+
+## 12. 實作偏離本規格之處（事後補記，2026-08-01）
+
+1. **§7／§8.3 的 `first_status` 未落地，實作為 `status_trail`**：`observer` 每輪都拿得到
+   status，只留第一個會丟掉「queued → downloading → downloaded」這種轉移序列，而那正是
+   區分「RD 端排隊」與「實際在下載」的訊息。改記摺疊連續重複、上限 8 筆的序列。
+   釘住此欄位的測試：`tests/test_rd_outcome_log.py::StatusTrailTest`、
+   `tests/test_rd_outcome_log_e2e.py::E2ECachedHit`。
+
+2. **§3 的標籤定義曾未被報表完整實作**：規格寫「沒人有 = 始終 pending／終態失敗」，
+   但初版 `rd_log_report.py` 把**所有** error 排除於分母，包含 `rd_magnet_error` 這類
+   磁力終態失敗——會系統性高估命中率。已修正為終態失敗歸 `miss`、環境錯誤
+   （token／429／API）維持排除並單獨報數。
+
+3. **§2「不在 Python 複製任何啟發式規則」的範圍澄清**：該條約束的是**日誌寫入端**
+   （sidecar 只記原始觀測）。`scripts/rd_log_report.py` 持有一份分析用的 prefix 清單與
+   解析度正則，是 §2 尾句與 §3 表頭「判定（報表腳本）」刻意設計的分工——假設寫在報表、
+   觀測寫在日誌，才能不改格式就重跑舊資料檢驗新規則。這不是偏離，是規格意圖，
+   但原文措辭容易被讀成「整個 Python 都不得有規則」，在此澄清。

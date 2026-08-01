@@ -330,10 +330,27 @@
     // Web groups are about to be replaced — release their handles so the
     // sidecar's handle table doesn't grow across repeated scrapes. Manual
     // groups survive, so their handles must NOT be forgotten.
+    //
+    // "Their handles" has to be read per-HANDLE, not per-group: the sidecar
+    // keys the table by BTIH, so a pasted magnet whose BTIH matches a scraped
+    // one gets the SAME handle_id (that shared state is deliberate — it is
+    // what the ＝網頁同筆 badge reports). Filtering only by "is this group
+    // manual?" therefore releases a handle a surviving manual row is still
+    // showing, and forget_magnets has no refcount to save us: the pasted row
+    // stays on screen, stays checked, and fails with unknown_handle at send
+    // time. The full magnet lives only in the sidecar, so the user cannot
+    // recover it from the UI.
+    const survivingManualIds = new Set(
+      groups
+        .filter(isManualGroup)
+        .flatMap((g) => g.result?.magnets.map((m) => m.handle_id) ?? []),
+    );
     const staleIds: string[] = [];
     for (const g of groups) {
       if (!isManualGroup(g) && g.result) {
-        for (const m of g.result.magnets) staleIds.push(m.handle_id);
+        for (const m of g.result.magnets) {
+          if (!survivingManualIds.has(m.handle_id)) staleIds.push(m.handle_id);
+        }
       }
     }
 

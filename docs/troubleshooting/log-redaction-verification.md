@@ -1,4 +1,4 @@
-# 確認 logs 目錄沒洩漏 magnet hash / token
+# 確認 logs 目錄沒洩漏完整 magnet / 完整 hash / token
 
 ## 為什麼這條 recipe 存在
 
@@ -27,7 +27,13 @@ defense in depth。
 - 每次更新版本後，跑過一次「送 RD」流程
 - 看到別人擔心 magnet 洩漏到 log 想自證沒事
 - M6a / RC smoke 流程的固定步驟
-- 開啟 issue 想附 log 之前 —— **必跑**，確認附上去的內容沒帶 hash
+- 開啟 issue 想附 log 之前 —— **必跑**，確認附上去的內容沒帶完整 magnet 或完整 hash
+
+> ⚠ **這四條 pattern 掃不到的東西**：兩份日誌都刻意保留 BTIH 前 8 碼當關聯鍵
+> （可在公開 torrent 索引上比對），而 `rd_outcomes.jsonl` 每行還帶 JavDB 番號
+> （`code`）與檔名（`name`）明文。附 log 到公開場合前，請**排除
+> `rd_outcomes.jsonl` 或先脫敏**——跑完四條 pattern 只證明沒有完整 magnet／
+> token／cookie，不證明沒有可識別的觀看資訊。
 
 ## 快速驗證指令
 

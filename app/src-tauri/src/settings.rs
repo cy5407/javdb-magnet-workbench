@@ -75,7 +75,7 @@ impl Default for Settings {
 /// The frontend validates too, but legacy import and hand-edited
 /// settings.json bypass it — and an out-of-range value silently breaks
 /// every RD send at `timeout_for` with an unrelated-looking error.
-fn clamp_rd_settings(mut s: Settings) -> Settings {
+pub(crate) fn clamp_rd_settings(mut s: Settings) -> Settings {
     s.rd.cache_wait_seconds = s.rd.cache_wait_seconds.clamp(
         MIN_RD_CACHE_WAIT_SECS as u32,
         MAX_RD_CACHE_WAIT_SECS as u32,
@@ -119,6 +119,16 @@ pub fn read_settings(
     let store = app.store(store_path).map_err(|e| e.to_string())?;
     match store.get(SETTINGS_KEY) {
         Some(v) => serde_json::from_value::<Settings>(v)
+            // Clamping on the way OUT, not only on the way in. write_settings
+            // was the sole clamp site, which left every value that reached
+            // settings.json by another route unbounded: the legacy importer
+            // writes the store directly, and the file is plain JSON a user can
+            // edit. An out-of-range cache_wait_seconds makes sidecar_manager's
+            // timeout_for reject EVERY rd_send_magnet before it is even sent,
+            // with an error that says nothing about settings — and the editor
+            // cannot rescue it, because settingsValid blocks saving until the
+            // user fixes the value by hand.
+            .map(clamp_rd_settings)
             .map(without_secrets)
             .map_err(|e| e.to_string()),
         None => Ok(without_secrets(Settings::default())),

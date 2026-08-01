@@ -1,6 +1,9 @@
 # RD 命中優先（送出前預判快取機率）規格
 
-日期：2026-08-01　狀態：已與使用者對齊，待實作
+日期：2026-08-01　狀態：**已實作**（commit `f92c33d`）。
+現行行為以程式碼為準：`app/src/lib/rdPriority.ts`、`app/src/lib/magnetUtils.ts`、
+`app/src/App.svelte`；契約見 `docs/architecture/contracts/frontend-lib.md` §3.4。
+本檔為歷史存檔，只補「實作偏離」段（§6b），不回頭改寫正文。
 
 ## 1. 問題與目標
 

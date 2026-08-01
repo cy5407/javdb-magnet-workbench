@@ -773,6 +773,18 @@ fn import_env_settings_patch(
     });
     legacy_import::apply_settings_patch(&mut base, patch);
     blank_rd_api_token(&mut base);
+    // Round-trip through the typed shape so the imported values land on disk
+    // already clamped. A legacy `.env` can carry RD_CACHE_WAIT=1, and
+    // assign_u32_setting only checks that it parses as u32 — writing that
+    // through untouched leaves a settings.json that makes every later RD send
+    // fail inside sidecar_manager's timeout gate. Non-deserializable payloads
+    // keep the raw value: the importer's job is best-effort migration, not
+    // validation, and read_settings clamps on the way out regardless.
+    if let Ok(typed) = serde_json::from_value::<crate::settings::Settings>(base.clone()) {
+        if let Ok(v) = serde_json::to_value(crate::settings::clamp_rd_settings(typed)) {
+            base = v;
+        }
+    }
     store.set("settings", base);
     if let Err(e) = store.save() {
         report.warnings.push(format!("settings save: {e}"));

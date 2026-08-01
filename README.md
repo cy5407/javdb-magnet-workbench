@@ -230,7 +230,7 @@ python scripts/rd_log_report.py --log <path> --threshold-ms 5000
 | JavDB cookies 絕不長期落純文字 | Windows Credential Manager（target `JavDBMagnet/JAVDB_COOKIES`）；`cookies.txt` 只是過渡用範本檔，下次 app 啟動 / 按「重新整理」後自動加密寫回 keyring 並刪除明文 |
 | 完整 magnet 不外洩到 frontend / settings / pending JSON / log | sidecar 用 `handle_id` 引用；只在 Rust transient String（剪貼簿寫入時）與 RD HTTP body 短暫存在 |
 | `pending_torrents.json` 不含 magnet 文字 | 由 Rust `entries_have_no_magnet_field` 單元測試守住 |
-| `logs/` 全目錄不含 BTIH hash | `realdebrid.py::_request` 對 `data["magnet"]` 永遠記 `<redacted>`；`rd_outcomes.jsonl` 的關聯鍵用裸 8 碼 hex（非 `redact_magnet()` 輸出，後者格式本身會命中掃描 pattern），並在寫出前逐行過 `_FORBIDDEN_RX`。由 `tests/test_rd_outcome_log_e2e.py::E2ERedactionGate` 實跑掃描守住 |
+| `logs/` 全目錄不含**完整** magnet 與**完整** BTIH | **兩份日誌都刻意保留 BTIH 前 8 碼作為關聯鍵**（`debug.log` 由 `realdebrid.py::_extract_magnet_hash`、`rd_outcomes.jsonl` 由 `sidecar._btih8`），完整 hash 與完整 magnet 則永不寫入：`realdebrid.py::_request` 對 `data["magnet"]` 記 `<redacted>`，`rd_outcomes.jsonl` 另在寫出前逐行過 `_FORBIDDEN_RX`。由 `tests/test_rd_outcome_log_e2e.py::E2ERedactionGate` 實跑掃描守住。注意 8 碼前綴仍可在公開 torrent 索引上被搜尋比對——附 log 到公開場合前請一併考量 |
 | Clipboard 寫入集中在 Rust | frontend 不直接 import `tauri-plugin-clipboard-manager` |
 | capability 最小化 | `capabilities/default.json` 只開 `core:default` |
 | 同一 magnet 不重複送 RD（防雙扣額度） | **兩道防線**：sidecar 維護 normalized BTIH（`btih:<lowercase-hex>`）→ handle 反查表，同 hash 不同 `dn`/大小寫/參數順序皆共用 handle；frontend 送 RD 前再依 `handle_id` 去重（`dedupeByHandleId` helper） |

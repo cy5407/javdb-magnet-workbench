@@ -25,11 +25,23 @@ serde_json = "1"
 # this aligns with what's already in the binary; we just need the explicit
 # dep to import mpsc::unbounded_channel without going through tauri internals.
 tokio = { version = "1", features = ["sync"] }
-# RD API token storage. Backed by Windows Credential Manager on the dev box;
-# `apple-native` / `linux-native-async-persistent` enable the equivalent
-# secure stores on the other targets so `keyring::Entry` works uniformly.
-keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-async-persistent"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+
+# RD API token storage, split per platform so each target pulls only its own
+# backend. A single all-targets line pulled `secret-service` into every build
+# without enabling one of its runtime features — a hard compile error on Linux,
+# which is why `cargo test --lib` was recorded as an unusable gate. Windows is
+# unaffected in behaviour; it just stops compiling two backends it never uses.
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+# sync-secret-service (dbus-secret-service) rather than the async one: it needs
+# no zbus runtime feature, and every keyring call site here is synchronous.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["linux-native-sync-persistent", "crypto-rust"] }
 
 [profile.release]
 panic = "abort"

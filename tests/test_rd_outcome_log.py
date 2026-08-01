@@ -383,10 +383,52 @@ class LabelTest(unittest.TestCase):
         rows = rd_log_report.label_sends([send(outcome="error")], 5000)
         self.assertEqual(rows[0]["label"], "error")
 
-    def test_missing_elapsed_does_not_crash(self):
-        ev = send()
-        del ev["elapsed_ms"]
-        self.assertEqual(rd_log_report.label_sends([ev], 5000)[0]["label"], "hit")
+    def test_missing_or_garbage_elapsed_is_never_counted_as_a_hit(self):
+        """舊期待：缺 elapsed_ms 當成 0 → hit。
+        Red 原因：這份報表唯一的產出就是命中率，容錯往「灌高」那一邊倒等於
+        讓壞資料自動變成好消息。schema v1 一定會寫這個欄位，但未來換 schema、
+        換寫入端或手動合併外部日誌時就會出現缺欄位。
+        新期待：無法證明是秒回的一律記 slow。"""
+        for bad in (None, "abc", True):
+            ev = send()
+            if bad is None:
+                del ev["elapsed_ms"]
+            else:
+                ev["elapsed_ms"] = bad
+            self.assertEqual(rd_log_report.label_sends([ev], 5000)[0]["label"], "slow",
+                             f"elapsed_ms={bad!r}")
+
+    def test_terminal_failure_counts_as_miss(self):
+        """規格 §3：「沒人有 = 始終 pending / 終態失敗」。把磁力終態失敗排除於
+        分母會系統性高估命中率——規則越糟、失敗越多，表反而越漂亮。"""
+        for code in ("rd_magnet_error", "rd_download_failed"):
+            rows = rd_log_report.label_sends(
+                [send(outcome="error", error_code=code)], 5000)
+            self.assertEqual(rows[0]["label"], "miss", code)
+
+    def test_environment_errors_stay_out_of_the_denominator(self):
+        """token 過期／429 與「這個磁力有沒有人有」無關，算進 miss 會把環境
+        問題誤報成磁力不存在。"""
+        for code in ("rd_token_invalid", "rd_rate_limited", "rd_api_error", None):
+            rows = rd_log_report.label_sends(
+                [send(outcome="error", error_code=code)], 5000)
+            self.assertEqual(rows[0]["label"], "error", code)
+
+    def test_a_check_older_than_the_send_does_not_rescue_it(self):
+        """只存 torrent_id 而丟掉時間的話，任何一次舊的 completed check 都能
+        把後來的 send 救成 slow。"""
+        rows = rd_log_report.label_sends([
+            send(outcome="pending", torrent_id="T1", ts="2026-08-01T12:00:00.000+08:00"),
+            check(torrent_id="T1", ts="2026-08-01T09:00:00.000+08:00"),
+        ], 5000)
+        self.assertEqual(rows[0]["label"], "miss")
+
+    def test_a_later_check_still_rescues(self):
+        rows = rd_log_report.label_sends([
+            send(outcome="pending", torrent_id="T1", ts="2026-08-01T12:00:00.000+08:00"),
+            check(torrent_id="T1", ts="2026-08-01T12:04:00.000+08:00"),
+        ], 5000)
+        self.assertEqual(rows[0]["label"], "slow")
 
 
 class DedupeTest(unittest.TestCase):
@@ -563,6 +605,41 @@ class GroupMetaTest(unittest.TestCase):
                 self.state.magnet_meta[r["handle_id"]] for r in rows}
         self.assertEqual(meta["dated"]["date_rank"], 1)
         self.assertEqual(meta["undated"]["date_rank"], 2)
+
+    def test_second_fetch_does_not_reattribute_a_shared_handle(self):
+        """同一 BTIH 出現在兩個 JavDB 頁面時，日誌必須沿用**使用者實際看到的
+        那一組**的 metadata。前端是 first-occurrence-wins 且 web 群組在陣列頭，
+        sidecar 若改記後一組，會把 tags/date/rank 換成使用者沒依據過的值——
+        而 rank 一旦被覆蓋就再也算不回來。"""
+        first = self._fetch([
+            {"name": "FIRST-001", "size": "9GB", "tags": ["高清"],
+             "date": "2026-01-01", "magnet": M1},
+            {"name": "other", "size": "1GB", "tags": [], "date": "2026-02-01",
+             "magnet": M2},
+        ])
+        hid = [r["handle_id"] for r in first if r["name"] == "FIRST-001"][0]
+        before = dict(self.state.magnet_meta[hid])
+
+        self._fetch([
+            {"name": "SECOND-999", "size": "1GB", "tags": [],
+             "date": "2026-05-05", "magnet": M1},
+        ])
+        after = self.state.magnet_meta[hid]
+        self.assertEqual(after["name"], "FIRST-001")
+        self.assertEqual(after["tags"], ["高清"])
+        self.assertEqual(after["group_seq"], before["group_seq"])
+        self.assertEqual(after["date_rank"], before["date_rank"])
+
+    def test_javdb_still_upgrades_manual_meta(self):
+        """反向斷言：別為了擋覆寫而把「手貼列後來被擷取到」的升級也擋掉——
+        手貼 meta 只有 dn=，被真資料取代才是對的。"""
+        sd.dispatch(self.state, {"cmd": "register_magnets", "request_id": "p1",
+                                 "magnets": [M1 + "&dn=PASTED"]})
+        rows = self._fetch([{"name": "REAL-001", "size": "5GB", "tags": ["高清"],
+                             "date": "2026-01-01", "magnet": M1}])
+        meta = self.state.magnet_meta[rows[0]["handle_id"]]
+        self.assertEqual(meta["source"], "javdb")
+        self.assertEqual(meta["name"], "REAL-001")
 
     def test_group_seq_increments_across_fetches(self):
         self._fetch([{"name": "a", "size": "1GB", "tags": [], "date": "2026-01-01",
