@@ -34,9 +34,14 @@
 
 **歷史存檔不回頭改**：`docs/code-simplification-plan-*.md`、
 `docs/security-audit-*.md`、`docs/sessions/`、`docs/superpowers/specs/`、
-`docs/specs/*`，以及 `Task.md`／`docs/Task.md`／`implementation-notes.md`／
-`PROGRESS.md` 這四份歷次任務紀錄。它們記錄的是「當時決定了什麼」，改寫等於
-竄改紀錄；只在檔頭標註狀態並指向現行來源。
+`docs/specs/*`，以及 `implementation-notes.md`／`PROGRESS.md` 這兩份執行紀錄。
+它們記錄的是「當時決定了什麼」，改寫等於竄改紀錄；只在檔頭標註狀態並指向
+現行來源。
+
+**任務規格檔用完即刪**：純粹描述「要實作什麼」的任務檔（如已移除的 `Task.md`／
+`docs/Task.md`）在驗收通過後刪除，只留執行紀錄。刪除前必須逐條驗證確實完成，
+並把只存在於該檔的決策理由（特別是「刻意不做某事」的理由）先移進對應的契約
+文件或程式碼註解——否則刪的不只是清單，是知識。
 
 ## 多代理工作流
 

@@ -462,6 +462,14 @@ Tagged exception for all RD client failures (auth, permission, rate-limit, HTTP 
 
 **Purpose**: Re-poll a previously-pending torrent. If still `waiting_files_selection`, auto-pick & re-select.
 
+> **Deliberate contract — do not "fix" this.** When the retry finds nothing to pick, this path
+> returns `pending`; it does **not** `delete_torrent` + raise the way `process_magnet` does. A
+> review round proposed making the two paths symmetric and it was rejected: the pending-retry
+> contract deliberately does not persist the magnet (`pending_torrents.json` must never contain
+> magnet text), so a deleted torrent could never be re-sent — the user's only copy of that magnet
+> may already be gone from the UI. Returning `pending` keeps the torrent recoverable. Existing
+> tests pin this behaviour.
+
 **Contract**:
 - Params:
   - `torrent_id: str`.

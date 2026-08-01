@@ -1,4 +1,5 @@
-// Component tests for the four-tab shell (Task.md 2.1 / 2.4 / 2.5).
+// Component tests for the four-tab shell: each tab owns a fixed set of
+// sections, and the RD tab in particular must carry no credential editors.
 //
 // Two things are being pinned down here that no unit test can reach:
 //   - each tab renders ONLY its own sections, and the RD tab in particular
@@ -249,8 +250,9 @@ describe("tab content ownership", () => {
     await clickTab(RD_TAB);
     expect(tab(RD_TAB).getAttribute("aria-current")).toBe("page");
     expect(isShown(heading("Real-Debrid"))).toBe(true);
-    // Task.md 2.4 — anchored on the stable input id so an editor that gets
-    // re-wrapped rather than moved still fails here.
+    // The RD tab must not host the token editor — that belongs to 設定.
+    // Anchored on the stable input id so an editor that gets re-wrapped
+    // rather than actually moved still fails here.
     expect(isShown(document.getElementById("rd-token-input"))).toBe(false);
     expect(isShown(heading("Real-Debrid Token"))).toBe(false);
     expect(isShown(heading(/^JavDB Cookies/))).toBe(false);
@@ -390,8 +392,8 @@ describe("per-URL scrape outcome on the search tab", () => {
     await mountApp();
     await scrapeOneUrl();
 
-    // Task.md 2.2 — the outcome must be readable on tab 1, not only after
-    // switching to 「2. 挑選 Magnet」.
+    // A per-URL fetch outcome must be readable on the scrape tab itself,
+    // not only after switching to 「2. 挑選 Magnet」.
     // The select tab renders the same error, so "some visible" is the signal.
     await waitFor(() => {
       expect(screen.getAllByText(/javdb_parse_failed/).some(isShown)).toBe(true);
@@ -487,14 +489,17 @@ describe("RD progress table completion time", () => {
       expect(progressRows()).toHaveLength(1);
     });
 
-    // Task.md 1.3: the wording must not imply RD's real finish time.
+    // completed_at is when THIS APP first confirmed completion, not when RD
+    // actually finished — a pending row is only observed on retry. The column
+    // wording must not imply the latter.
     const header = screen.getByRole("columnheader", { name: /完成時間/, hidden: true });
     expect(header.textContent).toContain("本程式確認");
     expect(header.getAttribute("title")).toContain("非 Real-Debrid 伺服器");
   });
 });
 
-// Task.md 情境 1 end to end. rdSender.test.ts already pins the two halves
+// The pending -> retry -> completed journey, end to end.
+// rdSender.test.ts already pins the two halves
 // (applyRetryEventToProgressRows, buildRdDisplayRows) as pure functions; what
 // only the component can show is that retryAllPending actually wires them
 // together — that the row the user retried is the one that moves, and that it
@@ -632,7 +637,8 @@ describe("retrying a pending row through to completion", () => {
   });
 });
 
-// Task.md 2.5 — 清除 is the last of 新增/更換/驗證/清除 to land on the 設定 tab.
+// 清除 is the last of 新增/更換/驗證/清除 to land on the 設定 tab; all four
+// credential operations belong there and nowhere else.
 // These live here rather than in a lib unit test on purpose: the behaviour
 // being specified IS the component's state machine (arm -> confirm -> invoke
 // -> adopt the returned status). There is no pure function to extract that

@@ -358,6 +358,12 @@ def _is_javdb_host(host: str) -> bool:
     allowlist, a user tricked into supplying an arbitrary HTTPS URL
     would leak `_jdb_session` + `cf_clearance` to the attacker's
     endpoint (F-01 / CWE-200 / CWE-540).
+
+    Deliberately NOT widened to numeric mirrors (`javdb\\d*.com`): a review
+    round proposed it, and it was rejected because there is no trustworthy
+    official list of which numbered domains JavDB actually owns. Every extra
+    host in this allowlist is another endpoint the session cookies get handed
+    to, so the allowlist only grows on evidence, never on convenience.
     """
     if not host:
         return False

@@ -31,6 +31,25 @@
    - 報表內建樣本偏斜警告與排除自造命中（同一 magnet 第二次必中，因為第一次是
      自己放進去的）。
 
+### 文件整併
+
+`Task.md`（四分頁 + RD 完成時間 MVP）與 `docs/Task.md`（多模型審查 P1/P2/P3 修補）
+在逐條驗證全數完成後刪除——前者 15 項、後者 11 項，均以程式碼與測試實際核對，
+不是憑檔頭標記。只留執行紀錄（本檔與 `implementation-notes.md`）。
+
+刪除前先把兩條**只存在於 `docs/Task.md`** 的「刻意不做」決策移進活躍位置，
+否則刪掉的不只是清單而是知識：
+
+- 不把 JavDB host allowlist 擴大到 `javdb\d*.com` 數字鏡像（無可信官方清單，
+  每多一個 host 就多一個 session cookie 的外流終點）→ 移入
+  `sidecar/sidecar.py::_is_javdb_host` docstring。
+- 不把 `check_torrent` 的 no-pick 路徑改成 delete + raise（pending 契約刻意不
+  保存 magnet，刪掉的 torrent 再也送不回來）→ 移入
+  `docs/architecture/contracts/python-legacy.md` 的 `check_torrent` 條目。
+
+測試檔原本用「`Task.md 1.4(7)`」這類章節編號引用它，刪檔會讓註解變成無法查證的
+懸空引用，因此七處引用一併改寫為自身完備的敘述。
+
 ### 平台
 
 於 Linux 實測確認 `cargo test --lib` 這個長期被跳過的 gate **是可修的**

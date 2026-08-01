@@ -171,7 +171,7 @@
   let cookiesPasteOpen = $state(false);
   let cookiesPasteInput = $state("");
   let cookiesSaving = $state(false);
-  // Task.md 2.5 清除: the clear button arms on the first click and only
+  // 清除 arms on the first click and only
   // invokes on the second. Unlike 清除 Token (re-pasteable from Real-Debrid's
   // site) the cookie header can only be recovered by walking DevTools again,
   // so a stray click must not be enough.

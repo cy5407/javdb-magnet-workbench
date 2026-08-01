@@ -344,8 +344,8 @@ describe("formatCompletedAt", () => {
   });
 
   it("renders an em dash for a legacy row carrying no completed_at", () => {
-    // Task.md 1.4(7): pre-timestamp rows must display safely, never as
-    // "Invalid Date".
+    // Rows created before completed_at existed must display safely — an
+    // em dash, never "Invalid Date".
     expect(formatCompletedAt(undefined)).toBe("—");
     expect(formatCompletedAt("")).toBe("—");
   });

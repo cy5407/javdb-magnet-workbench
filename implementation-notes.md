@@ -102,6 +102,11 @@ User 點出第一次總結講太滿，後續補：
 
 ## [2026-06-01] `docs/Task.md` 與 Codex `tool-scan` skill 準備
 
+> `docs/Task.md` 已於 2026-08-01 驗收通過後刪除（P1/P2/P3 共 11 項全數完成）。
+> 以下段落保留原樣作為當時的決策紀錄。該檔中兩條「刻意不做」的理由已移入
+> `sidecar/sidecar.py::_is_javdb_host` 與
+> `docs/architecture/contracts/python-legacy.md` 的 `check_torrent` 條目。
+
 **Design decisions**
 - **任務檔放在 `docs/Task.md` 而不是新建 `doc/`**：repo 既有文件目錄是 `docs/`，沒有 `doc/`。使用既有目錄避免新增平行文件根目錄。
 - **把 Claude 全域 `tool-scan` 複製到 Codex 全域 skill**：`C:\Users\cy5407\.codex\skills` 沒有 `tool-scan`，`C:\Users\cy5407\.claude\skills\tool-scan` 有 `SKILL.md` 與 `run_tool_scan.py`。已只複製這兩個必要檔案到 `C:\Users\cy5407\.codex\skills\tool-scan`，不帶 `__pycache__`。
