@@ -15,8 +15,9 @@
 #   4. Audit staging dir         (whitelist: exe + exe + README.txt; nothing else)
 #   5. Binary content scan       (tokens / magnets / Cloudflare cookies must NOT
 #                                 appear in either exe)
-#   6. Source diff secret scan   (same patterns over `git diff <origin/HEAD>..HEAD`
-#                                 + working-tree diff)
+#   6. Source secret scan        (same patterns over every `git ls-files`
+#                                 entry, read from disk; fails if it walks
+#                                 0 files)
 #   7. Compress-Archive → release/JavDBMagnet_<version>_portable.zip
 #   8. SHA256 for zip + 2 exes  → release/SHA256SUMS.txt
 #   9. Write release/release-manifest.json
@@ -300,22 +301,30 @@ foreach ($exe in $ScanTargets) {
 if ($ScanFail) { FailExit "Binary content scan failed" }
 
 # ---------------------------------------------------------------------------
-# Step 7: Source diff secret scan — over committed + working-tree diffs
+# Step 7: Source secret scan — over EVERY tracked file
+#
+# This used to derive its file list from `git diff <origin/HEAD>..HEAD` plus
+# the working-tree diff. That made coverage depend on where HEAD happened to
+# sit: cutting a release from an already-pushed master left both diffs empty,
+# so the scan walked ZERO files and still wrote `source_secret_hits: 0` into
+# the manifest — a vacuous pass that read exactly like a real one. It was
+# found the hard way: a magnet literal sat in verify-windows-build.ps1 from
+# the commit that introduced it and was never once scanned, until an
+# unrelated edit to that file finally pulled it into the diff.
+#
+# The file list now comes from `git ls-files`, so coverage is a property of
+# the repo rather than of the branch topology. Content is read from disk, so
+# uncommitted edits to tracked files are scanned as they actually are.
+# Untracked files are deliberately out of scope: they are neither committed
+# nor shipped inside the portable zip.
 # ---------------------------------------------------------------------------
-Step "Source diff secret scan"
-$sourceFiles = @()
-$defaultBranch = (& git -C $RepoRoot symbolic-ref --short refs/remotes/origin/HEAD 2>$null)
-if (-not $defaultBranch) {
-    $defaultBranch = "origin/master"  # fallback
-}
-$diffOutput = & git -C $RepoRoot diff --name-only "$defaultBranch..HEAD"
+Step "Source secret scan (all tracked files)"
+$trackedFiles = & git -C $RepoRoot ls-files
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "FATAL: source-secret-scan git diff failed (exit $LASTEXITCODE). Refusing to ship a release without committed-diff scan."
+    Write-Error "FATAL: source-secret-scan git ls-files failed (exit $LASTEXITCODE). Refusing to ship a release without a source scan."
     exit 1
 }
-$sourceFiles += $diffOutput
-$sourceFiles += (& git -C $RepoRoot diff --name-only)
-$sourceFiles = $sourceFiles |
+$sourceFiles = $trackedFiles |
     Where-Object { $_ -and (Test-Path (Join-Path $RepoRoot $_) -PathType Leaf) } |
     Sort-Object -Unique
 $skipExt = @('.exe', '.msi', '.zip', '.7z', '.png', '.ico', '.icns', '.dll')
@@ -331,14 +340,29 @@ $skipExt = @('.exe', '.msi', '.zip', '.7z', '.png', '.ico', '.icns', '.dll')
 #   - *.test.ts     Vitest fixtures (redacted magnet samples)
 # Skipping by exact path for the one-offs and by prefix/suffix for
 # the test directories keeps the rule resilient to new test files.
+#
+# The four prose entries below only became visible when the scan widened
+# from "changed files" to "all tracked files". Each documents the magnet
+# handling code and therefore quotes magnet URIs as examples; every hash in
+# them was verified by hand to be synthetic — truncated 8-hex fragments
+# (0201592f, a8736d7a, 7b1d1d93), or, in the security-audit file, a made-up
+# 40-hex used to demonstrate a dedupe-key collision PoC. None of these files
+# ship: the portable zip contains two exes and a generated README.txt.
+# They are listed individually rather than skipping docs/ wholesale, so a
+# real cookie or token pasted into any other document still fails the build.
 $skipFiles = @(
     'app/src-tauri/src/legacy_import.rs',
     'app/src-tauri/src/commands.rs',
-    'scripts/build-release.ps1'
+    'scripts/build-release.ps1',
+    'docs/superpowers/specs/2026-05-10-tauri-rewrite-design.md',
+    'prompt/security-audit-fixes-2026-07-28.md',
+    'spikes/pyinstaller_sidecar/NOTES.md',
+    'spikes/python_sidecar_protocol/NOTES.md'
 )
 $skipPrefixes = @('tests/')
 $skipSuffixes = @('.test.ts', '.test.js', '.test.tsx', '.spec.ts')
 $SourceHits = @()
+$SourceScannedCount = 0
 foreach ($rel in $sourceFiles) {
     if ($skipFiles -contains $rel) { continue }
     $relForward = $rel.Replace('\', '/')
@@ -351,6 +375,7 @@ foreach ($rel in $sourceFiles) {
     if ($skipExt -contains ([System.IO.Path]::GetExtension($full).ToLowerInvariant())) { continue }
     $text = Get-Content -LiteralPath $full -Raw -ErrorAction SilentlyContinue
     if ($null -eq $text) { continue }
+    $SourceScannedCount++
     foreach ($p in $Patterns) {
         $regexMatches = [regex]::Matches($text, $p.rx)
         if ($regexMatches.Count -gt 0) {
@@ -369,7 +394,13 @@ if ($SourceHits.Count -gt 0) {
     }
     FailExit "Source secret scan failed"
 }
-Ok "No source secret patterns in changed files"
+# A scan that walked nothing must never report success — that is the exact
+# failure mode this step was rewritten to eliminate, so assert it explicitly
+# instead of trusting the file list to be non-empty.
+if ($SourceScannedCount -eq 0) {
+    FailExit "Source secret scan walked 0 files — the scan is not covering anything. Check git ls-files and the skip lists."
+}
+Ok ("No source secret patterns (" + $SourceScannedCount + " tracked files scanned)")
 
 # ---------------------------------------------------------------------------
 # Step 8: Compress staging dir to release/JavDBMagnet_<v>_portable.zip
@@ -434,6 +465,10 @@ $manifest = [ordered]@{
         portable_forbidden_files = 0
         binary_secret_hits       = $BinaryHitCount
         source_secret_hits       = $SourceHits.Count
+        # Recorded so `source_secret_hits: 0` is interpretable. Without the
+        # denominator a scan that covered nothing is indistinguishable from
+        # one that covered the whole repo and found nothing.
+        source_files_scanned     = $SourceScannedCount
     }
     signing     = @{
         requested = ($env:SIGN -eq "1")
