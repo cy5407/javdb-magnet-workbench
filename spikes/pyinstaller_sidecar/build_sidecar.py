@@ -122,6 +122,11 @@ def build():
         "--hidden-import", "javdb_scraper",
         "--hidden-import", "realdebrid",
         "--hidden-import", "app_logging",
+        # rd_outcome_log 是 sidecar.py 的頂層 import，Analysis 本來就抓得到
+        # （已在 Linux 上實測：未列此項建出的 sidecar 仍正確產生 rd_outcomes.jsonl）。
+        # 仍明列的理由與上面三個相同——不倚賴 Analysis 的推斷結果，讓打包內容
+        # 由這份清單顯式決定。
+        "--hidden-import", "rd_outcome_log",
         str(ENTRY),
     ]
     # cmd is a literal PyInstaller argv built in this file (no user input).

@@ -360,6 +360,7 @@ cargo test --lib                             # Rust 單元測試
 ├─ spikes/                ← 保留的歷史 spike notes + sidecar build pipeline（pyinstaller_sidecar / python_sidecar_protocol）
 ├─ scripts/
 │  ├─ build-release.ps1   ← 一條命令 release pipeline
+│  ├─ verify-windows-build.ps1 ← 建置前驗證（先跑這個）
 │  └─ rd_log_report.py    ← 成效日誌分析報表
 ├─ tests/                 ← Python unittest
 └─ docs/
