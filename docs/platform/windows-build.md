@@ -1,8 +1,11 @@
 # Windows 建置交接
 
 寫給在 Windows 機器上接手建置的人（或 agent）。程式碼在 Linux 上開發並通過全部
-gate，但**有三件事只有在 Windows 上才驗得了**，這份文件說明是哪三件、為什麼、
+gate，但有幾件事只有在 Windows 上才驗得了，這份文件說明是哪幾件、為什麼、
 以及壞掉時怎麼修。
+
+**2026-08-02 首次在 Windows 上完整跑過**：第 1 項（keyring 平台拆分）已實測
+通過並降級為紀錄；第 4 項（Smart App Control）是那次才浮現的新阻擋點。
 
 ## 先跑這個
 
@@ -21,9 +24,9 @@ pwsh -File scripts\build-release.ps1
 
 ---
 
-## 三個 Windows 專屬風險
+## Windows 專屬風險
 
-### 1. Cargo.toml 的 keyring 相依在 2026-08-01 被按平台拆開（最高風險）
+### 1. Cargo.toml 的 keyring 相依平台拆分 —— 2026-08-02 已在 Windows 實測通過
 
 原本一行涵蓋三平台，展開後會把 `secret-service` 拉進**每個**目標並在 Linux 上
 硬編譯失敗，導致 `cargo test --lib` 長期無法使用。改成：
@@ -33,12 +36,14 @@ pwsh -File scripts\build-release.ps1
 keyring = { version = "3", features = ["windows-native"] }
 ```
 
-**這個改動只在 Linux 上驗過。** 對 Windows 理論上是純減法（`windows-native`
-本來就啟用，只是不再編譯兩個從未使用的後端），而程式碼只用到
-`Entry::new` / `set_password` / `get_password` / `delete_credential` /
-`Error::NoEntry` 這幾個 backend 無關的 API——但理論不等於實測。
+這個改動原本只在 Linux 上驗過，一度被列為本文件的最高風險項。**2026-08-02 在
+Windows 11 / rustc 1.97.1 上實測 `cargo test --lib` 為 81 passed / 0 failed，
+與 Linux baseline 相同——拆分成立，不需要回退。** 事前的推論也得到印證：對
+Windows 是純減法（`windows-native` 本來就啟用，只是不再編譯兩個從未使用的
+後端），而程式碼只用到 `Entry::new` / `set_password` / `get_password` /
+`delete_credential` / `Error::NoEntry` 這幾個 backend 無關的 API。
 
-**若 `cargo test --lib` 失敗且錯誤與 keyring 有關**：刪掉
+保留備案供參：**若未來 `cargo test --lib` 失敗且錯誤與 keyring 有關**，刪掉
 `app/src-tauri/Cargo.toml` 末尾那三段 `[target.'cfg(...)'.dependencies]`，
 在 `[dependencies]` 內改回單行：
 
@@ -69,6 +74,39 @@ spawn 沒有 `.env(...)`），Windows 純粹靠繼承的 `%LOCALAPPDATA%` 恰好
 
 實務上 Windows 會動，但這是巧合不是契約。若使用者回報「logs 目錄空的」，
 先查 `%LOCALAPPDATA%` 是否存在。長期修法見 `linux-support.md` 第 3 節。
+
+### 4. Smart App Control 會擋掉 cargo 的 build script（2026-08-02 實遇）
+
+Windows 11 的「智慧型應用程式控制」（Smart App Control，SAC）逐檔查雲端信譽，
+會封鎖未簽章且無信譽紀錄的執行檔。cargo 每次編譯都會產生全新的
+`build-script-build.exe`，正好落在這個範疇：
+
+```
+could not execute process `...\target\release\build\icu_normalizer_data-<hash>\build-script-build`
+應用程式控制原則已封鎖此檔案。 (os error 4551)
+```
+
+**判別方式**（前者是政策狀態，後者是實際封鎖事件）：
+
+```powershell
+(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy').VerifiedAndReputablePolicyState
+Get-WinEvent -LogName 'Microsoft-Windows-CodeIntegrity/Operational' -MaxEvents 20
+```
+
+`VerifiedAndReputablePolicyState` 為 `1` 代表強制執行、`2` 為評估模式、`0` 為
+關閉。事件 ID **3118**（Smart App Control Block）與 **3077** 會指名被擋的檔案。
+
+**注意這不是確定性的**：同一台機器上，改動 `Cargo.toml` 之前的建置可以完全成功，
+改動後產生的新二進位卻被擋——因為信譽是逐檔查的，不是逐專案。所以「昨天還能建」
+不能用來排除這個原因。
+
+**唯一解法是關閉 SAC**，它沒有例外清單或白名單機制。**這是單向操作：關閉後除非
+重灌 Windows 否則無法再開啟**，且整台機器對未簽章執行檔的防護會永久失效。路徑是
+設定 → 隱私權與安全性 → Windows 安全性 → 應用程式與瀏覽器控制 → 智慧型應用程式
+控制。這個取捨要由機器的擁有者決定，不該由 agent 代為執行。
+
+若不願關閉，替代方案是改在 CI（GitHub Actions `windows-latest`）上建置——
+runner 預設不啟用 SAC。repo 目前只有 `sonarcloud.yml`，需要另外新增 workflow。
 
 ---
 

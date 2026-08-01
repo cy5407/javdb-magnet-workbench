@@ -261,18 +261,26 @@ class DisabledAndFailureTest(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             rd_outcome_log.reset_for_tests()
-            self.assertIsNotNone(rd_outcome_log.configure(str(d)))
-            rd_outcome_log.log_send(outcome="completed", elapsed_ms=1)
-            self.assertTrue((Path(d) / "rd_outcomes.jsonl").exists())
+            try:
+                self.assertIsNotNone(rd_outcome_log.configure(str(d)))
+                rd_outcome_log.log_send(outcome="completed", elapsed_ms=1)
+                self.assertTrue((Path(d) / "rd_outcomes.jsonl").exists())
+            finally:
+                # handler 必須在 TemporaryDirectory 清理前關閉：Windows 不允許
+                # 刪除仍被開啟的檔案，否則 cleanup 會丟 PermissionError。
+                rd_outcome_log.reset_for_tests()
 
     def test_unserializable_payload_is_swallowed(self):
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             rd_outcome_log.reset_for_tests()
-            rd_outcome_log.configure(Path(d))
-            rd_outcome_log.log_send(outcome="completed", elapsed_ms=1,
-                                    meta={"code": object()})   # 不可序列化
-            self.assertEqual((Path(d) / "rd_outcomes.jsonl").read_text(), "")
+            try:
+                rd_outcome_log.configure(Path(d))
+                rd_outcome_log.log_send(outcome="completed", elapsed_ms=1,
+                                        meta={"code": object()})   # 不可序列化
+                self.assertEqual((Path(d) / "rd_outcomes.jsonl").read_text(), "")
+            finally:
+                rd_outcome_log.reset_for_tests()
 
     def test_handler_failure_is_swallowed(self):
         import tempfile
@@ -755,17 +763,21 @@ class GroupMetaTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as d:
             rd_outcome_log.reset_for_tests()
-            rd_outcome_log.configure(Path(d))
-            with mock.patch.object(sd, "_rd_client", return_value=fake):
-                resp = sd.dispatch(self.state, {
-                    "cmd": "rd_send_magnet", "request_id": "send", "handle_id": hid,
-                })
-            self.assertTrue(resp["ok"], resp)
-            row = json.loads((Path(d) / "rd_outcomes.jsonl").read_text(encoding="utf-8"))
-            self.assertEqual(row["source"], "manual")
-            self.assertEqual(row["name"], "PASTED")
-            self.assertNotIn("_batch_id", row)
-        rd_outcome_log.reset_for_tests()
+            try:
+                rd_outcome_log.configure(Path(d))
+                with mock.patch.object(sd, "_rd_client", return_value=fake):
+                    resp = sd.dispatch(self.state, {
+                        "cmd": "rd_send_magnet", "request_id": "send", "handle_id": hid,
+                    })
+                self.assertTrue(resp["ok"], resp)
+                row = json.loads((Path(d) / "rd_outcomes.jsonl").read_text(encoding="utf-8"))
+                self.assertEqual(row["source"], "manual")
+                self.assertEqual(row["name"], "PASTED")
+                self.assertNotIn("_batch_id", row)
+            finally:
+                # 必須在 with 區塊內關閉 handler，否則 Windows 上
+                # TemporaryDirectory 清理會因檔案仍開啟而失敗。
+                rd_outcome_log.reset_for_tests()
 
     def test_duplicate_btih_in_one_group_uses_first_visible_rows_ranks(self):
         """The frontend sends first occurrence metadata for a shared handle;
