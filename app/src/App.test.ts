@@ -21,6 +21,7 @@ import App from "./App.svelte";
 import type {
   CookiesStatus,
   CopyRdLinksBulkResult,
+  MagnetRow,
   PathInfo,
   PendingEntry,
   RdCheckOutcome,
@@ -1057,5 +1058,255 @@ describe("Stale Handle Forget on Scrape (Item 6)", () => {
     await fireEvent.input(urlBox, { target: { value: "https://javdb.com/v/XYZ789" } });
     await fireEvent.click(screen.getByRole("button", { name: "開始擷取" }));
     await waitFor(() => { expect(fetchCalled).toBe(true); });
+  });
+});
+
+// docs/specs/2026-08-01-rd-hit-priority.md §3.4 / §4.
+//
+// The heuristic itself is pinned in rdPriority.test.ts. What only the
+// component can show is the wiring: that the one-click narrowing honours the
+// "a pasted magnet is an explicit instruction" invariant, and that the
+// pre-send triage changes which handles actually reach rd_send_magnet — a
+// panel that merely rendered a warning would pass a DOM-only assertion.
+describe("RD hit-priority narrowing and pre-send triage", () => {
+  const RD_URL = "https://javdb.com/v/RD001";
+
+  const webRow = (over: Partial<MagnetRow> & { handle_id: string }): MagnetRow => ({
+    name: "RD-001.mp4",
+    size: "3.0GB, 1個文件",
+    tags: [],
+    date: "2026-01-02",
+    magnet_redacted: "magnet:?xt=urn:btih:rd…",
+    ...over,
+  });
+
+  /** Re-upload prefix AND 1080p in the name → prefix_hd, the top tier. */
+  const PREFIX_HD = webRow({
+    handle_id: "w-prefix",
+    name: "hhd800.com@RD-001-1080p.mp4",
+    date: "2026-01-03",
+  });
+  /** 高清 tag without a prefix → hd. Also high likelihood. */
+  const TAGGED_HD = webRow({
+    handle_id: "w-hd",
+    name: "RD-001-full.mkv",
+    tags: ["高清"],
+  });
+  /** Carries metadata and none of it says HD → plain, the ONLY class that
+   * trips the confirmation. */
+  const PLAIN = webRow({
+    handle_id: "w-plain",
+    name: "RD-001-sd.mp4",
+    tags: ["中文字幕"],
+    date: "2026-01-01",
+  });
+
+  /** One scraped group. A single URL settles immediately — scrapeBatch only
+   * paces BETWEEN urls. */
+  const scrapeRows = async (magnets: MagnetRow[]): Promise<void> => {
+    handlers.fetch_javdb = () => ({
+      engine: "test",
+      url: RD_URL,
+      code: "RD-001",
+      title: "t",
+      magnet_count: magnets.length,
+      magnets,
+    });
+    const urlBox = screen.getByPlaceholderText(/javdb\.com\/v\//) as HTMLTextAreaElement;
+    await fireEvent.input(urlBox, { target: { value: `${RD_URL}\n` } });
+    await fireEvent.click(screen.getByRole("button", { name: "開始擷取" }));
+    await waitFor(() => {
+      expect(tauriMocks.invoke).toHaveBeenCalledWith("fetch_javdb", { url: RD_URL });
+    });
+  };
+
+  /** Anchored on the checkbox's `選取 <name>` label rather than the 番號 cell:
+   * the badges render inside that cell and would change its accessible name. */
+  const rowCheck = (name: string): HTMLInputElement =>
+    screen.getByRole("checkbox", { name: `選取 ${name}`, hidden: true }) as HTMLInputElement;
+
+  const sentHandles = (): string[] =>
+    tauriMocks.invoke.mock.calls
+      .filter((c) => c[0] === "rd_send_magnet")
+      .map((c) => (c[1] as { handleId: string }).handleId);
+
+  it("checks only the web candidates and leaves pasted rows exactly as they were", async () => {
+    await mountApp();
+    await pasteOneMagnet();
+    await scrapeRows([PREFIX_HD, PLAIN]);
+    await clickTab(SELECT_TAB);
+
+    // Scraping and pasting both auto-check their rows, so the button can only
+    // be observed by what it UNchecks.
+    expect(rowCheck("SNOS-192").checked).toBe(true);
+    expect(rowCheck("RD-001-sd.mp4").checked).toBe(true);
+
+    await fireEvent.click(screen.getByRole("button", { name: "只勾選 RD 優先候選" }));
+
+    expect(rowCheck("hhd800.com@RD-001-1080p.mp4").checked).toBe(true);
+    expect(rowCheck("RD-001-sd.mp4").checked).toBe(false);
+    // The invariant this test exists for: a pasted magnet is an explicit
+    // instruction (registerPastedMagnets), so a web-side narrowing must not
+    // reach it — selectOnlyRows, which clears every selectable row, would.
+    expect(rowCheck("SNOS-192").checked).toBe(true);
+    expect(isShown(screen.getByText(/手貼 1 筆維持原狀/))).toBe(true);
+  });
+
+  it("holds a batch containing low-likelihood rows and then sends only the high ones", async () => {
+    await mountApp();
+    await scrapeRows([PREFIX_HD, PLAIN]);
+    await clickTab(RD_TAB);
+
+    await fireEvent.click(within(rdPanel()).getByRole("button", { name: /送出已勾選/ }));
+    // Nothing reached RD — the click opened the summary instead of sending.
+    expect(sentHandles()).toEqual([]);
+    expect(isShown(screen.getByText(/送出前確認/))).toBe(true);
+
+    await fireEvent.click(within(rdPanel()).getByRole("button", { name: /只送高機率/ }));
+    await waitFor(() => {
+      expect(sentHandles()).toEqual(["w-prefix"]);
+    });
+    // The panel is one-shot: leaving it up would let a second click re-send.
+    expect(screen.queryByText(/送出前確認/)).toBeNull();
+  });
+
+  it("sends straight through when no checked row is a low-likelihood one", async () => {
+    await mountApp();
+    await scrapeRows([PREFIX_HD, TAGGED_HD]);
+    await clickTab(RD_TAB);
+
+    await fireEvent.click(within(rdPanel()).getByRole("button", { name: /送出已勾選/ }));
+    await waitFor(() => {
+      expect(sentHandles()).toEqual(["w-prefix", "w-hd"]);
+    });
+    // A batch with nothing to warn about keeps its existing one-click send.
+    expect(screen.queryByText(/送出前確認/)).toBeNull();
+  });
+
+  /**
+   * The web narrowing and the pasted row share ONE handle here. The sidecar
+   * keys handles by BTIH, so pasting a magnet that a scrape already returned
+   * yields the same handle_id — and `selectedHandles` is keyed by handle, so
+   * "uncheck every web row" reaches straight through into the manual group.
+   * The test above cannot see this: its pasted handle is disjoint.
+   */
+  it("keeps a pasted magnet checked when a scraped row shares its handle", async () => {
+    await mountApp();
+    await scrapeRows([PREFIX_HD, PLAIN]);
+    handlers.register_magnets = () => ({
+      // Same handle as the scraped PLAIN row; distinct display name so the
+      // two rows' checkboxes stay individually addressable.
+      registered: [
+        {
+          handle_id: "w-plain",
+          magnet_redacted: "magnet:?xt=urn:btih:rd…",
+          name: "RD-001-pasted-twin",
+          deduped: true,
+        },
+      ],
+      invalid: [] as string[],
+    });
+    await pasteOneMagnet();
+    await clickTab(SELECT_TAB);
+    expect(rowCheck("RD-001-pasted-twin").checked).toBe(true);
+
+    await fireEvent.click(screen.getByRole("button", { name: "只勾選 RD 優先候選" }));
+
+    expect(rowCheck("hhd800.com@RD-001-1080p.mp4").checked).toBe(true);
+    // Still checked: the user pasted this exact magnet, and the message the
+    // same click prints says so.
+    expect(rowCheck("RD-001-pasted-twin").checked).toBe(true);
+    expect(isShown(screen.getByText(/手貼 1 筆維持原狀/))).toBe(true);
+  });
+
+  /**
+   * 每組只留 = 最大檔 collapses the group to one row before it is rendered.
+   * If the candidate were picked from the merely-filtered rows instead of the
+   * rendered ones, the ★ would vanish and the one-click narrowing would check
+   * a magnet that is not on screen — leaving the user with a non-zero
+   * selection they can neither see nor uncheck in that view.
+   */
+  it("picks from the rows actually on screen when 每組只留 collapses the group", async () => {
+    await mountApp();
+    await scrapeRows([
+      PREFIX_HD,
+      webRow({
+        handle_id: "w-big",
+        name: "RD-001-big.mkv",
+        size: "8.0GB, 1個文件",
+        tags: ["高清"],
+      }),
+    ]);
+    await clickTab(SELECT_TAB);
+    await fireEvent.change(screen.getByLabelText(/每組只留/), {
+      target: { value: "largest" },
+    });
+
+    await fireEvent.click(screen.getByRole("button", { name: "只勾選 RD 優先候選" }));
+
+    // The single rendered row is the one that got checked. Under the old
+    // behavior the invisible w-prefix row won instead and this went false.
+    expect(rowCheck("RD-001-big.mkv").checked).toBe(true);
+    await clickTab(RD_TAB);
+    expect(isShown(screen.getByText(/送出已勾選 1 筆到 RD/))).toBe(true);
+  });
+
+  it("sends what is checked NOW, not what was checked when the panel opened", async () => {
+    await mountApp();
+    await scrapeRows([PREFIX_HD, PLAIN]);
+    await clickTab(RD_TAB);
+    await fireEvent.click(within(rdPanel()).getByRole("button", { name: /送出已勾選/ }));
+    expect(isShown(screen.getByText(/送出前確認：2 筆/))).toBe(true);
+
+    // 回到挑選 is not disabled while the panel is up, so the checkboxes stay
+    // live behind it. Sending a row the user has since unchecked would break
+    // the rule that the batch follows the checkboxes.
+    await clickTab(SELECT_TAB);
+    await fireEvent.click(rowCheck("hhd800.com@RD-001-1080p.mp4"));
+    await clickTab(RD_TAB);
+    expect(isShown(screen.getByText(/送出前確認：1 筆/))).toBe(true);
+
+    await fireEvent.click(within(rdPanel()).getByRole("button", { name: /全部送出/ }));
+    await waitFor(() => {
+      expect(sentHandles()).toEqual(["w-plain"]);
+    });
+  });
+
+  it("drops the panel when a new scrape forgets the handles it was triaging", async () => {
+    await mountApp();
+    await scrapeRows([PREFIX_HD, PLAIN]);
+    await clickTab(RD_TAB);
+    await fireEvent.click(within(rdPanel()).getByRole("button", { name: /送出已勾選/ }));
+    expect(isShown(screen.getByText(/送出前確認/))).toBe(true);
+
+    // startScrape hands the old web handles to forget_magnets; a panel left
+    // open would offer to send handles the sidecar no longer knows.
+    await clickTab(SEARCH_TAB);
+    await scrapeRows([TAGGED_HD]);
+    await clickTab(RD_TAB);
+
+    expect(screen.queryByText(/送出前確認/)).toBeNull();
+    expect(sentHandles()).toEqual([]);
+  });
+
+  it("re-checks the token guard on the panel's own send button", async () => {
+    await mountApp();
+    await scrapeRows([PREFIX_HD, PLAIN]);
+    await clickTab(RD_TAB);
+    await fireEvent.click(within(rdPanel()).getByRole("button", { name: /送出已勾選/ }));
+    expect(isShown(screen.getByText(/送出前確認/))).toBe(true);
+
+    // The panel outlives a trip to 設定, where the token can be cleared.
+    handlers.rd_clear_token = () => null;
+    await clickTab(SETTINGS_TAB);
+    await fireEvent.click(screen.getByRole("button", { name: "清除 Token" }));
+    await waitFor(() => {
+      expect(tauriMocks.invoke).toHaveBeenCalledWith("rd_clear_token");
+    });
+    await clickTab(RD_TAB);
+    await fireEvent.click(within(rdPanel()).getByRole("button", { name: /全部送出/ }));
+
+    expect(sentHandles()).toEqual([]);
+    expect(screen.queryAllByText(/請先設定 RD Token/).some(isShown)).toBe(true);
   });
 });

@@ -18,6 +18,7 @@ sites in `app/src/App.svelte`".
 | [main.ts](app/src/main.ts) | App bootstrap. Mounts `App.svelte` into `#app` and pre-seeds `data-theme="light"`. |
 | [lib/types.ts](app/src/lib/types.ts) | All shared TypeScript shapes between Rust/sidecar payloads and the WebView. Plus one runtime helper (`defaultFilterState`). |
 | [lib/magnetUtils.ts](app/src/lib/magnetUtils.ts) | Pure helpers for parsing/filtering/sorting/grouping `MagnetRow[]`. Zero side effects, no Tauri, no network. |
+| [lib/rdPriority.ts](app/src/lib/rdPriority.ts) | Local heuristics for "which magnet is Real-Debrid most likely to already have cached?" — per-row class, per-group pick, badge text. Owns the single definition of "HD". Pure, and the only lib module another lib module imports. |
 | [lib/scraper.ts](app/src/lib/scraper.ts) | Batch driver for the JavDB scrape flow. Wraps `invoke('fetch_javdb', …)` with pacing + single-retry on rate limit. Also exposes textarea parsers. |
 | [lib/rdSender.ts](app/src/lib/rdSender.ts) | Batch driver for Real-Debrid send + pending re-poll. Wraps `invoke('rd_send_magnet', …)` and `invoke('rd_check_pending', …)`. Includes the zh-Hant error-code → message mapper. |
 | [lib/settingsValidation.ts](app/src/lib/settingsValidation.ts) | Pure validators for the Settings editor. Returns null-or-error-string per field; aggregates into a map for the whole draft. |
@@ -29,20 +30,28 @@ sites in `app/src/App.svelte`".
 main.ts ──► App.svelte (not in scope)
 
 App.svelte ──► lib/scraper.ts ──► lib/types.ts
-            ──► lib/magnetUtils.ts ──► lib/types.ts
+            ──► lib/magnetUtils.ts ──► lib/rdPriority.ts ──► lib/types.ts
+            ──► lib/rdPriority.ts (direct) ──► lib/types.ts
             ──► lib/rdSender.ts ──► lib/types.ts
             ──► lib/settingsValidation.ts ──► lib/types.ts
             ──► lib/types.ts (direct)
 ```
 
-No lib module imports another lib module — `types.ts` is the only shared dependency, and
-nothing imports it cyclically. Each lib file is a leaf that pairs with `types.ts`.
+`types.ts` is still the only shared dependency and nothing imports it cyclically, but the layer
+is no longer entirely flat: `magnetUtils.ts` imports `rdPriority.ts` (for `isHdRow` and
+`pickRdCandidate`), so the chain is `types.ts ← rdPriority.ts ← magnetUtils.ts ← App.svelte`.
+`rdPriority.ts` is itself a leaf and **must stay one** — it deliberately does not import
+`magnetUtils.ts`, which is why the same-date tie-break of `pickRdCandidate` is injected by the
+caller instead of calling `parseSizeGb` directly (see §3.4). Every other lib file remains a leaf
+that pairs with `types.ts`. App.svelte imports `rdPriority.ts` directly as well (badges +
+row classes), not only through `magnetUtils.ts`.
 
 ### 1.3 Public API surface
 
 | Module | Runtime exports | Type-only exports |
 |--------|-----------------|-------------------|
-| `magnetUtils.ts` | `parseSizeGb`, `parseFileCount`, `matchesKeyword`, `isHd`, `filterRows`, `applyGroupPick`, `sortRows`, `processGroupRows`, `dedupeByHandleId` | — |
+| `magnetUtils.ts` | `parseSizeGb`, `parseFileCount`, `isManualGroup`, `matchesKeyword`, `isHd`, `filterRows`, `pickRdReadyRow`, `applyGroupPick`, `sortRows`, `processGroupRows`, `dedupeByHandleId` | — (`pickRdReadyRow` returns `RdCandidate`, which is re-imported from `rdPriority.ts`, not re-exported here) |
+| `rdPriority.ts` | `RD_CACHE_PREFIXES`, `hasCachePrefix`, `hasHdResolution`, `isHdRow`, `rdDateKey`, `classifyRow`, `rdBadge`, `pickRdCandidate`, `summarizeRdLikelihood` | `RdRowClass`, `RdPickTier`, `RdCandidate` |
 | `scraper.ts` | `isRateLimitError`, `randomDelayMs`, `parseUrlBatch`, `parseMagnetBatch`, `applyScrapeProgressForRun`, `scrapeBatch` | `SleepFn`, `ScrapeProgressEvent`, `ScrapeUiSnapshot`, `ScrapeOptions` |
 | `rdSender.ts` | `sendBatch`, `retryPending`, `rdErrorMessage` | `RdSendOptions`, `RdSendItem`, `RdSendBatchEvent`, `RdSendBatchOptions`, `RdRetryEvent`, `RdRetryOptions` |
 | `settingsValidation.ts` | `FILE_PICK_VALUES`, `THEME_VALUES`, `SCALE_PRESETS`, `validateMinSizeMb`, `validateCacheWaitSeconds`, `validateScale`, `validateFilePick`, `validateTheme`, `validateSettingsDraft` | `FilePickValue`, `ThemeValue` |
@@ -84,7 +93,7 @@ separately — out of scope here.)
 ## 2. Types (`app/src/lib/types.ts`)
 
 `types.ts` is mostly compile-time declarations. The one runtime export is `defaultFilterState`,
-documented below in §3.7. The rest are interfaces / unions / aliases. Where a Rust struct
+documented below in §3.8. The rest are interfaces / unions / aliases. Where a Rust struct
 clearly mirrors a shape, the parallel is called out — names use snake_case on both sides because
 the Rust side serializes via `serde` with default field naming.
 
@@ -182,8 +191,12 @@ from), and any `warnings`.
 
 ### 2.4 Filter / sort / grouping
 
-#### `type GroupPick = "all" | "largest" | "smallest" | "fewest_files"` *(types.ts:131)*
+#### `type GroupPick = "all" | "largest" | "smallest" | "fewest_files" | "rd_ready"` *(types.ts:142)*
 Strategy for the "keep N per group" filter step. Semantics implemented in `applyGroupPick`.
+`"rd_ready"` keeps the row most likely to be sitting in Real-Debrid's cache already — a local
+heuristic (re-upload-site prefix, HD, earliest upload), never an RD lookup; see §3.4
+`pickRdCandidate`. It is **not** the default: `defaultFilterState()` still returns `"all"` so
+existing users see no behavior change until they pick it from the 每組只留 select.
 
 #### `interface FilterState` *(types.ts:133-141)*
 - `keyword: string`
@@ -235,7 +248,7 @@ Discriminated union on `status`. Result of `rd_send_magnet`.
 - `{ status: "completed"; torrent_id; name; links: RdLink[] }`
 - `{ status: "pending"; torrent_id; name; rd_status: string; progress: number }`
 
-Errors come back as thrown strings (Rust `String` codes) — see §3.4 `rdErrorMessage` for the
+Errors come back as thrown strings (Rust `String` codes) — see §3.6 `rdErrorMessage` for the
 known catalogue.
 
 #### `type RdCheckOutcome` *(types.ts:195-212)*
@@ -286,6 +299,10 @@ from Vite. Nothing here participates in any call trace.
 ### 3.3 `app/src/lib/magnetUtils.ts`
 
 Pure helpers; no Tauri, no DOM, no network. All return *new* arrays — never mutate inputs.
+
+One lib-internal import: `./rdPriority` (`isHdRow`, `pickRdCandidate`, type `RdCandidate`) at
+[magnetUtils.ts:5](app/src/lib/magnetUtils.ts:5). The direction is one-way and must stay that
+way — `rdPriority.ts` never imports back from here (§1.2).
 
 ---
 
@@ -356,22 +373,32 @@ Pure helpers; no Tauri, no DOM, no network. All return *new* arrays — never mu
 
 ---
 
-#### `isHd(row: MagnetRow): boolean` *(magnetUtils.ts:44)*
+#### `isHd(row: MagnetRow): boolean` *(magnetUtils.ts:75)*
 
-**Purpose**: True if the row carries the JavDB `"高清"` tag (or lowercase `"hd"`).
+**Purpose**: True if the row is HD by **tag OR by filename** — the JavDB `"高清"` tag (or
+lowercase `"hd"`) **or** a resolution token (`2160p?` / `1080p?` / `4k` / `uhd`) in `row.name`.
+
+> **Widened contract (2026-08-01, deliberate).** This used to be tag-only. JavDB regularly ships
+> a 1080p/4K release without the 高清 tag, and the old rule silently dropped those. Because
+> `filterRows` calls this helper, the **`hd_only` filter changes behavior with it**: a row named
+> `…1080p…` with no 高清 tag now passes 只顯示高清 where it previously did not. Nothing else
+> about `filterRows` changed. The rule itself lives in `rdPriority.isHdRow` (§3.4) so the filter,
+> the per-row badge and the per-group RD pick can never disagree about what "HD" means; this
+> function is now a one-line delegation kept for its existing call sites.
 
 **Contract**:
 - Params: `row: MagnetRow`.
-- Returns: `boolean`.
+- Returns: `boolean` — exactly `isHdRow(row)`.
 - Side effects: none.
 - Errors: none.
 - Async: no.
 
 **Calls**:
-- `Array.prototype.some`, `String.prototype.toLowerCase`.
+- `isHdRow` ([rdPriority.ts:78](app/src/lib/rdPriority.ts:78)) — which in turn calls
+  `hasHdResolution`.
 
 **Called by**:
-- `filterRows` — [magnetUtils.ts:60](app/src/lib/magnetUtils.ts:60)
+- `filterRows` (`hd_only` branch) — [magnetUtils.ts:89](app/src/lib/magnetUtils.ts:89)
 - `magnetUtils.test.ts`.
 
 ---
@@ -390,16 +417,54 @@ Pure helpers; no Tauri, no DOM, no network. All return *new* arrays — never mu
 - Errors: none.
 - Async: no.
 
+**Notes**: `hd_only` follows whatever `isHd` means, and `isHd` was widened to "tag OR resolution
+token in the name" (see the entry above) — so this filter now keeps untagged 1080p/4K rows that
+it used to drop. Deliberate; no other branch changed.
+
 **Calls**:
 - `matchesKeyword`, `isHd`, `parseSizeGb`, `Array.prototype.filter`.
 
 **Called by**:
-- `processGroupRows` — [magnetUtils.ts:154](app/src/lib/magnetUtils.ts:154)
+- `processGroupRows` — [magnetUtils.ts:216](app/src/lib/magnetUtils.ts:216)
 - `magnetUtils.test.ts`.
 
 ---
 
-#### `applyGroupPick(rows: MagnetRow[], pick: GroupPick): MagnetRow[]` *(magnetUtils.ts:81)*
+#### `pickRdReadyRow(rows: MagnetRow[]): RdCandidate | null` *(magnetUtils.ts:131)*
+
+**Purpose**: The group's best Real-Debrid-cache bet, with the tier that justified it. Thin
+binding of `rdPriority.pickRdCandidate` to this module's size parser.
+
+**Contract**:
+- Params: `rows: MagnetRow[]` — candidate rows for ONE group (already keyword/size filtered by
+  the caller). Empty input → `null`.
+- Returns: `RdCandidate | null` — `{ row, tier }` where `tier` is
+  `"prefix_hd" | "hd_earliest" | "no_hd_fallback"`. Selection semantics live in
+  `pickRdCandidate` (§3.4) — this function only supplies the same-date tie-break.
+- Tie-break: `(a, b) => parseSizeGb(b.size) - parseSizeGb(a.size)` — larger file wins a
+  same-date tie (same release day, the bigger file is usually the higher-bitrate rip rather than
+  a sample). It runs ONLY between rows sharing a date key, so it can never override the primary
+  earliest-upload ordering.
+- Side effects: none.
+- Errors: none.
+- Async: no.
+
+**Notes**: the tie-break is injected here rather than living inside `rdPriority.ts` precisely so
+that module stays a leaf — importing `parseSizeGb` from this file would close an import cycle
+(§1.2).
+
+**Calls**:
+- `pickRdCandidate` ([rdPriority.ts:142](app/src/lib/rdPriority.ts:142)), `parseSizeGb`.
+
+**Called by**:
+- `applyGroupPick` (`rd_ready` branch) — [magnetUtils.ts:160](app/src/lib/magnetUtils.ts:160)
+- `App.svelte` `rdCandidates` derived (per-group ★ + 只勾選 RD 優先候選) — search
+  [App.svelte](app/src/App.svelte) for `pickRdReadyRow`.
+- `magnetUtils.test.ts`.
+
+---
+
+#### `applyGroupPick(rows: MagnetRow[], pick: GroupPick): MagnetRow[]` *(magnetUtils.ts:135)*
 
 **Purpose**: After per-row filtering, collapse a group down to a single representative based
 on the user's strategy.
@@ -413,6 +478,10 @@ on the user's strategy.
     - `"smallest"` → row with the minimum `parseSizeGb`.
     - `"fewest_files"` → row with the smallest `parseFileCount`; ties broken by larger
       `parseSizeGb`.
+    - `"rd_ready"` → `pickRdReadyRow(rows).row` as a one-element array: the row most likely to
+      be cached on RD (prefix+HD → earliest HD → non-HD fallback). Unlike the three size-based
+      strategies this one reads `tags`/`date`/`name`, not just `size`. The `null` arm is
+      unreachable (`rows` is non-empty past the guard) and only narrows the type.
     - Anything else → pass-through copy (defensive fallback).
 - Returns: `MagnetRow[]` — always a new array. Single-element except in `"all"` mode or empty
   input.
@@ -421,10 +490,11 @@ on the user's strategy.
 - Async: no.
 
 **Calls**:
-- `Array.prototype.slice`, `Array.prototype.reduce`, `parseSizeGb`, `parseFileCount`.
+- `Array.prototype.slice`, `Array.prototype.reduce`, `parseSizeGb`, `parseFileCount`,
+  `pickRdReadyRow`.
 
 **Called by**:
-- `processGroupRows` — [magnetUtils.ts:155](app/src/lib/magnetUtils.ts:155)
+- `processGroupRows` — [magnetUtils.ts:217](app/src/lib/magnetUtils.ts:217)
 - `magnetUtils.test.ts`.
 
 ---
@@ -472,8 +542,13 @@ removed (M9 Phase 3) — it was dead code that shared the name-compare branch an
 - Errors: none.
 - Async: no.
 
+**Notes**: manual (pasted) groups — `isManualGroup(group)`, i.e. `url` starts with `manual://` —
+skip `filterRows` AND `applyGroupPick` entirely and only get sorted. That is why a `"rd_ready"`
+group-pick never collapses a pasted magnet, and why App.svelte does not put the ★ 首選 marker on
+manual rows: no narrowing happens there to justify one.
+
 **Calls**:
-- `filterRows`, `applyGroupPick`, `sortRows`.
+- `filterRows`, `applyGroupPick`, `sortRows`, `isManualGroup`.
 
 **Called by**:
 - `App.svelte` line 402 (per-group derived rows) — search [App.svelte](app/src/App.svelte) for
@@ -505,7 +580,295 @@ write / RD send.
 
 ---
 
-### 3.4 `app/src/lib/scraper.ts`
+### 3.4 `app/src/lib/rdPriority.ts`
+
+Local heuristics for "which magnet is Real-Debrid most likely to already have cached?". Pure;
+no Tauri, no DOM, no network — and a LEAF: it imports only `./types`, never `./magnetUtils`
+(§1.2).
+
+**This cannot be an API lookup.** RD removed `/torrents/instantAvailability` in 2024 and the
+sidecar's `realdebrid.py` has no cache-probe endpoint, so every value produced here is a guess
+derived from the JavDB row's own metadata (re-upload-site prefix in the filename, HD markers,
+upload date). It is a hint for the user, never a promise that the send will hit cache — the UI
+strings say so too.
+
+Module-level constants ([rdPriority.ts:27-46](app/src/lib/rdPriority.ts:27)):
+- `RD_CACHE_PREFIXES: readonly string[]` = `["hhd800.com@", "489155.com@"]` — **exported**.
+  Re-upload sites whose releases are empirically the ones already in RD's cache. Matched with
+  `includes` on the lower-cased name, *not* `startsWith`: JavDB sometimes renders a row as
+  `"[javdb.com]hhd800.com@ABC-123"`, where a prefix test would silently miss. Hardcoded on
+  purpose — a user-editable list would need a settings round-trip through Rust + sidecar.
+- `HD_RESOLUTION_RX = /(?:2160p|1080p|4k|uhd|(?<=\d{1,4}x)(?:2160|1080))(?![a-z0-9])/i` —
+  private. Every alternative is a fixed-width literal and the lookbehind is bounded, so there is
+  no unbounded repetition to backtrack over (same Sonar super-linear-backtracking concern that
+  bounded magnetUtils' `SIZE_*_RX`). Two boundaries carry the rule:
+  - trailing `(?![a-z0-9])` — without it `"1080MB"`, a size, would count as HD;
+  - a BARE `1080` / `2160` only counts inside a `WxH` spelling (`"1920x1080"`). Without that
+    restriction, JAV serials that happen to end in those digits — `259LUXU-1080`, `HEYZO-2160`,
+    `300MIUM-1080` are all real labels — classify as HD. That is the worse of the two errors: a
+    missed HD row is still caught by JavDB's `高清` tag, whereas a false HD row passes `hd_only`,
+    wears the badge, and lands in the pre-send "high likelihood" bucket with nothing left to
+    catch it.
+- `NO_DATE_KEY = "9999-99-99"` — private sentinel sorting AFTER every real ISO date. A raw `""`
+  compares as smaller than `"2019-01-01"`, so without it a pasted magnet (no date at all) would
+  win "earliest upload" in every single group.
+
+Exported types:
+- `type RdRowClass = "prefix_hd" | "prefix_only" | "hd" | "unknown" | "plain"`
+  *(rdPriority.ts:49)* — per-row likelihood class; see `classifyRow` for the table.
+- `type RdPickTier = "prefix_hd" | "hd_earliest" | "no_hd_fallback"` *(rdPriority.ts:52)* —
+  which rule produced a group's pick. Drives the ⚠ wording on the fallback tier and is what
+  App.svelte checks before auto-checking a candidate.
+- `interface RdCandidate { row: MagnetRow; tier: RdPickTier }` *(rdPriority.ts:54-57)*.
+
+Private type:
+- `type RdTieBreak = (a: MagnetRow, b: MagnetRow) => number` *(rdPriority.ts:60)* — returns `<0`
+  when `a` is the better of two rows that share a date key.
+
+---
+
+#### `hasCachePrefix(row: MagnetRow): boolean` *(rdPriority.ts:62)*
+
+**Purpose**: True when the release name contains one of `RD_CACHE_PREFIXES` anywhere.
+
+**Contract**:
+- Params: `row: MagnetRow` — only `row.name` is read.
+- Returns: `boolean`. Case-insensitive (name is lower-cased first); substring match, so an
+  embedded prefix like `"[javdb.com]hhd800.com@ABC-123"` counts.
+- Side effects: none.
+- Errors: none.
+- Async: no.
+
+**Calls**:
+- `String.prototype.toLowerCase`, `Array.prototype.some`, `String.prototype.includes`.
+
+**Called by**:
+- `classifyRow` — [rdPriority.ts:92](app/src/lib/rdPriority.ts:92)
+- `pickRdCandidate` (tier-3 pool) — [rdPriority.ts:161](app/src/lib/rdPriority.ts:161)
+- `rdPriority.test.ts`.
+
+---
+
+#### `hasHdResolution(name: string): boolean` *(rdPriority.ts:68)*
+
+**Purpose**: True when the release NAME advertises 1080p / 2160p / 4K / UHD.
+
+**Contract**:
+- Params: `name: string` — the raw filename. Empty/falsy → `false` (short-circuit before the
+  regex).
+- Returns: `boolean` — `HD_RESOLUTION_RX.test(name)`, case-insensitive.
+- Boundary cases: `"1080MB"` / `"2160MB"` / `"4KB"` → `false` (trailing `(?![a-z0-9])`);
+  `"259LUXU-1080.mp4"` / `"HEYZO-2160"` / `"ABC-123 1080"` → `false` (a bare number is a serial,
+  not a resolution); `"1920x1080"`, `"3840X2160"`, `"1080p"`, `"4K"`, `"UHD"` → `true`.
+- Side effects: none.
+- Errors: none.
+- Async: no.
+
+**Calls**:
+- `RegExp.prototype.test`.
+
+**Called by**:
+- `isHdRow` — [rdPriority.ts:82](app/src/lib/rdPriority.ts:82)
+- `rdPriority.test.ts`.
+
+---
+
+#### `isHdRow(row: MagnetRow): boolean` *(rdPriority.ts:78)*
+
+**Purpose**: The single definition of "HD" for the whole frontend: tag **OR** filename.
+
+**Contract**:
+- Params: `row: MagnetRow` — reads `tags` then `name`.
+- Returns: `boolean` — `true` if any tag is exactly `"高清"` or lower-cases to `"hd"`; otherwise
+  `hasHdResolution(row.name)`.
+- Side effects: none.
+- Errors: none.
+- Async: no.
+
+**Notes**: `magnetUtils.isHd` (and therefore the `hd_only` filter) delegates here, so the badge,
+the per-group candidate pick and the filter can never disagree. The filename half is the
+2026-08-01 widening — see §3.3 `isHd` for the behavior-contract note.
+
+**Calls**:
+- `Array.prototype.some`, `String.prototype.toLowerCase`, `hasHdResolution`.
+
+**Called by**:
+- `classifyRow` — [rdPriority.ts:93](app/src/lib/rdPriority.ts:93)
+- `pickRdCandidate` (tier-2 bucket) — [rdPriority.ts:154](app/src/lib/rdPriority.ts:154)
+- `magnetUtils.isHd` — [magnetUtils.ts:76](app/src/lib/magnetUtils.ts:76)
+- `rdPriority.test.ts`.
+
+---
+
+#### `rdDateKey(row: MagnetRow): string` *(rdPriority.ts:86)*
+
+**Purpose**: Sortable upload-date key with missing dates pushed to the END of the ordering.
+
+**Contract**:
+- Params: `row: MagnetRow` — reads `row.date`.
+- Returns: `string` — `row.date.trim()`, or `NO_DATE_KEY` (`"9999-99-99"`) when that is empty.
+  Whitespace-only dates normalize the same way as `""`.
+- Side effects: none.
+- Errors: none.
+- Async: no.
+
+**Notes**: this is the single most error-prone rule in the feature. Plain string comparison puts
+`""` before every real ISO date, so skipping the normalization makes a metadata-less pasted row
+win "earliest upload" in every group. `rdPriority.test.ts` guards it explicitly.
+
+**Calls**:
+- `String.prototype.trim`.
+
+**Called by**:
+- `earliestBy` — [rdPriority.ts:127-128](app/src/lib/rdPriority.ts:127)
+- `rdPriority.test.ts`.
+
+---
+
+#### `classifyRow(row: MagnetRow): RdRowClass` *(rdPriority.ts:91)*
+
+**Purpose**: Per-row likelihood class — what the badge shows and what the pre-send summary
+counts.
+
+**Contract**:
+- Params: `row: MagnetRow`.
+- Returns: `RdRowClass`, first match wins:
+
+  | Class | Condition | Meaning |
+  |---|---|---|
+  | `prefix_hd` | cache prefix ∧ HD | RD most likely already has it |
+  | `prefix_only` | cache prefix ∧ not HD | good odds, quality unverified |
+  | `hd` | no prefix ∧ HD | judged by earliest upload |
+  | `unknown` | neither, and `tags` empty **and** `date` blank | no metadata to judge (pasted magnets) |
+  | `plain` | everything else (has metadata, explicitly not HD) | low odds and wrong quality |
+
+- Side effects: none.
+- Errors: none.
+- Async: no.
+
+**Notes**: `unknown` exists so a pasted magnet is not reported as *low* likelihood — missing
+metadata is not evidence of low quality, and showing "low" for a row we know nothing about would
+be a fake signal. `summarizeRdLikelihood` therefore files it under `unrated`, not `low`.
+
+**Calls**:
+- `hasCachePrefix`, `isHdRow`, `String.prototype.trim`.
+
+**Called by**:
+- `pickRdCandidate` (tier-1 bucket) — [rdPriority.ts:148](app/src/lib/rdPriority.ts:148)
+- `App.svelte` — `rowClassByHandle` derived + the per-row badge fallback in markup.
+- `rdPriority.test.ts`.
+
+---
+
+#### `rdBadge(cls: RdRowClass): { text: string; title: string } | null` *(rdPriority.ts:105)*
+
+**Purpose**: Badge label + tooltip for a class, or nothing when the class carries no signal.
+
+**Contract**:
+- Params: `cls: RdRowClass`.
+- Returns:
+  - `prefix_hd` → `{ text: "⚡高清", title: "常見轉載站 + 高清：RD 最可能已有快取" }`
+  - `prefix_only` → `{ text: "⚡", title: "常見轉載站：命中率高，但畫質未確認" }`
+  - `hd` → `{ text: "高清", title: "高清但非常見轉載站：以最早上傳推測命中率" }`
+  - `unknown` / `plain` → `null` — deliberately no badge. `plain` would be a "this is bad" mark
+    on the majority of rows, and `unknown` has nothing to report.
+- Side effects: none.
+- Errors: none.
+- Async: no.
+
+**Calls**: none.
+
+**Called by**:
+- `App.svelte` — per-row 番號 column badge.
+- `rdPriority.test.ts`.
+
+---
+
+#### `earliestBy(rows: MagnetRow[], tieBreak: RdTieBreak): MagnetRow` *(rdPriority.ts:125)* — private
+
+**Purpose**: Earliest-upload pick inside one already-classified bucket.
+
+**Contract**:
+- Params: `rows: MagnetRow[]` — must be NON-empty (callers guarantee it; `reduce` with no
+  initial value would throw otherwise). `tieBreak: RdTieBreak`.
+- Returns: `MagnetRow` — smallest `rdDateKey`; `tieBreak` runs ONLY when two rows share a date
+  key, so a caller-supplied "bigger file wins" comparator can never override the primary date
+  ordering.
+- The replacement test is strict (`< 0`), which keeps leftmost-on-tie — the same semantics as
+  magnetUtils' `pickBy`.
+- Side effects: none.
+- Errors: throws `TypeError` on an empty array (unreachable via the exported API).
+- Async: no.
+
+**Calls**:
+- `Array.prototype.reduce`, `rdDateKey`, the injected `tieBreak`.
+
+**Called by**:
+- `pickRdCandidate` (all three tiers) — [rdPriority.ts:150, 156, 163](app/src/lib/rdPriority.ts:150).
+
+---
+
+#### `pickRdCandidate(rows: MagnetRow[], tieBreak?: RdTieBreak): RdCandidate | null` *(rdPriority.ts:142)*
+
+**Purpose**: The group's single most-likely-cached row, plus the tier that justified it.
+
+**Contract**:
+- Params:
+  - `rows: MagnetRow[]` — one group's rows. Empty input → `null`.
+  - `tieBreak?: RdTieBreak` — defaults to `() => 0`, i.e. input order wins a same-date tie.
+    `magnetUtils.pickRdReadyRow` injects "larger `parseSizeGb` first"; the parameter exists so
+    this module never has to import `magnetUtils` (§1.2).
+- Returns: `RdCandidate | null`. Tiers are tried in order, first non-empty bucket wins:
+  1. `prefix_hd` — rows classifying as `prefix_hd` (re-upload site AND HD) → tier `"prefix_hd"`.
+  2. `hd_earliest` — any `isHdRow` row → tier `"hd_earliest"`. (Tier 1 was empty here, so every
+     HD row necessarily classifies as `hd`.) Oldest first: more time to have been cached.
+  3. `no_hd_fallback` — nothing in the group is HD. Prefixed rows still carry the better odds so
+     they form the pool when present; otherwise the pool is every row. ⚠ This tier is a weak
+     guess, which is why App.svelte refuses to auto-check it.
+  Within every tier the winner is `earliestBy` — earliest `rdDateKey`, `tieBreak` only on ties.
+- Side effects: none.
+- Errors: none.
+- Async: no.
+
+**Calls**:
+- `Array.prototype.filter`, `classifyRow`, `isHdRow`, `hasCachePrefix`, `earliestBy`.
+
+**Called by**:
+- `magnetUtils.pickRdReadyRow` — [magnetUtils.ts:132](app/src/lib/magnetUtils.ts:132)
+- `rdPriority.test.ts`.
+
+---
+
+#### `summarizeRdLikelihood(classes: RdRowClass[]): { high, low, unrated }` *(rdPriority.ts:174)*
+
+**Purpose**: Bucket counts for the pre-send summary panel.
+
+**Contract**:
+- Params: `classes: RdRowClass[]` — one entry per row about to be sent. Empty input →
+  `{ high: 0, low: 0, unrated: 0 }`.
+- Returns: `{ high: number; low: number; unrated: number }` where
+  - `high` = `prefix_hd` + `hd`
+  - `low` = `plain` only
+  - `unrated` = `prefix_only` + `unknown`
+  The three always sum to `classes.length`.
+- Side effects: none.
+- Errors: none.
+- Async: no.
+
+**Notes**: `unrated` deliberately holds both `prefix_only` (good odds, unverified quality) and
+`unknown` (no metadata). Neither belongs in `low`, which must mean "we have metadata and it says
+this is not what you want" — App.svelte only interrupts a send when `low > 0`, so mis-filing
+either class would nag the user about batches with nothing wrong with them.
+
+**Calls**: none (plain `for…of`).
+
+**Called by**:
+- `App.svelte` `sendSelectedToRd` — pre-send triage.
+- `rdPriority.test.ts`.
+
+---
+
+### 3.5 `app/src/lib/scraper.ts`
 
 Batch driver for `fetch_javdb`. Sequential, paced, single-retry on rate-limit-flavored errors.
 
@@ -668,7 +1031,7 @@ Documented above as part of `scrapeBatch` params.
 
 ---
 
-### 3.5 `app/src/lib/rdSender.ts`
+### 3.6 `app/src/lib/rdSender.ts`
 
 Two batch drivers + a zh-Hant error-message mapper. No event listeners — the UI polls via the
 caller's `onProgress` callback between awaits.
@@ -813,7 +1176,7 @@ the raw code.
 
 ---
 
-### 3.6 `app/src/lib/settingsValidation.ts`
+### 3.7 `app/src/lib/settingsValidation.ts`
 
 Pure validators. Every validator returns `null` on success, or a zh-Hant error string on
 failure. No Tauri, no DOM. Rust enforces the same shape on persist; this is the early gate
@@ -926,7 +1289,7 @@ map means the draft is valid.
 
 ---
 
-### 3.7 `app/src/lib/types.ts` — runtime exports
+### 3.8 `app/src/lib/types.ts` — runtime exports
 
 The only runtime export is `defaultFilterState` — already documented in §2.4. Everything else
 in `types.ts` is erased at compile time.
@@ -943,8 +1306,9 @@ in `types.ts` is erased at compile time.
   errors are caught inside the loop and attached to the per-item state object
   (`group.error` / `row.error_code`). The caller's only failure mode is its own
   `onProgress` callback throwing — that propagates.
-- **Pure helpers** (`magnetUtils.ts`) never throw; bad input collapses to safe defaults
-  (`parseSizeGb("") → 0`, `parseFileCount("") → 999`).
+- **Pure helpers** (`magnetUtils.ts`, `rdPriority.ts`) never throw; bad input collapses to safe
+  defaults (`parseSizeGb("") → 0`, `parseFileCount("") → 999`, `pickRdCandidate([]) → null`,
+  `rdDateKey` on a blank date → the `"9999-99-99"` sentinel).
 - **Tauri `invoke`** rejects with the Rust-side error string. Both `scrapeBatch` and
   `sendBatch` extract via `e instanceof Error ? e.message : String(e)`. For RD, the result is
   fed into `rdErrorMessage` at the UI layer for translation.

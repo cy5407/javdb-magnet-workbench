@@ -178,6 +178,23 @@ Rust gate（`cargo test --lib`）baseline 本機即失敗（缺 Linux sidecar bi
 - `docs/architecture/function-contracts.md`：若列有 magnetUtils/App 函式索引則同步。
 - 既有文件行號早已與程式碼漂移；本輪**只更新所觸碰段落**，不做全域行號重整。
 
+## 6b. 實作偏離本規格之處（審查後修訂，2026-08-01）
+
+實作與獨立審查發現三處規格本身寫錯或寫得不夠嚴，以實作為準：
+
+1. **§2.1 的 `1080p?` / `2160p?` 太寬**：裸數字會讓 `259LUXU-1080`、`HEYZO-2160`、
+   `300MIUM-1080` 這類真實番號被判成高清。改為裸數字只在 `WxH` 形式
+   （`1920x1080`）承認。理由：漏判高清還有 JavDB `高清` tag 兜底，誤判高清則會
+   通過 `hd_only`、掛上徽章、進入「高機率」桶，沒有任何一層會攔。
+2. **§3.4.2 的 `rdConsideredRows` 只套 `filterRows`**：`group_pick` 為
+   largest/smallest/fewest_files 時，畫面已收斂成一列，候選卻仍從整批篩選結果挑
+   → ★ 整組消失，且一鍵勾選會勾中畫面上不存在的列。改為直接回傳
+   `processedRows(g)`，讓「★ 一定在畫面上」由構造保證。
+3. **§3.4.5 的凍結快照設計是錯的**：面板開著時勾選框仍可操作，快照會讓使用者
+   確認到與勾選不符的批次，違反「送出以勾選狀態為準」。改為 `sendPlanOpen`
+   布林旗標 + `rdSendTriage` live 推導；`confirmSend` 於點擊當下重讀，並補回
+   `rdHasToken` 守門。清空路徑另加 `startScrape`（舊 handle 已被 forget）。
+
 ## 7. 非目標
 
 - 不打 RD API 做快取查詢（端點已不存在）。

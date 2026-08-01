@@ -2,6 +2,7 @@
 // All input comes from the sidecar (already redacted); these functions never
 // touch network or stateful APIs, which makes them trivial to unit-test.
 
+import { isHdRow, pickRdCandidate, type RdCandidate } from "./rdPriority";
 import type {
   FilterState,
   GroupPick,
@@ -63,10 +64,16 @@ export function matchesKeyword(row: MagnetRow, keyword: string): boolean {
   return false;
 }
 
+/**
+ * HD test used by the hd_only filter. Widened from "tag only" to
+ * "tag OR resolution token in the name": JavDB regularly ships a 1080p/4K
+ * release without the 高清 tag, and hd_only used to drop those silently.
+ *
+ * The rule itself lives in rdPriority.isHdRow so the RD badge, the per-group
+ * candidate pick and this filter can never disagree about what "HD" means.
+ */
 export function isHd(row: MagnetRow): boolean {
-  // The sidecar passes the JavDB tag string verbatim. JavDB labels HD
-  // releases as the literal "高清" (zh-Hant) tag.
-  return row.tags.some((t) => t === "高清" || t.toLowerCase() === "hd");
+  return isHdRow(row);
 }
 
 /**
@@ -97,6 +104,7 @@ export function filterRows(
  *   - largest      → row with the largest parseSizeGb
  *   - smallest     → row with the smallest parseSizeGb
  *   - fewest_files → row with the fewest 個文件 (ties broken by larger size)
+ *   - rd_ready     → row most likely to be cached on RD (see pickRdReadyRow)
  *
  * Empty input → empty output. Returns a NEW array.
  */
@@ -110,6 +118,18 @@ function pickBy(
   isBetter: (cur: MagnetRow, acc: MagnetRow) => boolean,
 ): MagnetRow[] {
   return [rows.reduce((acc, cur) => (isBetter(cur, acc) ? cur : acc))];
+}
+
+/**
+ * The group's best RD-cache bet, with the tier that justified it.
+ *
+ * The size tie-break is injected HERE rather than living inside rdPriority so
+ * that module stays a leaf (importing parseSizeGb from this file would close
+ * an import cycle). Larger file wins a same-date tie: same release day, the
+ * bigger file is usually the higher-bitrate rip rather than a sample.
+ */
+export function pickRdReadyRow(rows: MagnetRow[]): RdCandidate | null {
+  return pickRdCandidate(rows, (a, b) => parseSizeGb(b.size) - parseSizeGb(a.size));
 }
 
 export function applyGroupPick(
@@ -133,6 +153,12 @@ export function applyGroupPick(
       // tie-break: prefer larger file size (more likely to be the main video)
       return parseSizeGb(a.size) > parseSizeGb(b.size);
     });
+  }
+  if (pick === "rd_ready") {
+    // `rows` is non-empty by the guard above, so pickRdReadyRow always
+    // returns a candidate here; the null arm only narrows the type.
+    const candidate = pickRdReadyRow(rows);
+    return candidate ? [candidate.row] : [];
   }
   // Defensive fallback for runtime-only `pick` values (e.g. older
   // settings file with an unknown enum). Test-only path today.

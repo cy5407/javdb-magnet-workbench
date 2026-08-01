@@ -11,7 +11,20 @@
     type ScrapeProgressEvent,
   } from "./lib/scraper";
   import { errText } from "./lib/errText";
-  import { dedupeByHandleId, isManualGroup, processGroupRows } from "./lib/magnetUtils";
+  import {
+    dedupeByHandleId,
+    isManualGroup,
+    pickRdReadyRow,
+    processGroupRows,
+  } from "./lib/magnetUtils";
+  import {
+    classifyRow,
+    rdBadge,
+    summarizeRdLikelihood,
+    type RdCandidate,
+    type RdPickTier,
+    type RdRowClass,
+  } from "./lib/rdPriority";
   import {
     FILE_PICK_VALUES,
     SCALE_PRESETS,
@@ -119,6 +132,16 @@
   let isRdSending = $state(false);
   let isCancelingSend = $state(false);
   let rdSendAbort: AbortController | null = null;
+  /**
+   * True ONLY while the pre-send summary panel is up. Deliberately a bare
+   * flag rather than a frozen snapshot of the batch: the checkboxes stay live
+   * behind the panel (回到挑選 is not disabled), and a snapshot would let the
+   * user confirm a batch that no longer matches what is checked — breaking
+   * the app's oldest rule, that the send follows the checkboxes. Everything
+   * the panel displays and sends comes from `rdSendTriage`, which is derived
+   * from the current selection.
+   */
+  let sendPlanOpen = $state(false);
   let pendingEntries = $state<PendingEntry[]>([]);
   let isRetryingPending = $state(false);
   let isThemeSaving = $state(false);
@@ -328,6 +351,10 @@
       })),
       ...groups.filter(isManualGroup),
     ];
+    // The web rows the panel was triaging are gone (and their handles are
+    // about to be forgotten), so a panel left open would be describing a
+    // batch that no longer exists.
+    sendPlanOpen = false;
     if (staleIds.length > 0) {
       try {
         await invoke("forget_magnets", { handleIds: staleIds });
@@ -526,6 +553,22 @@
     return processGroupRows(g, filter, sortColumn, sortDirection);
   }
 
+  /**
+   * The rows a group's RD candidate is picked from — literally the rendered
+   * set, so the ★ can never land on a row the current view is hiding and
+   * 只勾選 RD 優先候選 can never check one either. Reusing processedRows is
+   * what makes that true by construction; reproducing only its filterRows
+   * half silently diverges the moment group_pick is largest / smallest /
+   * fewest_files, which collapse the group to one row.
+   *
+   * Feeding the result back in under group_pick="rd_ready" is a fixed point,
+   * not a problem: pickRdCandidate over the single surviving row returns that
+   * same row with the same tier.
+   */
+  function rdConsideredRows(g: ScrapedGroup): MagnetRow[] {
+    return processedRows(g);
+  }
+
   function toggleSort(col: SortColumn) {
     if (sortColumn === col) {
       sortDirection = sortDirection === "asc" ? "desc" : "asc";
@@ -561,6 +604,49 @@
   function selectOnlyRows(rows: MagnetRow[]) {
     setRowsSelected(allSelectableRows, false);
     setRowsSelected(rows, true);
+  }
+
+  /**
+   * Collapse the scraped results down to one row per group — the one most
+   * likely to be cached on RD already.
+   *
+   * Scoped to WEB groups on both halves. Unchecking runs over web rows only
+   * (not allSelectableRows, which is what selectOnlyRows clears): a pasted
+   * magnet is an explicit instruction, so this must not silently drop it —
+   * see registerPastedMagnets. Checking skips any group whose best row is
+   * only a no_hd_fallback, because auto-checking a row we know is neither HD
+   * nor from a re-upload site would be a guess the user did not ask for.
+   */
+  function selectRdCandidatesOnly() {
+    // Selection is keyed by handle_id, and the SAME handle can be rendered by
+    // a web group and a manual group at once (sidecar keys handles by BTIH,
+    // and registerPastedMagnets keeps the pasted twin visible on purpose).
+    // Unchecking "every web row" would therefore reach through the shared key
+    // and silently drop the pasted instruction — so twins are excluded here,
+    // which is also what makes the「手貼 N 筆維持原狀」message true.
+    const manualHandleIds = new Set(
+      groups
+        .filter(isManualGroup)
+        .flatMap((g) => g.result?.magnets.map((m) => m.handle_id) ?? []),
+    );
+    setRowsSelected(
+      webGroups
+        .flatMap((g) => g.result?.magnets ?? [])
+        .filter((m) => !manualHandleIds.has(m.handle_id)),
+      false,
+    );
+    for (const handleId of rdPickedHandles) setRowSelected(handleId, true);
+
+    const skipped = rdCandidates.filter(
+      (c) => !isManualGroup(c.group) && c.candidate.tier === "no_hd_fallback",
+    ).length;
+    const manualCount = dedupeByHandleId(
+      groups.filter(isManualGroup).flatMap((g) => g.result?.magnets ?? []),
+    ).length;
+    const fragments = [`已勾選 ${rdPickedHandles.size} 筆 RD 優先候選`];
+    if (skipped > 0) fragments.push(`${skipped} 組因無高清候選被跳過`);
+    if (manualCount > 0) fragments.push(`手貼 ${manualCount} 筆維持原狀`);
+    statusMessage = fragments.join("；") + "。";
   }
 
   function selectedInRows(rows: MagnetRow[]): number {
@@ -618,6 +704,9 @@
     scrapeProgress = { done: 0, total: 0 };
     collapsed = {};
     selectedHandles = {};
+    // Nothing is checked any more, so the summary panel would be reporting on
+    // an empty batch.
+    sendPlanOpen = false;
     if (ids.length > 0) {
       try {
         const forgotten = await invoke<number>("forget_magnets", {
@@ -682,6 +771,78 @@
     const dupPart = dup > 0 ? `，重複 ${dup} 已合併` : "";
     return `送出已勾選 ${selectedMagnets} 筆到 RD（網頁 ${selectedWeb}＋手貼 ${selectedManual}${dupPart}）`;
   });
+
+  // ---- derived RD hit-likelihood (local heuristic, see rdPriority.ts) --
+  // Every number below is a guess from the row's own metadata: RD removed
+  // /torrents/instantAvailability in 2024, so there is nothing to query.
+  let rdCandidates = $derived.by(() => {
+    const out: { group: ScrapedGroup; candidate: RdCandidate }[] = [];
+    for (const g of groups) {
+      const candidate = pickRdReadyRow(rdConsideredRows(g));
+      if (candidate) out.push({ group: g, candidate });
+    }
+    return out;
+  });
+  // Keyed by GROUP url rather than flattened into a Set of handle ids: the
+  // same BTIH can be rendered by a web group AND a manual group at once
+  // (registerPastedMagnets does not de-duplicate across them), and a flat set
+  // would star the web twin of a row that only won inside its own one-row
+  // manual group.
+  let rdPickByGroup = $derived(
+    new Map(rdCandidates.map((c) => [c.group.url, c.candidate] as const)),
+  );
+  // The handles 只勾選 RD 優先候選 will check — web groups only, and only
+  // where the pick is backed by an actual HD row (see selectRdCandidatesOnly).
+  let rdPickedHandles = $derived(
+    new Set(
+      rdCandidates
+        .filter((c) => !isManualGroup(c.group) && c.candidate.tier !== "no_hd_fallback")
+        .map((c) => c.candidate.row.handle_id),
+    ),
+  );
+  // Class per handle over ALL rows, not just the visible ones: the send batch
+  // follows the checkboxes, which filters do not touch. FIRST occurrence wins
+  // and group order is web-first — the same rule buildSelectedSendItems uses
+  // for code/size_label, and for the same reason: a manual row carries no
+  // size/tags/date, so it would otherwise overwrite its web twin's real class
+  // with `unknown`.
+  let rowClassByHandle = $derived.by(() => {
+    const map = new Map<string, RdRowClass>();
+    for (const g of groups) {
+      for (const m of g.result?.magnets ?? []) {
+        if (!map.has(m.handle_id)) map.set(m.handle_id, classifyRow(m));
+      }
+    }
+    return map;
+  });
+  /**
+   * Live triage of whatever is checked right now — the batch that would be
+   * sent, split into the high-likelihood subset, plus the low / unrated
+   * counts. Derived rather than snapshotted so the summary panel and the send
+   * it performs can never drift apart from the checkboxes behind it.
+   */
+  let rdSendTriage = $derived.by(() => {
+    const items = buildSelectedSendItems();
+    const classes = items.map(
+      (it) => rowClassByHandle.get(it.handle_id) ?? "unknown",
+    );
+    const { low, unrated } = summarizeRdLikelihood(classes);
+    const highItems = items.filter(
+      (_, i) => classes[i] === "prefix_hd" || classes[i] === "hd",
+    );
+    return { items, highItems, low, unrated };
+  });
+
+  /** Why a row won its group, spelled out for the ★ tooltip. */
+  function rdPickTitle(tier: RdPickTier): string {
+    if (tier === "prefix_hd") {
+      return "本組首選：常見轉載站的高清版本，RD 最可能已有快取";
+    }
+    if (tier === "hd_earliest") {
+      return "本組首選：最早上傳的高清版本，較久的檔案較可能已被快取";
+    }
+    return "本組首選（⚠ 全組皆非高清）：只能以轉載站前綴與上傳日期推測，命中率低";
+  }
 
   // ---- M5: Real-Debrid handlers --------------------------------------
   async function rdTestToken() {
@@ -814,12 +975,64 @@
       activeTab = "settings";
       return;
     }
-    const items = buildSelectedSendItems();
-    if (items.length === 0) {
+    if (rdSendTriage.items.length === 0) {
       rdMessage = "目前沒有已勾選的磁力";
       activeTab = "select";
       return;
     }
+    // `low` counts rows whose metadata says outright "not HD and not from a
+    // re-upload site" — the ones most likely to sit in RD's queue instead of
+    // returning a link. A batch with none of those has nothing to warn about,
+    // so it keeps the existing one-click send rather than growing a
+    // confirmation step for every user.
+    if (rdSendTriage.low > 0) {
+      sendPlanOpen = true;
+      return;
+    }
+    await runSendBatch(rdSendTriage.items);
+  }
+
+  /** Run one of the summary panel's two confirmations. */
+  async function confirmSend(scope: "all" | "high") {
+    if (!sendPlanOpen) return;
+    // Both guards have to be re-checked rather than inherited from
+    // sendSelectedToRd: the panel stays on screen while the user is free to
+    // start a pending-retry below it or clear the token on the settings tab.
+    if (isRdSending || isRetryingPending) return;
+    if (!rdHasToken) {
+      sendPlanOpen = false;
+      rdMessage = "請先設定 RD Token";
+      activeTab = "settings";
+      return;
+    }
+    // Read through rdSendTriage, never a snapshot taken when the panel
+    // opened — whatever the user checked or unchecked in the meantime is what
+    // gets sent.
+    const items = scope === "high" ? rdSendTriage.highItems : rdSendTriage.items;
+    if (items.length === 0) {
+      sendPlanOpen = false;
+      rdMessage = "目前沒有已勾選的磁力";
+      activeTab = "select";
+      return;
+    }
+    await runSendBatch(items);
+  }
+
+  function cancelSendPlan() {
+    sendPlanOpen = false;
+    rdMessage = "已取消送出，勾選狀態未變更";
+  }
+
+  /**
+   * The send itself. Split out of sendSelectedToRd so 全部送出 and 只送高機率
+   * drive the exact same lifecycle over their own subset — lastBatchStartAt
+   * included, since copyRdDownloads orders completions relative to THIS
+   * batch's start and a stale value would sort the results wrong.
+   */
+  async function runSendBatch(items: RdSendItem[]) {
+    // The panel is one-shot: leaving it up would let a second click re-send a
+    // batch that is already in flight.
+    sendPlanOpen = false;
     lastBatchStartAt = new Date().toISOString();
     isRdSending = true;
     rdSendProgress = items.map((it) => ({
@@ -1603,7 +1816,11 @@
         <button onclick={() => (activeTab = "select")}>回到挑選</button>
         <button
           onclick={sendSelectedToRd}
-          disabled={isRdSending || isRetryingPending || selectedMagnets === 0 || !rdHasToken}
+          disabled={isRdSending ||
+            isRetryingPending ||
+            selectedMagnets === 0 ||
+            !rdHasToken ||
+            sendPlanOpen}
           title={rdHasToken ? "" : "請先設定 RD Token"}
         >
           {isRdSending ? "送出中…" : sendButtonLabel}
@@ -1616,6 +1833,34 @@
         {/if}
       </div>
     </div>
+
+    <!-- Pre-send triage. Only rendered when the batch actually contains
+         low-likelihood rows, so a clean batch never grows an extra click. -->
+    {#if sendPlanOpen}
+      <div class="rd-plan-panel">
+        <div>
+          <strong>送出前確認：{rdSendTriage.items.length} 筆</strong>
+          <p class="muted small">
+            高機率 {rdSendTriage.highItems.length}／低機率 {rdSendTriage.low}／未判定
+            {rdSendTriage.unrated}。機率由本機以轉載站前綴、解析度與上傳日期推測；
+            Real-Debrid 已無快取查詢端點，低機率仍可能命中。
+          </p>
+        </div>
+        <div class="row tight">
+          <button onclick={() => confirmSend("all")}>
+            全部送出（{rdSendTriage.items.length}）
+          </button>
+          <button
+            onclick={() => confirmSend("high")}
+            disabled={rdSendTriage.highItems.length === 0}
+            title={rdSendTriage.highItems.length === 0 ? "這批沒有高機率候選" : ""}
+          >
+            只送高機率（{rdSendTriage.highItems.length}）
+          </button>
+          <button onclick={cancelSendPlan}>取消送出</button>
+        </div>
+      </div>
+    {/if}
 
     <!-- rdMessage is shared with the token editor on the settings tab; the
          tabs are mutually exclusive, so only one of the two renders is ever
@@ -2156,6 +2401,9 @@
           <button onclick={() => selectOnlyRows(allVisibleRows)}>
             只勾選目前顯示
           </button>
+          <button onclick={selectRdCandidatesOnly}>
+            只勾選 RD 優先候選
+          </button>
           <button onclick={() => setRowsSelected(allVisibleRows, false)}>
             取消目前顯示
           </button>
@@ -2217,6 +2465,7 @@
             onchange={(e) => setGroupPick((e.currentTarget as HTMLSelectElement).value as GroupPick)}
           >
             <option value="all">全部</option>
+            <option value="rd_ready">RD 命中優先</option>
             <option value="largest">最大檔</option>
             <option value="smallest">最小檔</option>
             <option value="fewest_files">檔案最少</option>
@@ -2229,6 +2478,10 @@
         {#each groups as g, i (g.url)}
           {@const rows = processedRows(g)}
           {@const isCollapsed = collapsed[g.url] === true}
+          <!-- Manual groups get no ★: processGroupRows short-circuits them
+               past applyGroupPick entirely, so marking a "首選" there would
+               advertise a narrowing that RD 命中優先 never performs on them. -->
+          {@const rdPick = isManualGroup(g) ? undefined : rdPickByGroup.get(g.url)}
           <li class="group" data-status={g.status}>
             <header>
               <button
@@ -2307,6 +2560,12 @@
                   </thead>
                   <tbody>
                     {#each rows as m (m.handle_id)}
+                      <!-- Class comes from the shared map, not from a direct
+                           classifyRow(m): a manual row and its web twin are
+                           one BTIH, and the web row is the one with the
+                           metadata worth reading. -->
+                      {@const rdCls = rowClassByHandle.get(m.handle_id) ?? classifyRow(m)}
+                      {@const rdMark = rdBadge(rdCls)}
                       <tr
                         class="row-copyable"
                         title="雙擊複製磁力連結"
@@ -2334,6 +2593,17 @@
                               class="badge"
                               title="這個手貼 magnet 的 BTIH 已存在於網頁擷取結果；勾選狀態共用，RD 只會送一次。"
                             >＝網頁同筆</span>
+                          {/if}
+                          {#if rdMark}
+                            <span class="badge rd-badge" data-rd={rdCls} title={rdMark.title}
+                              >{rdMark.text}</span>
+                          {/if}
+                          {#if rdPick && rdPick.row.handle_id === m.handle_id}
+                            <span
+                              class="badge rd-star"
+                              data-tier={rdPick.tier}
+                              title={rdPickTitle(rdPick.tier)}
+                            >★</span>
                           {/if}
                         </td>
                         <td>{m.size}</td>
@@ -2721,7 +2991,8 @@
   }
 
   .selection-summary,
-  .rd-send-panel {
+  .rd-send-panel,
+  .rd-plan-panel {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -2875,6 +3146,30 @@
     color: var(--color-muted);
     font-size: 0.75rem;
     white-space: nowrap;
+  }
+
+  /* RD hit-likelihood markers, styled off a STATIC class + a dynamic data-*
+     attribute — the same shape as .inline-msg[data-kind] above. A computed
+     class name (`rd-badge-${cls}`) would be pruned as an unused selector and
+     break the 0-warning svelte-check gate. */
+  .rd-badge[data-rd="prefix_hd"],
+  .rd-star[data-tier="prefix_hd"],
+  .rd-star[data-tier="hd_earliest"] {
+    border-color: #2ecc71;
+    color: #2ecc71;
+  }
+
+  .rd-badge[data-rd="prefix_only"],
+  .rd-badge[data-rd="hd"] {
+    border-color: var(--color-fg);
+    color: var(--color-fg);
+  }
+
+  /* The ⚠ tier: nothing in the group is HD, so the pick rests on the
+     re-upload prefix and the upload date alone. */
+  .rd-star[data-tier="no_hd_fallback"] {
+    border-color: #f39c12;
+    color: #f39c12;
   }
 
   .grow {
@@ -3090,7 +3385,8 @@
     }
 
     .selection-summary,
-    .rd-send-panel {
+    .rd-send-panel,
+    .rd-plan-panel {
       align-items: stretch;
       flex-direction: column;
     }

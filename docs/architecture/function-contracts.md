@@ -19,7 +19,7 @@ This document is the **entry point** to a per-layer reference set. Each layer fi
 | # | Layer | File | Functions documented |
 |---|---|---|---|
 | 1 | Rust Tauri backend | [`contracts/rust-backend.md`](contracts/rust-backend.md) | 28 `#[tauri::command]` exports + all internal helpers across 9 runtime `.rs` files, plus build-script `build.rs` |
-| 2 | Svelte/TS frontend lib | [`contracts/frontend-lib.md`](contracts/frontend-lib.md) | every export + internal helper across `magnetUtils.ts`, `rdSender.ts`, `scraper.ts`, `settingsValidation.ts`, `types.ts`, `main.ts` |
+| 2 | Svelte/TS frontend lib | [`contracts/frontend-lib.md`](contracts/frontend-lib.md) | every export + internal helper across `magnetUtils.ts`, `rdPriority.ts`, `rdSender.ts`, `scraper.ts`, `settingsValidation.ts`, `types.ts`, `main.ts` |
 | 3 | `App.svelte` UI monolith | [`contracts/app-svelte.md`](contracts/app-svelte.md) | ~35 functions, ~50 `$state` vars, 10 `$derived`, 24 distinct `invoke()` call sites |
 | 4 | Sidecar runtime daemon | [`contracts/sidecar-runtime.md`](contracts/sidecar-runtime.md) | live `sidecar/sidecar.py` JSONL daemon, all helpers + command handlers |
 | 5 | Sidecar build pipeline | [`contracts/sidecar.md`](contracts/sidecar.md) | `build_sidecar.py` (PyInstaller packaging). The argv-style `driver_rust` spike harness was removed in M9 Phase 8-C. |
@@ -40,7 +40,7 @@ Code that actually executes when an end-user runs `javdbmagnet.exe` and clicks s
 | Layer | Files | Doc |
 |---|---|---|
 | Rust Tauri backend | `app/src-tauri/src/{main.rs,lib.rs,commands.rs,legacy_import.rs,path_manager.rs,pending.rs,secret_store.rs,settings.rs,sidecar_manager.rs}` | [`contracts/rust-backend.md`](contracts/rust-backend.md) |
-| Frontend lib | `app/src/main.ts`, `app/src/lib/{magnetUtils,rdSender,scraper,settingsValidation,types}.ts` | [`contracts/frontend-lib.md`](contracts/frontend-lib.md) |
+| Frontend lib | `app/src/main.ts`, `app/src/lib/{magnetUtils,rdPriority,rdSender,scraper,settingsValidation,types}.ts` | [`contracts/frontend-lib.md`](contracts/frontend-lib.md) |
 | Frontend UI monolith | `app/src/App.svelte` | [`contracts/app-svelte.md`](contracts/app-svelte.md) |
 | Sidecar runtime daemon | `sidecar/sidecar.py` | [`contracts/sidecar-runtime.md`](contracts/sidecar-runtime.md) |
 | JavDB scraper library | `javdb_scraper.py` (M9; imported by sidecar daemon + tests; pure HTTP+parse, zero Tk/app_logging deps) | [`contracts/python-legacy.md`](contracts/python-legacy.md) §`javdb_scraper.py` |
@@ -109,7 +109,7 @@ Work was split by **execution boundary**: each bucket owns code with a homogeneo
 
 ## Architectural shape (one-paragraph)
 
-The app is a **3-tier Windows desktop application**: a Svelte 5 single-page UI (`App.svelte` + four `lib/*.ts` modules) talks to a Rust Tauri backend (9 `.rs` modules, 28 `#[tauri::command]` exports) via `invoke()`; the Rust backend spawns and owns a long-running **PyInstaller-bundled Python sidecar** process (`sidecar.exe`) that performs all JavDB scraping and Real-Debrid REST traffic. There is **no Tauri event emission** from Rust and **no `listen(...)` subscription** from the frontend — progress for batch operations is driven by **JS-side callbacks** (`onProgress`) that the lib helpers call after each per-item `invoke()` returns. Cancellation is via `AbortSignal` checked at iteration boundaries (in-flight `invoke`s always complete). The sidecar contract is **process-based stdio JSON** (one request line in, one response line out).
+The app is a **3-tier Windows desktop application**: a Svelte 5 single-page UI (`App.svelte` + five `lib/*.ts` modules) talks to a Rust Tauri backend (9 `.rs` modules, 28 `#[tauri::command]` exports) via `invoke()`; the Rust backend spawns and owns a long-running **PyInstaller-bundled Python sidecar** process (`sidecar.exe`) that performs all JavDB scraping and Real-Debrid REST traffic. There is **no Tauri event emission** from Rust and **no `listen(...)` subscription** from the frontend — progress for batch operations is driven by **JS-side callbacks** (`onProgress`) that the lib helpers call after each per-item `invoke()` returns. Cancellation is via `AbortSignal` checked at iteration boundaries (in-flight `invoke`s always complete). The sidecar contract is **process-based stdio JSON** (one request line in, one response line out).
 
 ---
 
@@ -165,7 +165,12 @@ App.svelte::handleScrape (click "抓取")          (app/src/App.svelte)
 ### Flow 3 — Send batch to Real-Debrid
 
 ```
-App.svelte::handleSendToRD (click "送 RD")       (app/src/App.svelte)
+App.svelte::sendSelectedToRd (click "送出已勾選") (app/src/App.svelte)
+├── lib/rdPriority.ts::summarizeRdLikelihood     — LOCAL triage, no IPC.
+│   RD removed /torrents/instantAvailability in 2024, so the "will this hit
+│   cache?" question is answered by heuristics on the row's own metadata.
+│   low > 0 → confirmation panel first (全部送出 / 只送高機率 / 取消);
+│   low == 0 → straight through. Either way the send itself is runSendBatch.
 └── lib/rdSender.ts::sendBatch                   (app/src/lib/rdSender.ts)
     └── for each magnet:
         ├── invoke('rd_send_magnet', { magnet, strategy, minSizeMb })
@@ -281,11 +286,16 @@ Rust backend (app/src-tauri/src/):
 
 Frontend (app/src/):
   main.ts ─→ App.svelte
-  App.svelte ─→ {lib/scraper, lib/rdSender, lib/magnetUtils,
+  App.svelte ─→ {lib/scraper, lib/rdSender, lib/magnetUtils, lib/rdPriority,
                  lib/settingsValidation, lib/types,
                  @tauri-apps/api/core::invoke}
-  lib/{scraper,rdSender,magnetUtils,settingsValidation} ─→ lib/types only
-  lib/* are a FLAT LEAF LAYER — no lib imports another.
+  lib/{scraper,rdSender,settingsValidation,rdPriority} ─→ lib/types only
+  lib/magnetUtils ─→ lib/rdPriority ─→ lib/types
+  ↑ 2026-08-01: the lib layer is no longer entirely flat. magnetUtils imports
+    rdPriority (isHdRow / pickRdCandidate) so "HD" and the RD-cache heuristic
+    have ONE definition. rdPriority must stay a leaf — that is why its
+    same-date tie-break is an injected comparator instead of a parseSizeGb
+    import, which would close a cycle. Every other lib module is still a leaf.
 
 Sidecar (PyInstaller bundle, runtime):
   sidecar/sidecar.py ─→ {app_logging, realdebrid,

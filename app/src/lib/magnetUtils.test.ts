@@ -8,6 +8,7 @@ import {
   matchesKeyword,
   parseFileCount,
   parseSizeGb,
+  pickRdReadyRow,
   processGroupRows,
   sortRows,
 } from "./magnetUtils";
@@ -86,6 +87,18 @@ describe("isHd", () => {
     expect(isHd(row({ tags: [] }))).toBe(false);
     expect(isHd(row({ tags: ["other"] }))).toBe(false);
   });
+
+  // Widened definition (RD-hit-priority spec §2.1): JavDB sometimes ships a
+  // 1080p/4K release with no 高清 tag, and hd_only used to drop those.
+  it("matches a resolution token in the name even without tags", () => {
+    expect(isHd(row({ name: "ABC-123 1080p", tags: [] }))).toBe(true);
+    expect(isHd(row({ name: "SSIS-123.4K.mkv", tags: [] }))).toBe(true);
+    expect(isHd(row({ name: "ABC-123 UHD", tags: [] }))).toBe(true);
+  });
+
+  it("does not mistake a size in the name for a resolution", () => {
+    expect(isHd(row({ name: "ABC-123 1080MB", tags: [] }))).toBe(false);
+  });
 });
 
 describe("filterRows", () => {
@@ -159,12 +172,60 @@ describe("applyGroupPick", () => {
     expect(applyGroupPick([], "largest")).toEqual([]);
   });
 
+  it("rd_ready keeps the cache-prefixed HD row over an earlier plain HD row", () => {
+    const mixed: MagnetRow[] = [
+      row({ handle_id: "hd-early", name: "SNOS-192", tags: ["高清"], date: "2019-01-01" }),
+      row({ handle_id: "prefix-hd", name: "hhd800.com@SNOS-192", tags: ["高清"], date: "2026-05-09" }),
+      row({ handle_id: "plain", name: "SNOS-192", tags: [], date: "2018-01-01" }),
+    ];
+    expect(applyGroupPick(mixed, "rd_ready").map((r) => r.handle_id)).toEqual(["prefix-hd"]);
+  });
+
+  it("rd_ready breaks a same-date tie with the injected larger-size comparator", () => {
+    // Both rows are HD (default 高清 tag) and share a date, so the only
+    // thing that can separate them is the size comparator magnetUtils
+    // injects into pickRdCandidate.
+    const tied: MagnetRow[] = [
+      row({ handle_id: "small", size: "1GB, 1個文件", date: "2026-05-09" }),
+      row({ handle_id: "large", size: "9GB, 1個文件", date: "2026-05-09" }),
+    ];
+    expect(applyGroupPick(tied, "rd_ready").map((r) => r.handle_id)).toEqual(["large"]);
+  });
+
+  it("rd_ready empty input → empty output", () => {
+    expect(applyGroupPick([], "rd_ready")).toEqual([]);
+  });
+
   it("unknown pick value falls through to a defensive copy of rows", () => {
     // Cast through unknown so we can exercise the default branch even
     // though the type system would normally rule this out.
     const out = applyGroupPick(rows, "weird" as unknown as GroupPick);
     expect(out).toEqual(rows);
     expect(out).not.toBe(rows);
+  });
+});
+
+describe("pickRdReadyRow", () => {
+  it("returns the picked row together with the tier that justified it", () => {
+    const rows: MagnetRow[] = [
+      row({ handle_id: "plain", name: "SNOS-192", tags: [], date: "2018-01-01" }),
+      row({ handle_id: "prefix-hd", name: "489155.com@SNOS-192 1080p", tags: [], date: "2026-05-09" }),
+    ];
+    expect(pickRdReadyRow(rows)).toEqual({ row: rows[1], tier: "prefix_hd" });
+  });
+
+  it("reports no_hd_fallback when the whole group is non-HD", () => {
+    const rows: MagnetRow[] = [
+      row({ handle_id: "late", name: "SNOS-192", tags: [], date: "2026-05-09" }),
+      row({ handle_id: "early", name: "SNOS-192", tags: [], date: "2019-01-01" }),
+    ];
+    const picked = pickRdReadyRow(rows);
+    expect(picked?.row.handle_id).toBe("early");
+    expect(picked?.tier).toBe("no_hd_fallback");
+  });
+
+  it("empty input → null", () => {
+    expect(pickRdReadyRow([])).toBeNull();
   });
 });
 
@@ -238,6 +299,14 @@ describe("processGroupRows", () => {
     expect(out.map((r) => r.handle_id)).toEqual(["big"]);
   });
 
+  it("filter → group_pick=rd_ready → sort", () => {
+    // No HD-tagged row carries a prefix here, so the pick lands on tier
+    // hd_earliest; both HD rows share a date, so the size tie-break decides.
+    const f = { ...defaultFilterState(), group_pick: "rd_ready" as const };
+    const out = processGroupRows(group, f, null, "asc");
+    expect(out.map((r) => r.handle_id)).toEqual(["big"]);
+  });
+
   it("returns [] when result is null", () => {
     const empty: ScrapedGroup = { ...group, result: null };
     expect(processGroupRows(empty, defaultFilterState(), null, "asc")).toEqual([]);
@@ -277,6 +346,12 @@ describe("processGroupRows", () => {
       min_size_gb: 5,
       group_pick: "largest" as const,
     };
+    const out = processGroupRows(manualGroup, f, null, "asc");
+    expect(out.map((r) => r.handle_id)).toEqual(["m1", "m2"]);
+  });
+
+  it("manual groups skip rd_ready group-pick too (every row survives)", () => {
+    const f = { ...defaultFilterState(), group_pick: "rd_ready" as const };
     const out = processGroupRows(manualGroup, f, null, "asc");
     expect(out.map((r) => r.handle_id)).toEqual(["m1", "m2"]);
   });

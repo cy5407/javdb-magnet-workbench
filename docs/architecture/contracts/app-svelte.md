@@ -24,7 +24,8 @@ The file is organized as:
 **Lib modules**
 
 - `./lib/scraper` — `parseMagnetBatch`, `parseUrlBatch`, `scrapeBatch`, type `ScrapeProgressEvent` ([App.svelte:5–10](../../../app/src/App.svelte#L5))
-- `./lib/magnetUtils` — `dedupeByHandleId`, `processGroupRows` ([App.svelte:11](../../../app/src/App.svelte#L11))
+- `./lib/magnetUtils` — `dedupeByHandleId`, `filterRows`, `isManualGroup`, `pickRdReadyRow`, `processGroupRows` ([App.svelte:14–20](../../../app/src/App.svelte#L14))
+- `./lib/rdPriority` — `classifyRow`, `rdBadge`, `summarizeRdLikelihood`, types `RdCandidate`, `RdPickTier`, `RdRowClass` ([App.svelte:21–28](../../../app/src/App.svelte#L21))
 - `./lib/settingsValidation` — `FILE_PICK_VALUES`, `SCALE_PRESETS`, `THEME_VALUES`, `validateSettingsDraft` ([App.svelte:12–17](../../../app/src/App.svelte#L12))
 - `./lib/rdSender` — `rdErrorMessage`, `retryPending`, `sendBatch`, types `RdRetryEvent`, `RdSendBatchEvent`, `RdSendItem` ([App.svelte:18–25](../../../app/src/App.svelte#L18))
 
@@ -78,6 +79,11 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch`, `s
 | `errCount` | `groups[].status` | [478](../../../app/src/App.svelte#L478) |
 | `totalRawMagnets` | `groups[].result.magnet_count` | [479](../../../app/src/App.svelte#L479) |
 | `allVisibleRows` (`$derived`) | `webVisibleRows`, `manualVisibleRows` | [620](../../../app/src/App.svelte#L620) |
+| `rdCandidates` (`$derived.by`) | `groups`, `filter`, `sortColumn`, `sortDirection`（全部經 `rdConsideredRows` → `processedRows`） | [761](../../../app/src/App.svelte#L761) |
+| `rdPickByGroup` | `rdCandidates` | [774](../../../app/src/App.svelte#L774) |
+| `rdPickedHandles` | `rdCandidates` | [779](../../../app/src/App.svelte#L779) |
+| `rowClassByHandle` (`$derived.by`) | `groups[].result.magnets`（不看 `filter`） | [792](../../../app/src/App.svelte#L792) |
+| `rdSendTriage` (`$derived.by`) | `groups`, `selectedHandles`（經 `buildSelectedSendItems`）, `rowClassByHandle` | 送出前確認面板與 `confirmSend` 的唯一資料來源 |
 | `settingsErrors` | `settingsDraft` | [897](../../../app/src/App.svelte#L897) |
 | `settingsValid` | `settingsErrors` | [900](../../../app/src/App.svelte#L900) |
 | `rdCompletedCount` | `rdSendProgress[].status` | [1046](../../../app/src/App.svelte#L1046) |
@@ -121,12 +127,22 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch`, `s
 
 | Var | Type | Initial | Mutated by | Read by |
 |---|---|---|---|---|
-| `filter` | `FilterState` | `defaultFilterState()` | `bind:value` inputs, `commitMinSize`, `commitMaxSize`, `setGroupPick`, `resetFilter` | `processedRows`, `allVisibleRows`（經 `webVisibleRows`/`manualVisibleRows`） |
+| `filter` | `FilterState` | `defaultFilterState()` | `bind:value` inputs, `commitMinSize`, `commitMaxSize`, `setGroupPick`, `resetFilter` | `processedRows`, `allVisibleRows`（經 `webVisibleRows`/`manualVisibleRows`）, `rdConsideredRows`（經 `rdCandidates`：★ 首選必須與畫面同一組列） |
 | `minSizeInput` | `string` | `""` | input bind [1516](../../../app/src/App.svelte#L1516), `resetFilter` | `commitMinSize` |
 | `maxSizeInput` | `string` | `""` | input bind [1526](../../../app/src/App.svelte#L1526), `resetFilter` | `commitMaxSize` |
 | `sortColumn` | `SortColumn \| null` | `null` | `toggleSort`, `resetFilter` | `processedRows`, `sortIndicator` |
 | `sortDirection` | `SortDirection` | `"asc"` | `toggleSort`, `resetFilter` | `processedRows`, `sortIndicator` |
 | `collapsed` | `Record<string, boolean>` | `{}` | `toggleCollapsed`, `clearResults` | markup [1585](../../../app/src/App.svelte#L1585) |
+| `selectedHandles` | `Record<string, boolean>` | `{}` | `rememberSelectableRows`, `setRowSelected`, `setRowsSelected`, `selectOnlyRows`, `selectRdCandidatesOnly`, `clearResults` | `buildSelectedSendItems`, `selectedMagnets` / `sendButtonLabel` derived, `copySelected`, per-row checkbox [2542](../../../app/src/App.svelte#L2542) |
+
+`selectedHandles` is the send batch's source of truth — filters and sort only decide what is
+drawn, never what gets sent. `filter` and `selectedHandles` are therefore independent: a row can
+be checked and invisible at the same time. (Row added 2026-08-01; the var predates it.)
+
+`filter.hd_only` (只顯示高清 checkbox [2402](../../../app/src/App.svelte#L2402)) **widened on
+2026-08-01** without any change in this file: `magnetUtils.isHd` now means "高清/hd tag **or** a
+1080p/2160p/4K/UHD token in the filename", so the checkbox keeps untagged HD releases it used to
+hide. Same definition the ⚡/高清 badges use — see `frontend-lib.md` §3.3 `isHd` / §3.4 `isHdRow`.
 
 ### 2.4 Ping / sidecar
 
@@ -148,10 +164,20 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch`, `s
 
 | Var | Type | Initial | Mutated by | Read by |
 |---|---|---|---|---|
-| `rdSendProgress` | `RdSendProgress[]` | `[]` | `sendVisibleToRd`, `sendBatch` callback (slot replace), `retryAllPending` (reconciles completed/missing) | derived counts, `copyRdDownloads`, markup [1716](../../../app/src/App.svelte#L1716) |
-| `rdSendDone` | `{done,total}` | `{0,0}` | `sendVisibleToRd`, `sendBatch` callback | markup [1688](../../../app/src/App.svelte#L1688) |
-| `isRdSending` | `boolean` | `false` | `sendVisibleToRd` (set/finally) | disabled gates, `sendVisibleToRd` guard |
-| `rdSendAbort` | `AbortController \| null` | `null` | `sendVisibleToRd`, `cancelRdSend` | `cancelRdSend` |
+| `rdSendProgress` | `RdSendProgress[]` | `[]` | `runSendBatch`, `sendBatch` callback (slot replace), `retryAllPending` (reconciles completed/missing) | derived counts, `copyRdDownloads`, markup [1716](../../../app/src/App.svelte#L1716) |
+| `rdSendDone` | `{done,total}` | `{0,0}` | `runSendBatch`, `sendBatch` callback | markup [1688](../../../app/src/App.svelte#L1688) |
+| `isRdSending` | `boolean` | `false` | `runSendBatch` (set/finally) | disabled gates, `sendSelectedToRd` / `confirmSend` guards |
+| `rdSendAbort` | `AbortController \| null` | `null` | `runSendBatch`, `cancelRdSend` | `cancelRdSend` |
+| `sendPlanOpen` | `boolean` | `false` | `sendSelectedToRd` (set when `low > 0`), `runSendBatch` (clears), `confirmSend` (clears on a failed guard), `cancelSendPlan`, `clearResults`, `startScrape` | 確認面板 `{#if}`, `confirmSend`, 送出鍵 disabled |
+
+`sendPlanOpen` is deliberately a bare flag, **not** a frozen snapshot of the batch. The
+checkboxes stay live behind the panel (回到挑選 is not disabled), so a snapshot would let the
+user confirm a batch that no longer matches what is checked — breaking the app's oldest rule,
+that the send follows the checkboxes. Everything the panel displays and sends comes from
+`rdSendTriage`, which is derived from the current selection. `clearResults` and `startScrape`
+both close it: the former empties the selection, the latter replaces the web groups and hands
+their handles to `forget_magnets`, so an open panel would be describing a batch that no longer
+exists.
 
 ### 2.7 Pending list (RD waiting)
 
@@ -364,7 +390,29 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch`, `s
 
 **Reads**: `filter`, `sortColumn`, `sortDirection`. **Pure** w.r.t. component state.
 
-**Called by**: `copyVisible`, `buildVisibleSendItems`, `webVisibleRows` / `manualVisibleRows` derived（`allVisibleRows` 由兩者組成，供三個全選/反選按鈕共用）, markup `{@const rows = processedRows(g)}` [1584](../../../app/src/App.svelte#L1584).
+**Called by**: `webVisibleRows` / `manualVisibleRows` derived [726, 728](../../../app/src/App.svelte#L726)（`allVisibleRows` 由兩者組成，供三個全選/反選按鈕共用）, markup `{@const rows = processedRows(g)}` [2443](../../../app/src/App.svelte#L2443). No longer feeds the RD send batch (that follows `selectedHandles`) nor the bulk copy (`copySelected` reads `allSelectableRows`).
+
+---
+
+#### `rdConsideredRows(g: ScrapedGroup): MagnetRow[]`  *(App.svelte:[566](../../../app/src/App.svelte#L566))*
+
+**Purpose**: The rows one group's RD candidate (★ 首選) is picked from.
+
+**Contract**:
+- Returns `processedRows(g)` — literally the rendered set (filter → group_pick → sort).
+- Delegating rather than reproducing the filter half is what makes "the ★ is always on a row
+  that is on screen" true by construction. Re-running only `filterRows` diverges the moment
+  `group_pick` is `largest` / `smallest` / `fewest_files`, which collapse the group to one row:
+  the ★ then vanishes and 只勾選 RD 優先候選 checks a magnet the user can neither see nor
+  uncheck in that view.
+- Feeding the result back in under `group_pick="rd_ready"` is a fixed point, not a loop:
+  `pickRdCandidate` over the single surviving row returns that row with the same tier.
+- `applyGroupPick` is deliberately NOT applied: with `group_pick="rd_ready"` the pick would be
+  fed back into itself and the ★ would only ever mark the single surviving row.
+
+**Reads**: `filter`. **Pure** w.r.t. component state.
+
+**Called by**: `rdCandidates` derived [761](../../../app/src/App.svelte#L761).
 
 ---
 
@@ -384,6 +432,36 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch`, `s
 
 ---
 
+#### `selectRdCandidatesOnly(): void`  *(App.svelte:[620](../../../app/src/App.svelte#L620))*
+
+**Purpose**: Collapse the checkboxes down to one row per group — the one most likely to be
+cached on RD already. The button sits next to 只勾選目前顯示.
+
+**Contract**:
+- **Scoped to WEB groups on both halves.** The unchecking pass runs over web rows only (not
+  `allSelectableRows`, which is what `selectOnlyRows` clears): a pasted magnet is an explicit
+  user instruction, so this must never silently drop one — same invariant `registerPastedMagnets`
+  documents. Manual rows keep whatever checked state they had.
+- Then checks every handle in `rdPickedHandles`, i.e. web-group candidates whose tier is NOT
+  `no_hd_fallback`. A group whose best row is only a fallback is **skipped entirely** —
+  auto-checking a row that is neither HD nor from a re-upload site would be a guess the user did
+  not ask for.
+- Writes `statusMessage` with three fragments: how many were checked, how many groups were
+  skipped for having no HD candidate, and (when any exist) that N 手貼 rows were left untouched.
+- Not gated on `isRdSending` — it only moves checkboxes, and an in-flight batch already has its
+  own frozen item list.
+
+**Reads**: `rdPickedHandles`, `rdCandidates`, `webGroups`, `groups`. **Writes**:
+`selectedHandles` (via `setRowsSelected` / `setRowSelected`), `statusMessage`.
+
+**Triggered by**: Markup button 只勾選 RD 優先候選 [2368](../../../app/src/App.svelte#L2368).
+
+> The sibling checkbox helpers it builds on — `rememberSelectableRows` [586], `setRowSelected`
+> [594], `setRowsSelected` [598], `selectOnlyRows` [604], `selectedInRows` [636], `rowSelected`
+> [640] — predate this document's last pass and have no entries of their own.
+
+---
+
 #### `commitMinSize(): void`  *(App.svelte:[419](../../../app/src/App.svelte#L419))*
 
 **Purpose**: Commit `minSizeInput` (string) into `filter.min_size_gb` (number | null). `parseFloat` + finite-and-positive check; otherwise `null`.
@@ -400,9 +478,14 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch`, `s
 
 ---
 
-#### `setGroupPick(p: GroupPick): void`  *(App.svelte:[429](../../../app/src/App.svelte#L429))*
+#### `setGroupPick(p: GroupPick): void`  *(App.svelte:[654](../../../app/src/App.svelte#L654))*
 
-**Purpose**: Writes `filter.group_pick`. Trivial setter (could be inlined; called from the `<select>` `onchange` arrow [1534](../../../app/src/App.svelte#L1534)).
+**Purpose**: Writes `filter.group_pick`. Trivial setter (could be inlined; called from the `<select>` `onchange` arrow [2429](../../../app/src/App.svelte#L2429)).
+
+The 每組只留 select carries five options — 全部 (`all`), **RD 命中優先 (`rd_ready`)**, 最大檔
+(`largest`), 最小檔 (`smallest`), 檔案最少 (`fewest_files`) [2431–2435](../../../app/src/App.svelte#L2431).
+`rd_ready` sits right after 全部 and is resolved by `magnetUtils.applyGroupPick` →
+`pickRdReadyRow`; the default stays `all`.
 
 ---
 
@@ -431,11 +514,25 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch`, `s
 **Contract**:
 - If `isScraping` → aborts scrape first.
 - Snapshots all handle_ids before clearing `groups` (so we can pass them to `forget_magnets`).
-- Always clears local UI state (`groups = []`, `scrapeProgress`, `collapsed`) — sidecar GC failure is degraded to a warning, not surfaced as an error.
+- Always clears local UI state (`groups = []`, `scrapeProgress`, `collapsed`, `selectedHandles`) — sidecar GC failure is degraded to a warning, not surfaced as an error.
+- Also clears `sendPlanOpen`: nothing is checked any more, so the panel would be reporting on an empty batch.
 
 **Calls**: `scrapeAbort?.abort()`, `invoke('forget_magnets', { handleIds })` → `number`.
 
 **Triggered by**: Markup button [1476](../../../app/src/App.svelte#L1476).
+
+---
+
+#### `rdPickTitle(tier: RdPickTier): string`  *(App.svelte:[803](../../../app/src/App.svelte#L803))*
+
+**Purpose**: The ★ tooltip — spells out *why* a row won its group, per tier.
+
+**Contract**: Pure mapping, total over `RdPickTier`.
+- `prefix_hd` → 常見轉載站的高清版本，RD 最可能已有快取。
+- `hd_earliest` → 最早上傳的高清版本，較久的檔案較可能已被快取。
+- `no_hd_fallback` → ⚠ 全組皆非高清，只能以轉載站前綴與上傳日期推測，命中率低。
+
+**Triggered by**: `title` attribute of the ★ badge [2569](../../../app/src/App.svelte#L2569).
 
 ---
 
@@ -489,38 +586,78 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch`, `s
 
 ### 3.9 Real-Debrid send-batch flow
 
-#### `buildVisibleSendItems(): RdSendItem[]`  *(App.svelte:[578](../../../app/src/App.svelte#L578))*
+#### `buildSelectedSendItems(): RdSendItem[]`  *(App.svelte:[914](../../../app/src/App.svelte#L914))*
 
-**Purpose**: Construct the `RdSendItem[]` payload from currently visible rows, deduped by `handle_id`.
+**Purpose**: Construct the `RdSendItem[]` payload from the explicitly **checked** rows of every group — web and manual alike — deduped by `handle_id`. (Named `buildVisibleSendItems` in earlier revisions of this document; filters and sort only affect what is displayed, they do not mutate a batch the user already checked.)
 
 **Contract**:
 - Pure (no state mutation).
 - Code-resolution: paste groups (`url.startsWith('manual://')`) prefer the row's own `name` (sidecar's `dn=` extract) — falls back to group code. JavDB groups prefer the group code.
-- Dedupe via `dedupeByHandleId` (lib/magnetUtils.ts:169) — first occurrence wins.
+- Dedupe via `dedupeByHandleId` (lib/magnetUtils.ts:231) — first occurrence wins, and group order is web-first on purpose (a manual row's metadata is degraded and would be persisted into `pending_torrents.json`).
 
-**Reads**: `groups`, plus `filter`/`sortColumn`/`sortDirection` via `processedRows`.
+**Reads**: `groups`, `selectedHandles`.
 
-**Called by**: `sendVisibleToRd`.
+**Called by**: `sendSelectedToRd`.
 
 ---
 
-#### `sendVisibleToRd(): Promise<void>`  *(App.svelte:[598](../../../app/src/App.svelte#L598))*
+#### `sendSelectedToRd(): Promise<void>`  *(App.svelte:[935](../../../app/src/App.svelte#L935))*
 
-**Purpose**: Send currently visible magnets to Real-Debrid, streaming per-item progress.
+**Purpose**: Entry point of the send flow: build the batch, triage it, then either send straight through or raise the pre-send confirmation panel. (Named `sendVisibleToRd` in earlier revisions of this document.)
 
 **Contract**:
-- Guards: `isRdSending` reentry; `rdHasToken` (writes `rdMessage`); empty items (writes `rdMessage`).
-- Initialises `rdSendProgress` slots (one per item, status `"pending"`), `rdSendDone`, `rdSendAbort`.
-- Per-item callback replaces `rdSendProgress[index-1]`; only advances `done` counter when status leaves `"sending"` (so in-flight items don't tick the counter).
-- `finally`: clears `isRdSending`/`rdSendAbort`, refreshes `pendingEntries` from disk (sidecar may have added entries for `in_pending` items).
+- Guards: `isRdSending` / `isRetryingPending` reentry; `rdHasToken` (writes `rdMessage`, bounces to the settings tab because the token editor lives there); empty items (writes `rdMessage`, bounces to the select tab).
+- **Pre-send triage** (2026-08-01): reads `rdSendTriage`, the live derivation of the checked batch.
+  - `rdSendTriage.low === 0` → unchanged behavior, `runSendBatch(rdSendTriage.items)` immediately. A batch with nothing to warn about must not grow a confirmation step.
+  - `rdSendTriage.low > 0` → sets `sendPlanOpen = true` and **returns without sending**. The panel takes over.
+- Every likelihood number is a local guess — RD has had no cache-probe endpoint since 2024 — and the panel copy says so.
+
+**Calls**:
+- `rdSendTriage` (derived; itself calls `buildSelectedSendItems` + `summarizeRdLikelihood`)
+- `runSendBatch(items)` — only on the `low === 0` path.
+
+**Triggered by**: Markup button. That button is additionally `disabled` while `sendPlanOpen`, so the panel is the only way forward once it is up.
+
+---
+
+#### `confirmSend(scope: "all" | "high"): Promise<void>`
+
+**Purpose**: Run one of the confirmation panel's two actions.
+
+**Contract**:
+- Panel closed → no-op.
+- Re-checks **both** `isRdSending || isRetryingPending` and `rdHasToken`. Neither guard is inherited from `sendSelectedToRd`: the panel stays on screen while the user is free to start 全部重試 from the pending section below it, or to walk to the settings tab and clear the token. A failed `rdHasToken` closes the panel, writes `rdMessage` and bounces to 設定 — the same handling as the direct path.
+- Reads `rdSendTriage` at click time, never a snapshot taken when the panel opened: `scope === "high"` → `rdSendTriage.highItems` (classes `prefix_hd` / `hd`), `"all"` → `rdSendTriage.items`. Whatever the user checked or unchecked while the panel was up is what gets sent. An empty live batch closes the panel and bounces to the select tab instead of running a zero-item send.
+
+**Triggered by**: Panel buttons 全部送出 and 只送高機率. The latter is `disabled` when `rdSendTriage.highItems` is empty.
+
+---
+
+#### `cancelSendPlan(): void`
+
+**Purpose**: Dismiss the confirmation panel without sending. Clears `sendPlanOpen` and writes `rdMessage` = 已取消送出，勾選狀態未變更 — the checkboxes are deliberately left alone so the user can adjust and retry.
+
+**Triggered by**: Panel button 取消送出 [1824](../../../app/src/App.svelte#L1824).
+
+---
+
+#### `runSendBatch(items: RdSendItem[]): Promise<void>`  *(App.svelte:[996](../../../app/src/App.svelte#L996))*
+
+**Purpose**: The send itself. Split out of `sendSelectedToRd` so the direct path and both confirmation actions drive the exact same lifecycle over their own subset.
+
+**Contract**:
+- Clears `sendPlanOpen` first: the panel is one-shot, and leaving it up would let a second click re-send a batch already in flight.
+- Sets `lastBatchStartAt` — included here rather than in the caller because `copyRdDownloads` orders completions relative to THIS batch's start, and a stale value would sort the results wrong.
+- Initialises `rdSendProgress` slots (one per item, status `"pending"`), `rdSendDone`, `rdSendAbort`; clears `rdMessage`.
+- Per-item callback replaces `rdSendProgress[index-1]`; only advances `done` when status leaves `"sending"` (so in-flight items don't tick the counter).
+- `finally`: clears `isRdSending`/`isCancelingSend`/`rdSendAbort`, refreshes `pendingEntries` from disk (sidecar may have added entries for `in_pending` items).
 - Passes `settings.rd.{file_pick, min_size_mb, cache_wait_seconds}` as `defaults` when present; falls back to `{}` if `settings` is null.
 
 **Calls**:
-- `buildVisibleSendItems()`
 - `sendBatch(items, callback, { signal, defaults })` (lib/rdSender.ts:70) — that lib invokes `rd_send_magnet` per item.
 - `invoke('pending_list')` (in `finally`).
 
-**Triggered by**: Markup button [1470](../../../app/src/App.svelte#L1470).
+**Called by**: `sendSelectedToRd` (low === 0 path), `confirmSend` (both scopes).
 
 ---
 
@@ -754,7 +891,8 @@ These are inlined in markup rather than declared at the top level; they're liste
 - `() => { if (!settingsShown) openSettingsEditor(); else settingsShown = false; }` — settings toggle [1282](../../../app/src/App.svelte#L1282)
 - `() => (cookiesShown = !cookiesShown)` — cookies toggle [1403](../../../app/src/App.svelte#L1403)
 - `(e) => { e.preventDefault(); openExternal('https://real-debrid.com/apitoken').catch(...) }` — external link [1129](../../../app/src/App.svelte#L1129)
-- `(e) => setGroupPick((e.currentTarget as HTMLSelectElement).value as GroupPick)` — group-pick select [1534](../../../app/src/App.svelte#L1534)
+- `(e) => setGroupPick((e.currentTarget as HTMLSelectElement).value as GroupPick)` — group-pick select [2429](../../../app/src/App.svelte#L2429)
+- `() => confirmSend('all')` / `() => confirmSend('high')` — pre-send confirmation panel [1814, 1818](../../../app/src/App.svelte#L1814)
 - `() => toggleCollapsed(g.url)` — per-group toggle [1590](../../../app/src/App.svelte#L1590)
 - `() => toggleSort('name'|'size'|'tags'|'date')` — table header buttons [1629–1645](../../../app/src/App.svelte#L1629)
 - `() => copyOne(m.handle_id, m.name || g.result!.code)` — per-row copy [1657, 1667](../../../app/src/App.svelte#L1657)
@@ -798,20 +936,25 @@ UI re-render path: `groups` mutation → `processedRows` recomputed in markup �
 ### 4.3 "Send to RD" button click
 
 ```
-button.onclick [1470]
-└── sendVisibleToRd [598]
-    ├── buildVisibleSendItems [578]
-    │   ├── for each group: processedRows(g)
-    │   │   └── processGroupRows(g, filter, sortColumn, sortDirection) (lib/magnetUtils.ts:147)
-    │   └── dedupeByHandleId (lib/magnetUtils.ts:169)
-    ├── (init rdSendProgress, rdSendDone, rdSendAbort)
-    └── sendBatch(items, cb, {signal, defaults}) (lib/rdSender.ts:70)
-        ├── per item: invoke('rd_send_magnet', ...)
-        └── cb(ev: RdSendBatchEvent)
-            └── rdSendProgress[ev.index-1] = ev.item
-                if ev.item.status !== "sending": rdSendDone = {ev.index, ev.total}
-    finally:
-    └── invoke('pending_list')   → pendingEntries (pick up newly added in_pending)
+button.onclick [1782]
+└── sendSelectedToRd [935]
+    ├── buildSelectedSendItems [914]
+    │   ├── for each group: checked rows of g.result.magnets (NOT processedRows)
+    │   └── dedupeByHandleId (lib/magnetUtils.ts:231)
+    ├── summarizeRdLikelihood(classes via rowClassByHandle) (lib/rdPriority.ts:174)
+    │   ├── low === 0 → runSendBatch(items)                    ← unchanged one-click path
+    │   └── low  > 0  → sendPlanOpen = true; return
+    │                   └── panel [1803] → confirmSend('all'|'high') [974]
+    │                                   → cancelSendPlan [985]
+    └── runSendBatch(items) [996]
+        ├── (sendPlanOpen = false; lastBatchStartAt; init rdSendProgress, rdSendDone, rdSendAbort)
+        └── sendBatch(items, cb, {signal, defaults}) (lib/rdSender.ts:70)
+            ├── per item: invoke('rd_send_magnet', ...)
+            └── cb(ev: RdSendBatchEvent)
+                └── rdSendProgress[ev.index-1] = ev.item
+                    if ev.item.status !== "sending": rdSendDone = {ev.index, ev.total}
+        finally:
+        └── invoke('pending_list')   → pendingEntries (pick up newly added in_pending)
 ```
 
 ### 4.4 "Paste magnet → register" flow
@@ -899,6 +1042,18 @@ button.onclick [1191]
 | 直接貼磁力 (Paste magnet) | [1551–1682](../../../app/src/App.svelte#L1551) | always | magnet textarea + register button + **groups list rendering lives here** (`{#if groups.length > 0}` [1581](../../../app/src/App.svelte#L1581)) |
 | 送至 Real-Debrid 進度 (Send progress) | [1684–1757](../../../app/src/App.svelte#L1684) | `{#if rdSendProgress.length > 0}` [1684](../../../app/src/App.svelte#L1684) | per-row status table; only Cancel button visible while sending |
 | 待處理（Real-Debrid） (Pending) | [1759–1819](../../../app/src/App.svelte#L1759) | `{#if pendingEntries.length > 0}` [1759](../../../app/src/App.svelte#L1759) | retry-all / refresh-local / clear-all + per-row table |
+
+**RD hit-likelihood markup (2026-08-01).** These blocks postdate the table above; their line
+numbers are current, the table's are not (the file has grown well past the 2177 lines this
+document was written against, and this pass deliberately did not renumber it):
+
+| Block | Line | Rendered when | Notes |
+|---|---|---|---|
+| 送出前確認 panel | [1803–1827](../../../app/src/App.svelte#L1803) | `{#if sendPlanOpen}` | 高機率／低機率／未判定 counts + 全部送出 / 只送高機率 / 取消送出. Only appears when the batch actually contains low-likelihood rows, so a clean batch never grows an extra click. |
+| 只勾選 RD 優先候選 button | [2368](../../../app/src/App.svelte#L2368) | `{#if groups.length > 0}` | Sits in the selection-summary action row next to 只勾選目前顯示. |
+| `rd_ready` `<option>` | [2432](../../../app/src/App.svelte#L2432) | always | 每組只留 select, placed directly after 全部. |
+| Per-row RD badge | [2561–2564](../../../app/src/App.svelte#L2561) | `{#if rdMark}` | `{@const rdCls = rowClassByHandle.get(m.handle_id) ?? classifyRow(m)}` → `rdBadge(rdCls)`. The map, not a direct `classifyRow(m)`: a manual row and its web twin are one BTIH and the web row is the one carrying metadata. `data-rd={rdCls}` drives the badge colour from CSS. |
+| Per-row ★ 首選 | [2565–2571](../../../app/src/App.svelte#L2565) | `{#if rdPick && rdPick.row.handle_id === m.handle_id}` | `{@const rdPick = isManualGroup(g) ? undefined : rdPickByGroup.get(g.url)}` [2448](../../../app/src/App.svelte#L2448) — per-GROUP lookup so the same BTIH in a web and a manual group cannot cross-star, and manual groups get no ★ at all (`processGroupRows` never narrows them). `title` from `rdPickTitle(tier)`. |
 
 ### 5.2 Event binding hotspots
 

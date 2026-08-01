@@ -134,7 +134,12 @@ export interface ScrapedGroup {
   finished_at: string | null;
 }
 
-export type GroupPick = "all" | "largest" | "smallest" | "fewest_files";
+/**
+ * `rd_ready` keeps the row most likely to be cached on Real-Debrid already
+ * (see rdPriority.pickRdCandidate). It is NOT the default — `defaultFilterState`
+ * still returns "all" so existing users see no behavior change.
+ */
+export type GroupPick = "all" | "largest" | "smallest" | "fewest_files" | "rd_ready";
 
 export interface FilterState {
   keyword: string;
