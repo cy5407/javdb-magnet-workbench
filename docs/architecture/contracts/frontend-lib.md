@@ -22,6 +22,8 @@ sites in `app/src/App.svelte`".
 | [lib/scraper.ts](app/src/lib/scraper.ts) | Batch driver for the JavDB scrape flow. Wraps `invoke('fetch_javdb', …)` with pacing + single-retry on rate limit. Also exposes textarea parsers. |
 | [lib/rdSender.ts](app/src/lib/rdSender.ts) | Batch driver for Real-Debrid send + pending re-poll. Wraps `invoke('rd_send_magnet', …)` and `invoke('rd_check_pending', …)`. Includes the zh-Hant error-code → message mapper. |
 | [lib/settingsValidation.ts](app/src/lib/settingsValidation.ts) | Pure validators for the Settings editor. Returns null-or-error-string per field; aggregates into a map for the whole draft. |
+| [lib/errText.ts](app/src/lib/errText.ts) | The one-line `e instanceof Error ? e.message : String(e)` idiom, factored out of every `catch (e)` site that surfaces an error to the UI. |
+| [lib/flashAction.ts](app/src/lib/flashAction.ts) | Reactive controller behind every button's transient "✓" confirmation. Owns the flash-key set and the per-key debounce timers. |
 | [vite-env.d.ts](app/src/vite-env.d.ts) | Ambient triple-slash references for Svelte + Vite client types. No runtime, no exports. |
 
 ### 1.2 Internal dependency graph
@@ -29,11 +31,13 @@ sites in `app/src/App.svelte`".
 ```
 main.ts ──► App.svelte (not in scope)
 
-App.svelte ──► lib/scraper.ts ──► lib/types.ts
+App.svelte ──► lib/scraper.ts ──► lib/types.ts + lib/errText.ts
             ──► lib/magnetUtils.ts ──► lib/rdPriority.ts ──► lib/types.ts
             ──► lib/rdPriority.ts (direct) ──► lib/types.ts
-            ──► lib/rdSender.ts ──► lib/types.ts
+            ──► lib/rdSender.ts ──► lib/types.ts + lib/errText.ts
             ──► lib/settingsValidation.ts ──► lib/types.ts
+            ──► lib/flashAction.ts ──► svelte/reactivity (SvelteSet)
+            ──► lib/errText.ts (direct)
             ──► lib/types.ts (direct)
 ```
 
@@ -52,9 +56,11 @@ row classes), not only through `magnetUtils.ts`.
 |--------|-----------------|-------------------|
 | `magnetUtils.ts` | `parseSizeGb`, `parseFileCount`, `isManualGroup`, `matchesKeyword`, `isHd`, `filterRows`, `pickRdReadyRow`, `applyGroupPick`, `sortRows`, `processGroupRows`, `dedupeByHandleId` | — (`pickRdReadyRow` returns `RdCandidate`, which is re-imported from `rdPriority.ts`, not re-exported here) |
 | `rdPriority.ts` | `RD_CACHE_PREFIXES`, `hasCachePrefix`, `hasHdResolution`, `isHdRow`, `rdDateKey`, `classifyRow`, `rdBadge`, `pickRdCandidate`, `summarizeRdLikelihood` | `RdRowClass`, `RdPickTier`, `RdCandidate` |
-| `scraper.ts` | `isRateLimitError`, `randomDelayMs`, `parseUrlBatch`, `parseMagnetBatch`, `applyScrapeProgressForRun`, `scrapeBatch` | `SleepFn`, `ScrapeProgressEvent`, `ScrapeUiSnapshot`, `ScrapeOptions` |
-| `rdSender.ts` | `sendBatch`, `retryPending`, `rdErrorMessage` | `RdSendOptions`, `RdSendItem`, `RdSendBatchEvent`, `RdSendBatchOptions`, `RdRetryEvent`, `RdRetryOptions` |
+| `scraper.ts` | `isRateLimitError`, `randomDelayMs`, `parseUrlBatch`, `parseMagnetBatch`, `applyScrapeProgressForRun`, `scrapeBatch` | `JitterFn`, `SleepFn`, `ScrapeProgressEvent`, `ScrapeUiSnapshot`, `ScrapeOptions` |
+| `rdSender.ts` | `collectDownloadLinksFromRow`, `sortCompletedRowsByCompletionTime`, `buildRdDisplayRows`, `formatCompletedAt`, `sendBatch`, `applyRetryEventToProgressRows`, `retryPending`, `rdErrorMessage` | `RdSendOptions`, `RdSendItem`, `RdSendBatchEvent`, `RdSendBatchOptions`, `RdRetryEvent`, `RdRetryOptions` |
 | `settingsValidation.ts` | `FILE_PICK_VALUES`, `THEME_VALUES`, `SCALE_PRESETS`, `validateMinSizeMb`, `validateCacheWaitSeconds`, `validateScale`, `validateFilePick`, `validateTheme`, `validateSettingsDraft` | `FilePickValue`, `ThemeValue` |
+| `errText.ts` | `errText` | — |
+| `flashAction.ts` | `createFlashController` | `FlashController` |
 | `types.ts` | `defaultFilterState` | `Theme`, `PathInfo`, `UiSettings`, `RdSettings`, `Settings`, `MagnetRow`, `FetchResult`, `PingResponse`, `CopyBulkResult`, `CopyRdLinksBulkResult`, `LegacyImportPreview`, `CookiesStatus`, `LegacyImportReport`, `ScrapedGroup`, `GroupPick`, `FilterState`, `SortColumn`, `SortDirection`, `RdUserInfo`, `RdLink`, `RdSendOutcome`, `RdCheckOutcome`, `PendingEntry`, `RdSendProgress` |
 
 ### 1.4 Bridge to Rust
@@ -1297,6 +1303,56 @@ map means the draft is valid.
 
 The only runtime export is `defaultFilterState` — already documented in §2.4. Everything else
 in `types.ts` is erased at compile time.
+
+---
+
+### 3.9 `app/src/lib/errText.ts`
+
+#### `errText(e: unknown): string`
+
+**Purpose**: The `e instanceof Error ? e.message : String(e)` idiom, factored out of every
+`catch (e)` site that surfaces an error to the UI.
+
+**Contract**:
+- Params: `e` — anything a `catch` can bind.
+- Returns: `e.message` for `Error` instances, `String(e)` otherwise. Never throws.
+- Side effects: none. No imports at all — the only lib module with zero dependencies.
+
+**Why it matters**: Tauri rejects `invoke()` with a plain `String`, not an `Error`. Both shapes
+therefore reach the same `catch`, and a bare `e.message` would render `undefined` for the Rust
+side while `String(e)` would render `Error: …` noise for the JS side.
+
+**Called by**: `scraper.ts` (`fetchGroupWithRetry`), `rdSender.ts` (`sendBatch`, `retryPending`),
+and `App.svelte` at every `invoke` call site.
+
+---
+
+### 3.10 `app/src/lib/flashAction.ts`
+
+Reactive controller behind every button's transient "✓" confirmation.
+
+#### `interface FlashController`
+
+- `readonly keys: SvelteSet<string>` — reactive set of currently-flashing keys; templates call
+  `.has(key)`.
+- `flash(key, durationMs = 1200): void`
+- `run<T>(key, fn, durationMs?): Promise<T>`
+- `dispose(): void`
+
+#### `createFlashController(): FlashController`
+
+**Contract**:
+- `flash` **restarts** an in-flight timer for the same key rather than letting the original
+  expiry truncate the new flash — a rapid re-click debounces instead of blinking out early.
+- `run` flashes **only on resolve**; a rejection re-throws unchanged with no flash. This is the
+  load-bearing part: without it the UI would show "✓ 已複製" for an `invoke` that actually failed.
+- `dispose` clears every pending timer and empties the set. `App.svelte` calls it from
+  `onDestroy`; skipping it would leave `setTimeout` callbacks writing into a destroyed component.
+- Uses `SvelteSet` from `svelte/reactivity` (not a plain `Set`) so mutation is tracked by Svelte 5
+  runes — a plain `Set` would mutate without re-rendering.
+
+**Called by**: `App.svelte` — one shared controller instance, keyed per button
+(`magnet-copy-selected`, `rd-bulk`, `scrape-clear`, `rd-clear-token`, …).
 
 ---
 

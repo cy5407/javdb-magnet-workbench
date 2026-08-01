@@ -5,19 +5,38 @@
 - Python：`.venv/bin/python -m pytest tests/ -q`
 - 前端：`cd app && npx vitest run`
 - 型別：`cd app && npm run check`（svelte-check，0 errors 0 warnings 才算過）
-- Rust：`cd app/src-tauri && cargo test --lib` —— **目前本機編不過**（baseline
-  即失敗：缺 Linux sidecar binary，且 `secret-service` 4.0.0 未啟用 runtime
-  feature，在 rustc 1.97.1 下編譯失敗）。修好前 Rust 端變更以人工細審代替，
-  並在回報中註明此 gate 被跳過。
+- Rust：`cd app/src-tauri && cargo test --lib` —— **本機（Linux）預設編不過**，
+  但**不是無解**。2026-08-01 實測確認只需兩項修改即可通過：`Cargo.toml` 的
+  keyring features 按平台拆開，加上一份 Linux sidecar binary；修好後
+  **81 passed / 0 failed**。細節與逐步驗證見
+  [`docs/platform/linux-support.md`](docs/platform/linux-support.md)。
+  在未套用該修改前，Rust 端變更以人工細審代替，並在回報中註明此 gate 被跳過——
+  但不得再宣稱它「無法修復」。
 - 驗收以機器可比對方式核對 baseline：既有測試案例不得刪除或弱化；刻意的
   行為契約變更允許改測試，但須說明舊期待、Red 原因與新期待。
 
+### 目前 baseline（2026-08-01，commit `e77ac4d`）
+
+| Gate | 結果 |
+|---|---|
+| `pytest tests/ -q` | 394 passed, 6 subtests |
+| `npx vitest run` | 9 files / 253 tests |
+| `npm run check` | 189 files, 0 errors 0 warnings |
+| `cargo test --lib` | 81 passed（需先套用 linux-support.md 的兩項修改） |
+
 ## 契約文件同步
 
-`docs/architecture/contracts/`（五份）與 `docs/architecture/function-contracts.md`
-記載跨層契約。行為變更必須同步這些文件：除以 `rg` 掃被移除符號外，還要
-逐份正面核對新契約已被記載（新增的行為靠搜尋舊符號找不到）。
-`docs/code-simplification-plan-*.md` 等日期戳記檔案是歷史存檔，不回頭改。
+`docs/architecture/contracts/`（六份：`rust-backend` / `frontend-lib` /
+`app-svelte` / `sidecar-runtime` / `sidecar` / `python-legacy`）與
+`docs/architecture/function-contracts.md` 記載跨層契約。行為變更必須同步這些
+文件：除以 `rg` 掃被移除符號外，還要逐份正面核對新契約已被記載（新增的行為靠
+搜尋舊符號找不到）。
+
+**歷史存檔不回頭改**：`docs/code-simplification-plan-*.md`、
+`docs/security-audit-*.md`、`docs/sessions/`、`docs/superpowers/specs/`、
+`docs/specs/*`，以及 `Task.md`／`docs/Task.md`／`implementation-notes.md`／
+`PROGRESS.md` 這四份歷次任務紀錄。它們記錄的是「當時決定了什麼」，改寫等於
+竄改紀錄；只在檔頭標註狀態並指向現行來源。
 
 ## 多代理工作流
 

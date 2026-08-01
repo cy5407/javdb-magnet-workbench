@@ -230,7 +230,7 @@ python scripts/rd_log_report.py --log <path> --threshold-ms 5000
 | JavDB cookies 絕不長期落純文字 | Windows Credential Manager（target `JavDBMagnet/JAVDB_COOKIES`）；`cookies.txt` 只是過渡用範本檔，下次 app 啟動 / 按「重新整理」後自動加密寫回 keyring 並刪除明文 |
 | 完整 magnet 不外洩到 frontend / settings / pending JSON / log | sidecar 用 `handle_id` 引用；只在 Rust transient String（剪貼簿寫入時）與 RD HTTP body 短暫存在 |
 | `pending_torrents.json` 不含 magnet 文字 | 由 Rust `entries_have_no_magnet_field` 單元測試守住 |
-| `debug.log` 不含 BTIH hash | `realdebrid.py::_request` 對 `data["magnet"]` 永遠記 `<redacted>` |
+| `logs/` 全目錄不含 BTIH hash | `realdebrid.py::_request` 對 `data["magnet"]` 永遠記 `<redacted>`；`rd_outcomes.jsonl` 的關聯鍵用裸 8 碼 hex（非 `redact_magnet()` 輸出，後者格式本身會命中掃描 pattern），並在寫出前逐行過 `_FORBIDDEN_RX`。由 `tests/test_rd_outcome_log_e2e.py::E2ERedactionGate` 實跑掃描守住 |
 | Clipboard 寫入集中在 Rust | frontend 不直接 import `tauri-plugin-clipboard-manager` |
 | capability 最小化 | `capabilities/default.json` 只開 `core:default` |
 | 同一 magnet 不重複送 RD（防雙扣額度） | **兩道防線**：sidecar 維護 normalized BTIH（`btih:<lowercase-hex>`）→ handle 反查表，同 hash 不同 `dn`/大小寫/參數順序皆共用 handle；frontend 送 RD 前再依 `handle_id` 去重（`dedupeByHandleId` helper） |
@@ -318,20 +318,29 @@ npm run release
 ### 測試
 
 ```powershell
-cd app
-npm run test           # Vitest（前端）
-npm run check          # svelte-check（型別）
-cargo test --lib       # Rust 單元測試
 # 在 repo root：
-python -m unittest discover -s tests
+python -m pytest tests/ -q                   # Python（sidecar / RD client / 成效日誌）
+
+cd app
+npm run test                                 # Vitest（前端）
+npm run check                                # svelte-check（型別，0 errors 0 warnings 才算過）
+
+cd app/src-tauri
+cargo test --lib                             # Rust 單元測試
 ```
+
+> `cargo test --lib` 必須在 `app/src-tauri` 下跑——`Cargo.toml` 在那裡，不在 `app/`。
+>
+> **在 Linux 開發機上這條預設編不過**（keyring 的 `secret-service` 未啟用 runtime
+> feature，且缺 Linux sidecar binary）。修法與逐步驗證見
+> [`docs/platform/linux-support.md`](docs/platform/linux-support.md)；套用後為 81 passed。
 
 ### Repo 結構
 
 ```
 .
 ├─ app/                   ← Tauri + Svelte 前端
-│  ├─ src/                ← Svelte component + lib (scraper / rdSender / settingsValidation / ...)
+│  ├─ src/                ← Svelte component + lib (scraper / rdSender / rdPriority / settingsValidation / ...)
 │  ├─ src-tauri/          ← Rust 後端
 │  │  ├─ src/
 │  │  │  ├─ commands.rs       ← Tauri IPC commands
@@ -344,12 +353,19 @@ python -m unittest discover -s tests
 │  └─ package.json
 ├─ sidecar/               ← Python sidecar daemon（JavDB 抓取 + RD API）
 │  └─ sidecar.py
+├─ realdebrid.py          ← RD API client（被 sidecar import）
+├─ javdb_scraper.py       ← JavDB HTTP + HTML 解析（純 library）
+├─ app_logging.py         ← logging 初始化與 log 目錄解析
+├─ rd_outcome_log.py      ← RD 送出成效日誌（rd_outcomes.jsonl）
 ├─ spikes/                ← 保留的歷史 spike notes + sidecar build pipeline（pyinstaller_sidecar / python_sidecar_protocol）
 ├─ scripts/
-│  └─ build-release.ps1   ← 一條命令 release pipeline
+│  ├─ build-release.ps1   ← 一條命令 release pipeline
+│  └─ rd_log_report.py    ← 成效日誌分析報表
 ├─ tests/                 ← Python unittest
 └─ docs/
-   ├─ architecture/
+   ├─ architecture/       ← 跨層契約（現行行為的權威來源）
+   ├─ platform/           ← 平台移植記錄（linux-support.md）
+   ├─ specs/              ← 各輪功能規格（歷史存檔）
    ├─ sessions/
    └─ troubleshooting/
 ```

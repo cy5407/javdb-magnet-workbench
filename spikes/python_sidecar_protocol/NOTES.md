@@ -7,14 +7,14 @@
 > - 對應的死測試 `tests/test_sidecar_cli.py` 也一併刪除；現行測試在 [`tests/test_sidecar_protocol.py`](../../tests/test_sidecar_protocol.py)。
 > - 本檔以下章節描述的是**舊 argv-style CLI 介面**（`python sidecar.py fetch-javdb <url>`），它**不再存在於 repo**，也不再是 production protocol。Production daemon 的契約見 [`docs/architecture/contracts/sidecar-runtime.md`](../../docs/architecture/contracts/sidecar-runtime.md)。
 >
-> 保留此檔的目的是讓未來讀者理解 M1→M3 的選型脈絡（與 [reqwest spike](../rust_fetch_javdb/NOTES.md) 失敗 / [rquest spike](../rquest_fetch_javdb/NOTES.md) 棄置的關聯），不是當作 build / runtime 指南。
+> 保留此檔的目的是讓未來讀者理解 M1→M3 的選型脈絡（與 reqwest spike（`spikes/rust_fetch_javdb/`，M9 已刪） 失敗 / rquest spike（`spikes/rquest_fetch_javdb/`，M9 已刪） 棄置的關聯），不是當作 build / runtime 指南。
 
 ---
 
 ## 目的（歷史）
 證明「Tauri/Rust backend 可以用穩定 JSON protocol 呼叫 Python 抓 JavDB，並取得結構化結果」，
-**不開完整 UI、不重寫主程式**。這是 [reqwest spike 失敗](../rust_fetch_javdb/NOTES.md) 與
-[rquest spike 因 Windows build chain 棄置](../rquest_fetch_javdb/NOTES.md) 後的選定路線可行性驗證。
+**不開完整 UI、不重寫主程式**。這是 reqwest spike 失敗（目錄於 M9 刪除） 與
+rquest spike 因 Windows build chain 棄置（目錄於 M9 刪除） 後的選定路線可行性驗證。
 
 ## 結構（歷史；目錄已刪除）
 

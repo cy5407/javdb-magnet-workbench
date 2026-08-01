@@ -1,5 +1,10 @@
 # 全 App 按鈕點擊回饋（TDD 改造）
 
+> **狀態：歷史存檔（已完成）**。本檔記錄按鈕點擊回饋（`flashAction`）那一輪的
+> 實作與 TDD 誠實標示。內容保留原樣作為決策紀錄，不再更新。
+> `createFlashController` 的現行契約見
+> [`docs/architecture/contracts/frontend-lib.md`](docs/architecture/contracts/frontend-lib.md)。
+
 ## TDD vs. 非 TDD 區隔（誠實標示）
 
 | 環節 | TDD？ |

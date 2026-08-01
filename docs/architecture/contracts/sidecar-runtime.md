@@ -92,6 +92,7 @@ Produced by `_err`:
 | `forget_magnets` | `cmd_forget_magnets` | no | no |
 | `register_magnets` | `cmd_register_magnets` | no | no |
 | `update_settings` | `cmd_update_settings` | no | no |
+| `set_cookies` | `cmd_set_cookies` | **yes** | no |
 | `cancel` | `cmd_cancel` | no | no-op |
 | `rd_user` | `cmd_rd_user` | token required | RD `/user` |
 | `rd_set_token` | `cmd_rd_set_token` | no | no |
@@ -385,6 +386,22 @@ written. See [the outcome-log spec §2](../../specs/2026-08-01-rd-outcome-log.md
 **Calls**: `_ok`.
 
 **Called by**: Rust `commands::update_sidecar_settings`.
+
+### `cmd_set_cookies(state: DaemonState, req: dict) -> dict`
+
+**Purpose**: Replace `state.cookies` at runtime so refreshing an expired `cf_clearance` does not require restarting the app.
+
+**Contract**:
+- Params: `cookies` — `null` / `""` clears; a non-empty `Cookie:`-header-style string (`k=v; k=v`) replaces. Any other type is a `bad_request`.
+- **Requires handshake** (F-17): refuses before one is established. This is the only non-RD command besides `fetch_javdb` with that gate — mirrors `cmd_rd_set_token`.
+- Returns: success.
+- Side effects: mutates `state.cookies`.
+
+**No size validation here on purpose**: the Rust caller (`save_cookies` / `migrate_cookies_now`) applies `cookie_store::COOKIES_MAX_BYTES` before the value crosses IPC, and `parse_cookie_string` already drops CR/LF pairs (F-05).
+
+**Calls**: `parse_cookie_string`, `_ok`, `_err`.
+
+**Called by**: Rust cookie-save and cookie-migration paths.
 
 ### `cmd_cancel(state: DaemonState, req: dict) -> dict` ([sidecar.py:364](../../../sidecar/sidecar.py#L364))
 

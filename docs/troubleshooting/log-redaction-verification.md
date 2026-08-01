@@ -1,10 +1,26 @@
-# 確認 debug.log 沒洩漏 magnet hash / token
+# 確認 logs 目錄沒洩漏 magnet hash / token
 
 ## 為什麼這條 recipe 存在
 
 M5 安全合約之一：**完整 magnet 文字（含 BTIH hash）絕不得進 log 檔**。歷史上有過一個 B1 bug：`realdebrid.py::_request` 在 DEBUG 等級記錄 `data["magnet"][:80]`，正好涵蓋完整 40 字 hash。修復 commit 是 [`1a604ae`](../../README.md)，現在 magnet key 一律記 `<redacted>`。
 
 這條 recipe 教你怎麼自己驗證修復仍然生效，以及未來 refactor 出包時最快發現的方法。
+
+## 掃描範圍：整個 logs 目錄，不只 debug.log
+
+2026-08-01 起 log 目錄多了第二個檔案 `rd_outcomes.jsonl`（RD 送出成效日誌，
+見 [`docs/specs/2026-08-01-rd-outcome-log.md`](../specs/2026-08-01-rd-outcome-log.md)）。
+下列指令的路徑因此**從 `debug.log*` 擴大為 `logs\*`** —— 只掃 `debug.log` 會漏掉它。
+
+該日誌在設計上就不得寫出 `magnet:?xt` / `urn:btih`：關聯鍵用裸 8 碼 hex
+（`sidecar._btih8`），而不是 `redact_magnet()` 的輸出——後者的格式正好會命中本頁
+第 [1] 條 pattern。寫出前另有 `rd_outcome_log._FORBIDDEN_RX` 逐行攔截作為
+defense in depth。
+
+這一點已有自動化測試守住，不必只靠手動 recipe：
+`tests/test_rd_outcome_log_e2e.py::E2ERedactionGate` 會真的啟動 sidecar 子行程、
+送出一筆，再用本頁第 [1] 條同樣的 pattern 掃過整個 log 目錄並斷言零命中
+（含反向斷言，確保不是掃了空目錄就宣告通過）。
 
 ## 何時跑
 
@@ -19,7 +35,7 @@ PowerShell：
 
 ```powershell
 # 1. 看 magnet:?xt / urn:btih hash 是否漏進 log
-Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\debug.log*" `
+Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\*" `
   -Pattern "magnet:\?xt|urn:btih"
 ```
 
@@ -27,7 +43,7 @@ Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\debug.log*" `
 
 ```powershell
 # 2. 看 redact 路徑有沒有確實在跑
-Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\debug.log*" `
+Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\*" `
   -Pattern "<redacted>"
 ```
 
@@ -44,7 +60,7 @@ Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\debug.log*" `
 
 ```powershell
 # 3. 順便確認 RD token 沒外洩
-Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\debug.log*" `
+Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\*" `
   -Pattern "RD_API_TOKEN|Authorization:\s*Bearer\s+[A-Za-z0-9]"
 ```
 
@@ -53,7 +69,7 @@ Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\debug.log*" `
 ```powershell
 # 4. 確認 cookies 沒外洩
 $cookiePatterns = @("cf_clearance" + "=", "_jdb_session" + "=")
-Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\debug.log*" `
+Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\*" `
   -Pattern $cookiePatterns
 ```
 
@@ -62,7 +78,7 @@ Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\debug.log*" `
 ## 一鍵跑 4 條（複製貼 PowerShell）
 
 ```powershell
-$log = "$env:LOCALAPPDATA\JavDBMagnet\logs\debug.log*"
+$log = "$env:LOCALAPPDATA\JavDBMagnet\logs\*"
 Write-Host "[1] magnet hash leak:"   -ForegroundColor Cyan
 Select-String -Path $log -Pattern "magnet:\?xt|urn:btih"
 Write-Host "[2] redacted hits:"      -ForegroundColor Cyan

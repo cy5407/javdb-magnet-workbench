@@ -1,5 +1,11 @@
 # Task: 修復多模型審查確認的邏輯與契約問題
 
+> **狀態：歷史存檔（已完成）**。本檔是「修復多模型審查確認的問題」那一輪的任務
+> 清單。**其中列出的 baseline 數字全部已經過時**（當時 `289 passed` / `142 passed`
+> / `70 passed`，且 `npm run check` 失敗；該 check 錯誤早已修復）。內容保留原樣作為
+> 決策紀錄，不再更新。現行 gate 數字見 [`CLAUDE.md`](../CLAUDE.md)。
+> 檔內的 `C:\Users\...` 路徑是當時的開發機，非現行環境。
+
 目標 repo: `C:\Users\cy5407\Desktop\程式語言\爬蟲`
 
 預期下一輪執行方式: 用 `/goal` 讀取並完成本檔，不要只提出計畫。下一輪 agent 應先讀本檔、抓 baseline `git status --short --branch`，再逐項實作、測試、回報。

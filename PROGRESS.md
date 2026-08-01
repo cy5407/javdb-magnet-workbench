@@ -1,5 +1,55 @@
 # 開發進度
 
+> 本檔按「最新在最上」追加。早於下方 2026-05-09 的段落是 Tauri 改寫前的紀錄，
+> 其中的「下一步：Rust fetch spike」已有結論——保留 Python sidecar，Rust 只做
+> 殼與 IPC。歷史段落保留原樣，不回頭改寫。
+
+## 2026-08-01
+
+### RD 命中優先 + 送出成效日誌
+
+送出後等待 pending 轉 https 連結是使用時最大的時間成本。這一輪做了兩件事：
+
+1. **送出前預判命中機率**（commit `f92c33d`）。RD 已於 2024 移除
+   `instantAvailability`，無法查詢快取，故以本地啟發式分級：轉載站前綴
+   （`hhd800.com@` / `489155.com@`）＋高清 ＞ 最早上傳的高清 ＞ 全組皆非高清時
+   標警示。新增 `app/src/lib/rdPriority.ts`（leaf 模組，避免與 magnetUtils 循環）、
+   `每組只留：RD 命中優先`、每列徽章與 ★ 首選、一鍵「只勾選 RD 優先候選」、
+   送出前攔截摘要。
+   - 行為契約變更：`isHd` 由「只看 tag」擴充為「tag ∨ 檔名解析度」，
+     `filterRows` 的 `hd_only` 一併放寬。
+   - 裸數字 `1080`/`2160` 只在 `WxH` 形式承認——`259LUXU-1080`、`HEYZO-2160`
+     都是真實番號，誤判高清會一路通過篩選與「高機率」桶而無人攔截。
+
+2. **成效日誌**（commit `1cd0410`、`e77ac4d`）。sidecar 把每次送出／重試寫成
+   `logs/rd_outcomes.jsonl`，`scripts/rd_log_report.py` 據以算命中率。
+   - **只記觀測不記判定**：寫 `name`/`tags`/`date`/`size` 原始值而非 `rd_class`，
+     所以 Python 端零啟發式規則，且規則改版後舊日誌仍可重新分析。
+   - **三元標籤**：`completed` 混了「RD 早就有」與「等了 50 秒下載完」，而分界線
+     由 `cache_wait` 決定，故記 `elapsed_ms` 與當下設定，標籤在分析時才判定。
+     重試事件以 `torrent_id` join，把 pending 拆成「後來完成」與「始終沒有」。
+   - 報表內建樣本偏斜警告與排除自造命中（同一 magnet 第二次必中，因為第一次是
+     自己放進去的）。
+
+### 平台
+
+於 Linux 實測確認 `cargo test --lib` 這個長期被跳過的 gate **是可修的**
+（keyring features 按平台拆開 + 一份 Linux sidecar binary → 81 passed）。
+需要修正的環節逐項記於
+[`docs/platform/linux-support.md`](docs/platform/linux-support.md)；本輪只記錄，
+未實作。
+
+### Gate（commit `e77ac4d`）
+
+| Gate | 結果 |
+|---|---|
+| `pytest tests/ -q` | 394 passed, 6 subtests |
+| `npx vitest run` | 9 files / 253 tests |
+| `npm run check` | 189 files, 0 errors 0 warnings |
+| `cargo test --lib` | 跳過（需先套用 linux-support.md 的兩項修改） |
+
+---
+
 ## 2026-05-09
 
 ### 完成項目

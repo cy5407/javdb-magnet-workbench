@@ -1,5 +1,11 @@
 # JavDBMagnet MVP：RD 完成時間與四階段分頁
 
+> **狀態：歷史存檔（已完成）**。本檔是四分頁 + RD 完成時間那一輪的任務規格，
+> 其驗收條件已實作並被 `app/src/App.test.ts` 守住。內容保留原樣作為決策紀錄，
+> 不再更新。現行行為以
+> [`docs/architecture/contracts/app-svelte.md`](docs/architecture/contracts/app-svelte.md)
+> 為準，現行 gate 數字以 [`CLAUDE.md`](CLAUDE.md) 為準。
+
 ## 背景
 
 目前「送至 Real-Debrid 進度」中的項目如果先顯示為「RD 處理中」，稍後按下「全部重試（查 RD）」並確認已完成，該列只會在原位置改成「已完成」。使用者無法快速辨認哪些項目是剛剛才完成的，也看不到應用程式在什麼時間確認它已完成。
