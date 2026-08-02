@@ -45,7 +45,13 @@ param(
     # Run ONLY the binary scan against one file and exit. The binary scan was
     # the one path with no test coverage — -AuditOnly never reaches it — and
     # that is exactly where the last release-blocking regression hid.
-    [string]$AuditBinary = ""
+    [string]$AuditBinary = "",
+
+    # Maintenance aid: write every match that is NOT in the allowlist to this
+    # path, one per line, so the allowlist can be regenerated exactly rather
+    # than reconstructed by guesswork. Deliberately a file and not console
+    # output — the console is where a real leak would get copied into a CI log.
+    [string]$DumpUnmatched = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -116,7 +122,14 @@ $Patterns = @(
     # so `+` made this pattern flag the project's own CORRECTLY REDACTED form.
     # Real v1 infohashes are 40 hex (or 32 base32); 16 is a safe floor that
     # passes the 8-char redacted form and catches every real length.
-    @{ name = 'magnet:?xt=';                 rx = 'magnet:\?xt=urn:bt' + '[im]h:[a-zA-Z0-9]{16,}' },
+    # Floor of 1, matching production: register_magnets accepts
+    # `magnet:?xt=urn:btih:abc`. The 16-char floor that used to sit here was
+    # really a proxy for "don't flag redact_magnet()'s own output", which is
+    # `<8hex>...`. That is now expressed directly: an ATOMIC group consumes the
+    # hex run and a negative lookahead rejects a trailing ellipsis. Atomic
+    # matters — with normal backtracking the engine would just give back one
+    # character and match the shorter prefix instead.
+    @{ name = 'magnet:?xt=';                 rx = 'magnet:\?xt=urn:bt' + '[im]h:(?>[a-zA-Z0-9]+)(?!\.\.\.)' },
     # Length floors and separator grammar now follow what PRODUCTION accepts,
     # not what a "realistic" secret looks like. secret_store.rs takes 1-255
     # ASCII alphanumerics; legacy_import.rs trims whitespace around `=` and
@@ -138,15 +151,15 @@ $Patterns = @(
     # The other cost is that short test fixtures now match — they are listed in
     # $AllowedLiterals, which is exactly the reviewable-diff tradeoff this
     # design already makes everywhere else.
-    @{ name = 'Cloudflare clearance cookie'; rx = 'cf' + '_clearance[ \t]*=[ \t]*["'']?' + '[^;\r\n]{1,}' },
-    @{ name = 'Cloudflare bot cookie';       rx = '__cf' + '_bm[ \t]*=[ \t]*["'']?' + '[^;\r\n]{1,}' },
-    @{ name = 'JavDB session cookie';        rx = '_jdb' + '_session[ \t]*=[ \t]*["'']?' + '[^;\r\n]{1,}' },
-    @{ name = 'remember_me_token=';          rx = 'remember_me_token[ \t]*=[ \t]*["'']?' + '[^;\r\n]{1,}' },
+    @{ name = 'Cloudflare clearance cookie'; rx = 'cf' + '_clearance[^\S\r\n]*=[^\S\r\n]*["'']?' + '[^;\r\n]{1,}' },
+    @{ name = 'Cloudflare bot cookie';       rx = '__cf' + '_bm[^\S\r\n]*=[^\S\r\n]*["'']?' + '[^;\r\n]{1,}' },
+    @{ name = 'JavDB session cookie';        rx = '_jdb' + '_session[^\S\r\n]*=[^\S\r\n]*["'']?' + '[^;\r\n]{1,}' },
+    @{ name = 'remember_me_token=';          rx = 'remember_me_token[^\S\r\n]*=[^\S\r\n]*["'']?' + '[^;\r\n]{1,}' },
     # token68 (RFC 7235) allows -._~+/ and trailing '='; the old [A-Za-z0-9_-]
     # stopped at the first '.' and reported a truncated match.
     @{ name = 'Authorization bearer header'; rx = 'Authorization:\s*' + 'Bearer\s+' + '[A-Za-z0-9_.~+/=-]{8,}' },
     @{ name = 'Bearer <token>';              rx = 'Bearer\s+' + '[A-Za-z0-9_.~+/=-]{16,}' },
-    @{ name = 'RD_API_TOKEN=<value>';        rx = 'RD_API' + '_TOKEN[ \t]*=[ \t]*["'']?' + '[^;\r\n]{1,}' }
+    @{ name = 'RD_API_TOKEN=<value>';        rx = 'RD_API' + '_TOKEN[^\S\r\n]*=[^\S\r\n]*["'']?' + '[^;\r\n]{1,}' }
 )
 
 # All regex evaluation in this script goes through these options. See the
@@ -197,6 +210,13 @@ $AllowedLiterals = @(Get-Content -LiteralPath $AllowFile -Encoding utf8 |
 # newline, so matches terminate there naturally. Its ASCII-decoded values (the
 # Chinese becomes one `?` per byte) are allowlisted explicitly — see the
 # COOKIES_TEMPLATE section of release-scan-allowlist.txt.
+# Only the app's own embedded cookies.txt template. Kept separate from the
+# source allowlist on purpose: a magnet fixture in a test file is expected, the
+# same string compiled into javdbmagnet.exe is not.
+$BinaryAllowedLiterals = @(
+    $AllowedLiterals | Where-Object { $_ -cmatch '^(_jdb' + '_session|cf' + '_clearance)=(\.\.\.|XXX)' }
+)
+
 $BinaryPatterns = @(
     $Patterns | ForEach-Object {
         @{ name = $_.name; rx = $_.rx.Replace('[^;\r\n]', '[^;\r\n\x00]') }
@@ -265,16 +285,42 @@ function Get-SourceText {
     if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) {
         return [System.Text.Encoding]::UTF8.GetString($Bytes, 3, $Bytes.Length - 3)
     }
-    # No BOM. Sample the head for NULs; real UTF-8 source never contains them.
-    $probe = [Math]::Min(512, $Bytes.Length)
-    $nulEven = 0; $nulOdd = 0
+    # No BOM. Real UTF-8 source never contains NUL, so any NUL means a
+    # wide encoding — and the POSITION of the NULs says which one. For ASCII
+    # text laid out in 4-byte units, UTF-32LE is `X 00 00 00` (NULs at offsets
+    # 1,2,3 mod 4) and UTF-32BE is `00 00 00 X` (NULs at 0,1,2 mod 4); UTF-16
+    # alternates every other byte. The previous heuristic only compared even
+    # vs odd offsets, which cannot separate UTF-32 from UTF-16 at all — a
+    # BOM-less UTF-32 file scanned as garbage and its contents were never seen.
+    $probe = [Math]::Min(1024, $Bytes.Length)
+    if ($probe -lt 4) { return [System.Text.Encoding]::UTF8.GetString($Bytes) }
+    $mod = @(0, 0, 0, 0)
+    $nulTotal = 0
     for ($i = 0; $i -lt $probe; $i++) {
-        if ($Bytes[$i] -eq 0) { if ($i % 2 -eq 0) { $nulEven++ } else { $nulOdd++ } }
+        if ($Bytes[$i] -eq 0) { $mod[$i % 4]++; $nulTotal++ }
     }
-    if (($nulEven + $nulOdd) -gt ($probe / 8)) {
-        if ($nulOdd -ge $nulEven) { return [System.Text.Encoding]::Unicode.GetString($Bytes) }
-        return [System.Text.Encoding]::BigEndianUnicode.GetString($Bytes)
+    if ($nulTotal -eq 0) { return [System.Text.Encoding]::UTF8.GetString($Bytes) }
+    $quarter = [int]($probe / 4)
+    $nearAll = [int]($quarter * 0.8)
+    # Test the HIGH bytes, which are NUL for every BMP character regardless
+    # of script. Testing all three low-order residues fails on CJK: U+4E2D in
+    # UTF-32LE is `2D 4E 00 00`, so residue 1 carries data and the
+    # "three of four are NUL" rule never fires — exactly how a BOM-less UTF-32
+    # file kept slipping through.
+    #   UTF-32LE  b0 b1 00 00  -> residues 2,3 NUL, residue 0 not
+    #   UTF-32BE  00 00 b2 b3  -> residues 0,1 NUL, residue 3 not
+    # UTF-16 satisfies neither: its NULs land on alternating residues only.
+    if ($mod[2] -ge $nearAll -and $mod[3] -ge $nearAll -and $mod[0] -lt $nearAll) {
+        return [System.Text.Encoding]::UTF32.GetString($Bytes)
     }
+    if ($mod[0] -ge $nearAll -and $mod[1] -ge $nearAll -and $mod[3] -lt $nearAll) {
+        return (New-Object System.Text.UTF32Encoding $true, $true).GetString($Bytes)
+    }
+    # Otherwise UTF-16; odd-offset NULs mean little-endian ASCII.
+    if (($mod[1] + $mod[3]) -ge ($mod[0] + $mod[2])) {
+        return [System.Text.Encoding]::Unicode.GetString($Bytes)
+    }
+    return [System.Text.Encoding]::BigEndianUnicode.GetString($Bytes)
     return [System.Text.Encoding]::UTF8.GetString($Bytes)
 }
 
@@ -384,6 +430,7 @@ function Invoke-SourceSecretScan {
             foreach ($p in $Patterns) {
                 foreach ($m in [regex]::Matches($text, $p.rx, $RxOpts)) {
                     if ($AllowedLiterals -ccontains $m.Value) { $script:SourceAllowed++; continue }
+                    if ($DumpUnmatched) { Add-Content -LiteralPath $DumpUnmatched -Value $m.Value -Encoding utf8 }
                     $script:SourceHits += ("      " + $rel + "  [" + $p.name + "]")
                 }
             }
@@ -438,7 +485,12 @@ function Invoke-BinarySecretScan {
                 # per-line, so a real secret elsewhere in the same binary is a
                 # different match and still fails.
                 $regexMatches = @([regex]::Matches($text, $p.rx, $RxOpts) |
-                    Where-Object { $AllowedLiterals -cnotcontains $_.Value })
+                    # A binary-SPECIFIC allowlist. Inheriting the whole source
+                    # list exempted every test fixture — including full 40-hex
+                    # magnets — inside the shipped exe, where none of them has
+                    # any business appearing. The only thing an artifact
+                    # legitimately embeds is the cookies.txt help text.
+                    Where-Object { $BinaryAllowedLiterals -cnotcontains $_.Value })
                 if ($regexMatches.Count -gt 0) {
                     # Artifact + pattern + count ONLY. Never echo the matched value:
                     # the whole point of this step is that a secret reached a binary,
@@ -481,6 +533,24 @@ if ($AuditOnly) {
     exit 0
 }
 
+function Assert-NoIndexMask {
+    # assume-unchanged (h) and skip-worktree (S) make git report a clean tree
+    # while the file on disk differs from the index — the build would compile
+    # content that neither git status nor the source scan ever sees.
+    #
+    # Checked BEFORE and AFTER the build. Before-only was not enough: the flag
+    # can be set mid-build, and from then on `git status --porcelain` stays
+    # empty no matter how the file is edited, so the post-build status check
+    # cannot see it either.
+    $entries = & git -C $RepoRoot ls-files -v
+    if ($LASTEXITCODE -ne 0) { FailExit "git ls-files -v failed; refusing to build" }
+    $masked = @($entries | Where-Object { $_ -cmatch '^[a-z]' -or $_ -cmatch '^S ' })
+    if ($masked.Count -gt 0) {
+        $masked | ForEach-Object { Write-Output ("      " + $_) }
+        FailExit "Tracked files are marked assume-unchanged/skip-worktree; git cannot vouch for their contents. Clear with: git update-index --no-assume-unchanged --no-skip-worktree <path>"
+    }
+}
+
 Step "Verifying working tree is clean"
 # The build reads the WORKING TREE (npm/cargo/PyInstaller all compile what is on
 # disk), but the manifest records `git rev-parse HEAD`. With uncommitted edits
@@ -499,16 +569,8 @@ if ($LASTEXITCODE -ne 0) { FailExit "git rev-parse HEAD failed; refusing to buil
 # top-level modules CAN be pulled into sidecar.exe by PyInstaller.
 $treeStatus = & git -C $RepoRoot status --porcelain --untracked-files=all
 if ($LASTEXITCODE -ne 0) { FailExit "git status failed (exit $LASTEXITCODE); refusing to build" }
-# assume-unchanged (h) and skip-worktree (S) make git report a clean tree while
-# the file on disk differs from the index — the build would compile content
-# that neither git status nor the source scan ever sees.
-$maskedEntries = & git -C $RepoRoot ls-files -v
-if ($LASTEXITCODE -ne 0) { FailExit "git ls-files -v failed; refusing to build" }
-$masked = @($maskedEntries | Where-Object { $_ -cmatch '^[a-z]' -or $_ -cmatch '^S ' })
-if ($masked.Count -gt 0) {
-    $masked | ForEach-Object { Write-Output ("      " + $_) }
-    FailExit "Tracked files are marked assume-unchanged/skip-worktree; git cannot vouch for their contents. Clear with: git update-index --no-assume-unchanged --no-skip-worktree <path>"
-}
+Assert-NoIndexMask
+
 if ($treeStatus) {
     Write-Output "    Working tree is not clean:"
     $treeStatus | ForEach-Object { Write-Output ("      " + $_) }
@@ -740,6 +802,7 @@ if ($gitCommit -ne $BuildStartHead) {
 }
 $treeStatusAfter = & git -C $RepoRoot status --porcelain --untracked-files=all
 if ($LASTEXITCODE -ne 0) { FailExit "git status failed after build" }
+Assert-NoIndexMask
 if ($treeStatusAfter) {
     $treeStatusAfter | ForEach-Object { Write-Output ("      " + $_) }
     FailExit "Working tree changed during the build; the scanned source is not what shipped."

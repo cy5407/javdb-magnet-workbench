@@ -199,3 +199,29 @@ _jdb_session=resurrect_me
 # bounded by NUL/CR/LF, so the adjacent prose is part of the match.
 cf_clearance=...   (Cloudflare ?????????)
 _jdb_session=...   (?????? session)
+# Short-form fixtures surfaced by lowering the length floors to production's
+# (register_magnets takes a 3-char infohash; secret_store takes a 1-char token).
+_jdb_session=
+Bearer 
+cf_clearance=
+magnet:?xt=urn:btih:0001
+magnet:?xt=urn:btih:01234567
+magnet:?xt=urn:btih:aaa
+magnet:?xt=urn:btih:AAAA1111
+magnet:?xt=urn:btih:abc
+magnet:?xt=urn:btih:bbb
+magnet:?xt=urn:btih:BBBB2222
+magnet:?xt=urn:btih:CAFEBABE
+magnet:?xt=urn:btih:DEAD
+magnet:?xt=urn:btih:DEADBEEF
+magnet:?xt=urn:btih:def
+magnet:?xt=urn:btih:HASH
+magnet:?xt=urn:btih:LEAKABLE
+magnet:?xt=urn:btih:rd
+magnet:?xt=urn:btih:some
+magnet:?xt=urn:btih:web1
+RD_API_TOKEN=
+urn:bt
+magnet:?xt=urn:btih:aaaa1111
+MAGNET:?xt=urn:btih:abc
+magnet:?xt=urn:btih:bbbb2222

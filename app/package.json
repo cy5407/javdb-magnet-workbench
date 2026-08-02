@@ -15,7 +15,9 @@
     "sidecar:build": "python ../spikes/pyinstaller_sidecar/build_sidecar.py",
     "tauri:dev": "npm run sidecar:build && tauri dev",
     "tauri:build": "npm run sidecar:build && tauri build",
-    "release": "powershell -ExecutionPolicy Bypass -File ../scripts/build-release.ps1"
+    "release": "powershell -ExecutionPolicy Bypass -File ../scripts/build-release.ps1",
+    "release:test": "powershell -ExecutionPolicy Bypass -File ../scripts/test-release-scan.ps1",
+    "release:audit": "powershell -ExecutionPolicy Bypass -File ../scripts/build-release.ps1 -AuditOnly"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

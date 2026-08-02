@@ -180,6 +180,35 @@ cargo test --lib 失敗。
 }
 
 # ---------------------------------------------------------------------------
+# 4b. Release-scan Red 測試 —— 在**兩個** PowerShell host 上各跑一次
+#
+# `npm run release` 呼叫 `powershell`（Windows PowerShell 5.1），而開發時多半用
+# `pwsh`（7.x）。同一支腳本在兩者下的字串、編碼與 regex 行為並不完全一致，只驗
+# 其中一個等於只驗了一半——正式出貨走的偏偏是 5.1 那條。
+# ---------------------------------------------------------------------------
+if (-not $SkipSlow) {
+    $ScanTest = Join-Path $ScriptDir "test-release-scan.ps1"
+    $hosts = @()
+    foreach ($h in @('powershell', 'pwsh')) {
+        $c = Get-Command $h -ErrorAction SilentlyContinue
+        if ($c) { $hosts += $c.Source } 
+    }
+    if ($hosts.Count -eq 0) {
+        Bad "找不到 powershell 或 pwsh，無法執行 release-scan 測試"
+    } else {
+        foreach ($h in $hosts) {
+            Step ("Gate: release-scan Red 測試 (" + (Split-Path $h -Leaf) + ")")
+            & $h -NoProfile -File $ScanTest
+            if ($LASTEXITCODE -ne 0) { Bad ("release-scan 測試在 " + $h + " 下失敗") }
+            else { Ok ("release-scan 測試通過 (" + (Split-Path $h -Leaf) + ")") }
+        }
+        if ($hosts.Count -lt 2) {
+            Warn "只找到一個 PowerShell host；正式 release 走 Windows PowerShell 5.1，請確認它也跑過"
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 5. sidecar 重建 + 協定實證
 # ---------------------------------------------------------------------------
 if (-not $SkipSlow) {

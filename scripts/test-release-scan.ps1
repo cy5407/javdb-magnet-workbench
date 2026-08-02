@@ -21,6 +21,18 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot  = Split-Path -Parent $ScriptDir
 $Target    = Join-Path $ScriptDir "build-release.ps1"
 
+# Re-invoke the SAME host that is running this suite, not a hardcoded `pwsh`.
+# `npm run release` calls `powershell` (Windows PowerShell 5.1) while these
+# tests were calling `pwsh` (7.x): the suite could pass under one engine while
+# the shipped path ran on the other. Run this file under each host to cover
+# both — see scripts/verify-windows-build.ps1, which does exactly that.
+# (Get-Process -Id $PID).Path is the actual executable running this file, so it
+# works identically under Windows PowerShell 5.1 and PowerShell 7 without
+# branching on edition.
+$PSExe = (Get-Process -Id $PID).Path
+if (-not $PSExe) { $PSExe = 'pwsh' }
+Write-Output ("Host: " + $PSVersionTable.PSVersion + " (" + $PSVersionTable.PSEdition + ") -> " + $PSExe)
+
 $script:Pass = 0
 $script:Fail = 0
 function Check($name, $ok, $detail) {
@@ -73,7 +85,7 @@ foreach ($v in 'SourceHits', 'SourceEligible', 'SourceScanned', 'SourceAllowed')
 
 Write-Output ""
 Write-Output "== 3. Clean-tree run passes =="
-& pwsh -NoProfile -File $Target -AuditOnly | Out-Null
+& $PSExe -NoProfile -File $Target -AuditOnly | Out-Null
 Check "audit-only exits 0 on a clean repo" ($LASTEXITCODE -eq 0) ("exit " + $LASTEXITCODE)
 
 Write-Output ""
@@ -112,7 +124,7 @@ foreach ($p in $probes) {
     $orig = [System.IO.File]::ReadAllBytes($full)
     try {
         Add-Content -LiteralPath $full -Value ("`n" + $p.s) -Encoding utf8
-        & pwsh -NoProfile -File $Target -AuditOnly | Out-Null
+        & $PSExe -NoProfile -File $Target -AuditOnly | Out-Null
         Check ("blocks: " + $p.n) ($LASTEXITCODE -ne 0) "scan passed but should not have"
     } finally {
         [System.IO.File]::WriteAllBytes($full, $orig)
@@ -131,7 +143,7 @@ try {
     [System.IO.File]::WriteAllBytes($u16,
         [System.Text.Encoding]::BigEndianUnicode.GetPreamble() +
         [System.Text.Encoding]::BigEndianUnicode.GetBytes($payload))
-    & pwsh -NoProfile -File $Target -AuditOnly | Out-Null
+    & $PSExe -NoProfile -File $Target -AuditOnly | Out-Null
     Check "blocks: secret inside a UTF-16BE file" ($LASTEXITCODE -ne 0) "scan passed but should not have"
 } finally {
     [System.IO.File]::WriteAllBytes($u16, $origBytes)
@@ -149,7 +161,7 @@ try {
     [System.IO.File]::WriteAllBytes($u32,
         [System.Text.Encoding]::UTF32.GetPreamble() +
         [System.Text.Encoding]::UTF32.GetBytes($payload32))
-    & pwsh -NoProfile -File $Target -AuditOnly | Out-Null
+    & $PSExe -NoProfile -File $Target -AuditOnly | Out-Null
     Check "blocks: secret inside a UTF-32LE file" ($LASTEXITCODE -ne 0) "scan passed but should not have"
 } finally {
     [System.IO.File]::WriteAllBytes($u32, $origU32)
@@ -163,7 +175,7 @@ $qf = Join-Path $RepoRoot "requirements-ci.txt"
 $origQ = [System.IO.File]::ReadAllBytes($qf)
 try {
     Add-Content -LiteralPath $qf -Value ("`n# _jdb" + "_session=paste_session" + [char]34 + "RealSecretAfterQuote") -Encoding utf8
-    & pwsh -NoProfile -File $Target -AuditOnly | Out-Null
+    & $PSExe -NoProfile -File $Target -AuditOnly | Out-Null
     Check "blocks: quote-prefixed bypass" ($LASTEXITCODE -ne 0) "scan passed but should not have"
 } finally {
     [System.IO.File]::WriteAllBytes($qf, $origQ)
@@ -184,14 +196,14 @@ if ($m.Success) {
     try {
         [System.IO.File]::WriteAllBytes($blob,
             ([byte[]](0,1,77,90)) + [System.Text.Encoding]::UTF8.GetBytes($tpl) + ([byte[]](0,0)))
-        & pwsh -NoProfile -File $Target -AuditBinary $blob | Out-Null
+        & $PSExe -NoProfile -File $Target -AuditBinary $blob | Out-Null
         Check "binary scan passes on the embedded template" ($LASTEXITCODE -eq 0) ("exit " + $LASTEXITCODE)
 
         # ...and still catches a real one sitting right next to it.
         [System.IO.File]::WriteAllBytes($blob,
             ([byte[]](0,1,77,90)) + [System.Text.Encoding]::UTF8.GetBytes($tpl) +
             ([byte[]](0)) + [System.Text.Encoding]::UTF8.GetBytes('_jdb' + '_session=RealLeakedSessionValue999') + ([byte[]](0)))
-        & pwsh -NoProfile -File $Target -AuditBinary $blob | Out-Null
+        & $PSExe -NoProfile -File $Target -AuditBinary $blob | Out-Null
         Check "binary scan blocks a real embedded cookie" ($LASTEXITCODE -ne 0) "scan passed but should not have"
 
         # Prefix bypass in the binary path: value begins with an allowlisted
@@ -200,7 +212,7 @@ if ($m.Success) {
         [System.IO.File]::WriteAllBytes($blob,
             ([byte[]](0,1,77,90)) + [System.Text.Encoding]::UTF8.GetBytes($tpl) +
             ([byte[]](0)) + [System.Text.Encoding]::UTF8.GetBytes('_jdb' + '_session=paste_session RealSecretRidesAlong') + ([byte[]](0)))
-        & pwsh -NoProfile -File $Target -AuditBinary $blob | Out-Null
+        & $PSExe -NoProfile -File $Target -AuditBinary $blob | Out-Null
         Check "binary scan blocks a fixture-prefixed cookie" ($LASTEXITCODE -ne 0) "scan passed but should not have"
 
         # TAB is accepted by parse_cookie_string, so excluding C0 bytes from the
@@ -208,10 +220,73 @@ if ($m.Success) {
         [System.IO.File]::WriteAllBytes($blob,
             ([byte[]](0,1,77,90)) + [System.Text.Encoding]::UTF8.GetBytes($tpl) +
             ([byte[]](0)) + [System.Text.Encoding]::UTF8.GetBytes('_jdb' + '_session=paste_session' + [char]9 + 'RealSecretAfterTab') + ([byte[]](0)))
-        & pwsh -NoProfile -File $Target -AuditBinary $blob | Out-Null
+        & $PSExe -NoProfile -File $Target -AuditBinary $blob | Out-Null
         Check "binary scan blocks a TAB-separated bypass" ($LASTEXITCODE -ne 0) "scan passed but should not have"
     } finally {
         Remove-Item -LiteralPath $blob -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Write-Output ""
+Write-Output "== 5e. Red test: BOM-less wide encodings =="
+# Every one of these was missed at some point. The UTF-32 pair survived two
+# heuristics because the earlier rule tested low-order byte residues, which CJK
+# text populates.
+$encFile = Join-Path $RepoRoot "docs/troubleshooting/rd-token.md"
+$encOrig = [System.IO.File]::ReadAllBytes($encFile)
+$encText = [System.Text.Encoding]::UTF8.GetString($encOrig) +
+           "`nmagnet:?xt=urn:bt" + "ih:cc33dd44ee55ff6677889900aabbccddeeff1122`n"
+$encCases = @(
+    @{ n = 'UTF-32LE, no BOM'; b = [System.Text.Encoding]::UTF32.GetBytes($encText) },
+    @{ n = 'UTF-32BE, no BOM'; b = (New-Object System.Text.UTF32Encoding $true, $false).GetBytes($encText) },
+    @{ n = 'UTF-16LE, no BOM'; b = [System.Text.Encoding]::Unicode.GetBytes($encText) },
+    @{ n = 'UTF-16BE, no BOM'; b = [System.Text.Encoding]::BigEndianUnicode.GetBytes($encText) }
+)
+try {
+    foreach ($c in $encCases) {
+        [System.IO.File]::WriteAllBytes($encFile, $c.b)
+        & $PSExe -NoProfile -File $Target -AuditOnly | Out-Null
+        Check ("blocks: secret in " + $c.n) ($LASTEXITCODE -ne 0) "scan passed but should not have"
+    }
+} finally {
+    [System.IO.File]::WriteAllBytes($encFile, $encOrig)
+}
+
+Write-Output ""
+Write-Output "== 5f. Red test: whitespace grammar =="
+# str.strip() / str::trim() drop VT, FF and NBSP too, all verified accepted by
+# parse_cookie_string. A scanner that only knows space and TAB truncates here.
+$wsFile = Join-Path $RepoRoot "requirements-sidecar.txt"
+$wsOrig = [System.IO.File]::ReadAllBytes($wsFile)
+try {
+    foreach ($w in @(@{n='VT';c=11}, @{n='FF';c=12}, @{n='NBSP';c=160})) {
+        [System.IO.File]::WriteAllBytes($wsFile, $wsOrig)
+        Add-Content -LiteralPath $wsFile -Encoding utf8 -Value (
+            "# _jdb" + "_session" + [char]$w.c + "=" + [char]$w.c + "LiveSessionValue123456")
+        & $PSExe -NoProfile -File $Target -AuditOnly | Out-Null
+        Check ("blocks: " + $w.n + "-separated cookie") ($LASTEXITCODE -ne 0) "scan passed but should not have"
+    }
+} finally {
+    [System.IO.File]::WriteAllBytes($wsFile, $wsOrig)
+}
+
+Write-Output ""
+Write-Output "== 5g. Red test: binary must not inherit source fixtures =="
+# A magnet fixture in a test file is expected; the same 40-hex compiled into
+# javdbmagnet.exe is not. Sharing one allowlist made the binary scan exempt
+# every source fixture.
+$srcFixture = (Get-Content -LiteralPath (Join-Path $ScriptDir "release-scan-allowlist.txt") -Encoding utf8 |
+    Where-Object { $_ -cmatch '^magnet:\?xt=urn:btih:[a-fA-F0-9]{40}$' } | Select-Object -First 1)
+Check "found a 40-hex magnet fixture to test with" ($null -ne $srcFixture) "allowlist shape changed; update this test"
+if ($srcFixture) {
+    $bin2 = Join-Path ([System.IO.Path]::GetTempPath()) ("relscan-" + [guid]::NewGuid().ToString("N") + ".bin")
+    try {
+        [System.IO.File]::WriteAllBytes($bin2,
+            ([byte[]](0,1,77,90)) + [System.Text.Encoding]::UTF8.GetBytes($srcFixture) + ([byte[]](0)))
+        & $PSExe -NoProfile -File $Target -AuditBinary $bin2 | Out-Null
+        Check "binary scan blocks a source-only fixture" ($LASTEXITCODE -ne 0) "scan passed but should not have"
+    } finally {
+        Remove-Item -LiteralPath $bin2 -Force -ErrorAction SilentlyContinue
     }
 }
 
