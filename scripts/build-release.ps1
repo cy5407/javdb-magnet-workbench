@@ -186,18 +186,20 @@ $AllowedLiterals = @(Get-Content -LiteralPath $AllowFile -Encoding utf8 |
 # garbage that no allowlist entry could ever equal — every release failed at
 # the binary scan while every source test passed.
 #
-# Whitespace is NOT a terminator here — an earlier attempt made it one, and
-# that reintroduced the prefix bypass in the binary path: a value of
-# `<fixture> <real-secret>` truncated to the allowlisted fixture and the hit
-# was dropped. NUL is the right boundary: PE strings are NUL-terminated, so it
-# bounds the match without truncating a value production would accept.
-# The consequence is that the template's ASCII-decoded prose (its Chinese
-# becomes `?` per byte) is part of the matched value, so those complete values
-# are allowlisted explicitly — see the COOKIES_TEMPLATE section of
-# release-scan-allowlist.txt.
+# The ONLY addition over the source class is NUL, because unrelated data can
+# abut a string in a PE image. Everything else production accepts stays in:
+# two earlier attempts excluded whitespace, then all C0 bytes, and each one
+# reopened the prefix bypass — `<fixture><TAB><real-secret>` truncated to the
+# allowlisted fixture and the hit was dropped. parse_cookie_string rejects only
+# CR/LF, so neither may the scanner.
+#
+# The template needs no special casing: each of its cookie lines ends in a
+# newline, so matches terminate there naturally. Its ASCII-decoded values (the
+# Chinese becomes one `?` per byte) are allowlisted explicitly — see the
+# COOKIES_TEMPLATE section of release-scan-allowlist.txt.
 $BinaryPatterns = @(
     $Patterns | ForEach-Object {
-        @{ name = $_.name; rx = $_.rx.Replace('[^;\r\n]', '[^;\r\n\x00-\x1F\x7F]') }
+        @{ name = $_.name; rx = $_.rx.Replace('[^;\r\n]', '[^;\r\n\x00]') }
     }
 )
 

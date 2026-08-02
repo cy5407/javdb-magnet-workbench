@@ -202,6 +202,14 @@ if ($m.Success) {
             ([byte[]](0)) + [System.Text.Encoding]::UTF8.GetBytes('_jdb' + '_session=paste_session RealSecretRidesAlong') + ([byte[]](0)))
         & pwsh -NoProfile -File $Target -AuditBinary $blob | Out-Null
         Check "binary scan blocks a fixture-prefixed cookie" ($LASTEXITCODE -ne 0) "scan passed but should not have"
+
+        # TAB is accepted by parse_cookie_string, so excluding C0 bytes from the
+        # binary class truncated the value here and let the secret through.
+        [System.IO.File]::WriteAllBytes($blob,
+            ([byte[]](0,1,77,90)) + [System.Text.Encoding]::UTF8.GetBytes($tpl) +
+            ([byte[]](0)) + [System.Text.Encoding]::UTF8.GetBytes('_jdb' + '_session=paste_session' + [char]9 + 'RealSecretAfterTab') + ([byte[]](0)))
+        & pwsh -NoProfile -File $Target -AuditBinary $blob | Out-Null
+        Check "binary scan blocks a TAB-separated bypass" ($LASTEXITCODE -ne 0) "scan passed but should not have"
     } finally {
         Remove-Item -LiteralPath $blob -Force -ErrorAction SilentlyContinue
     }
