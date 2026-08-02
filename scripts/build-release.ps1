@@ -40,7 +40,12 @@ param(
     # Added so this gate can actually be executed and red-tested on its own:
     # a full release run costs minutes of PyInstaller + cargo before it would
     # ever reach the scan.
-    [switch]$AuditOnly
+    [switch]$AuditOnly,
+
+    # Run ONLY the binary scan against one file and exit. The binary scan was
+    # the one path with no test coverage — -AuditOnly never reaches it — and
+    # that is exactly where the last release-blocking regression hid.
+    [string]$AuditBinary = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -174,6 +179,24 @@ $AllowFile = Join-Path $ScriptDir "release-scan-allowlist.txt"
 if (-not (Test-Path -LiteralPath $AllowFile)) { FailExit ("Missing allowlist: " + $AllowFile) }
 $AllowedLiterals = @(Get-Content -LiteralPath $AllowFile -Encoding utf8 |
     Where-Object { $_ -and -not $_.StartsWith('#') })
+
+# Binary variant of the same rules. In a PE image the value class must also
+# stop at control bytes: `[^;\r\n]` happily eats NULs and whatever follows,
+# so the exe's own embedded COOKIES_TEMPLATE matched a run of adjacent binary
+# garbage that no allowlist entry could ever equal — every release failed at
+# the binary scan while every source test passed.
+#
+# Whitespace ends a value here too, which is the one place source and binary
+# rules legitimately differ: in source, `<name> = <value>` is real grammar that
+# parse_cookie_string trims, so the scanner must follow it to `;`. Inside a PE
+# image the target is a compiled-in constant — a contiguous run — and the
+# template's ASCII-decoded Chinese (`(?????? session)`) is adjacent prose, not
+# part of any credential.
+$BinaryPatterns = @(
+    $Patterns | ForEach-Object {
+        @{ name = $_.name; rx = $_.rx.Replace('[^;\r\n]', '[^;\s\x00-\x1F\x7F]') }
+    }
+)
 
 $RxOpts = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
 
@@ -381,11 +404,71 @@ function Invoke-SourceSecretScan {
     Ok ("No unexpected source secrets (" + $script:SourceScanned + " text files scanned, " + $script:SourceAllowed + " allowlisted fixture matches)")
 }
 
+function Invoke-BinarySecretScan {
+    param([string[]]$Targets)
+    $script:ScanFail = $false
+    $script:BinaryHitCount = 0
+    Step "Binary content scan for embedded secrets"
+    foreach ($exe in $Targets) {
+        $name = Split-Path $exe -Leaf
+        $bytes = [System.IO.File]::ReadAllBytes($exe)
+        $hits = @()
+        foreach ($enc in $Encodings) {
+            $decoded = $enc.encoding.GetString($bytes)
+            # Percent-decoded pass for the same reason as the source scan: an
+            # escaped magnet is still a magnet by the time production sees it.
+            $texts = @($decoded)
+            try {
+                $u = [System.Uri]::UnescapeDataString($decoded)
+                if ($u -cne $decoded) { $texts += $u }
+            } catch { }
+            foreach ($text in $texts) {
+            foreach ($p in $BinaryPatterns) {
+                # Allowlist applies here too, and it has to: the app EMBEDS its own
+                # cookies.txt template (commands.rs COOKIES_TEMPLATE) containing
+                # the cookies.txt example line (session + clearance placeholders). Once
+                # the patterns were widened to production's grammar, the binary scan
+                # started flagging javdbmagnet.exe against its own help text — every
+                # release would have failed. Matching is per-VALUE, not per-file or
+                # per-line, so a real secret elsewhere in the same binary is a
+                # different match and still fails.
+                $regexMatches = @([regex]::Matches($text, $p.rx, $RxOpts) |
+                    Where-Object { $AllowedLiterals -cnotcontains $_.Value })
+                if ($regexMatches.Count -gt 0) {
+                    # Artifact + pattern + count ONLY. Never echo the matched value:
+                    # the whole point of this step is that a secret reached a binary,
+                    # and printing it would copy that secret into the build log —
+                    # which, once this runs in CI, is a persistent artifact of its
+                    # own. Reproduce locally if you need to see the value.
+                    $hits += "      [$($enc.label)] $($p.name)  count=$($regexMatches.Count)"
+                    $script:BinaryHitCount += $regexMatches.Count
+                }
+            }
+            }
+        }
+        if ($hits.Count -gt 0) {
+            Write-Host "    [$name] LEAK:" -ForegroundColor Red
+            $hits | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+            $script:ScanFail = $true
+        } else {
+            Ok ("[$name] no leak patterns (ASCII + UTF-16LE)")
+        }
+    }
+    if ($ScanFail) { FailExit "Binary content scan failed" }
+}
+
 # --------------------------------------------------------------------------
 # -AuditOnly: run just the scan and exit. The clean-tree gate is skipped on
 # this path ON PURPOSE — red-testing the scanner means planting a secret,
 # which necessarily dirties the tree. Never use this mode to ship.
 # --------------------------------------------------------------------------
+if ($AuditBinary) {
+    Write-Output "== AUDIT ONLY: binary scan of $AuditBinary =="
+    if (-not (Test-Path -LiteralPath $AuditBinary)) { FailExit ("No such file: " + $AuditBinary) }
+    Invoke-BinarySecretScan -Targets @($AuditBinary)
+    Write-Output "[PASS] binary scan clean"
+    exit 0
+}
 if ($AuditOnly) {
     Write-Output "== AUDIT ONLY: source secret scan, no build =="
     Invoke-SourceSecretScan
@@ -591,57 +674,10 @@ Ok "Portable folder contains only allowed artifacts"
 # ---------------------------------------------------------------------------
 # Step 6: Binary content scan — secrets must NOT be baked in
 # ---------------------------------------------------------------------------
-Step "Binary content scan for embedded secrets"
-$ScanTargets = @(
+Invoke-BinarySecretScan -Targets @(
     (Join-Path $StagingDir "javdbmagnet.exe"),
     (Join-Path $StagingDir "sidecar.exe")
 )
-foreach ($exe in $ScanTargets) {
-    $name = Split-Path $exe -Leaf
-    $bytes = [System.IO.File]::ReadAllBytes($exe)
-    $hits = @()
-    foreach ($enc in $Encodings) {
-        $decoded = $enc.encoding.GetString($bytes)
-        # Percent-decoded pass for the same reason as the source scan: an
-        # escaped magnet is still a magnet by the time production sees it.
-        $texts = @($decoded)
-        try {
-            $u = [System.Uri]::UnescapeDataString($decoded)
-            if ($u -cne $decoded) { $texts += $u }
-        } catch { }
-        foreach ($text in $texts) {
-        foreach ($p in $Patterns) {
-            # Allowlist applies here too, and it has to: the app EMBEDS its own
-            # cookies.txt template (commands.rs COOKIES_TEMPLATE) containing
-            # the cookies.txt example line (session + clearance placeholders). Once
-            # the patterns were widened to production's grammar, the binary scan
-            # started flagging javdbmagnet.exe against its own help text — every
-            # release would have failed. Matching is per-VALUE, not per-file or
-            # per-line, so a real secret elsewhere in the same binary is a
-            # different match and still fails.
-            $regexMatches = @([regex]::Matches($text, $p.rx, $RxOpts) |
-                Where-Object { $AllowedLiterals -cnotcontains $_.Value })
-            if ($regexMatches.Count -gt 0) {
-                # Artifact + pattern + count ONLY. Never echo the matched value:
-                # the whole point of this step is that a secret reached a binary,
-                # and printing it would copy that secret into the build log —
-                # which, once this runs in CI, is a persistent artifact of its
-                # own. Reproduce locally if you need to see the value.
-                $hits += "      [$($enc.label)] $($p.name)  count=$($regexMatches.Count)"
-                $BinaryHitCount += $regexMatches.Count
-            }
-        }
-        }
-    }
-    if ($hits.Count -gt 0) {
-        Write-Host "    [$name] LEAK:" -ForegroundColor Red
-        $hits | ForEach-Object { Write-Host $_ -ForegroundColor Red }
-        $ScanFail = $true
-    } else {
-        Ok ("[$name] no leak patterns (ASCII + UTF-16LE)")
-    }
-}
-if ($ScanFail) { FailExit "Binary content scan failed" }
 Invoke-SourceSecretScan
 
 # ---------------------------------------------------------------------------

@@ -170,6 +170,35 @@ try {
 }
 
 Write-Output ""
+Write-Output "== 5d. Binary scan: the app's own template must not fail it =="
+# The binary scan had NO coverage until now — -AuditOnly never reaches it — and
+# that is precisely where the last release blocker hid: the exe embeds
+# COOKIES_TEMPLATE, and a value class that ran past whitespace turned the app's
+# own help text into a non-allowlistable match, failing every release.
+$tplSrc = Get-Content -LiteralPath (Join-Path $RepoRoot "app/src-tauri/src/commands.rs") -Raw
+$m = [regex]::Match($tplSrc, 'const COOKIES_TEMPLATE: &str = "(.*?)";', 'Singleline')
+Check "found COOKIES_TEMPLATE in commands.rs" ($m.Success) "constant not found; update this test"
+if ($m.Success) {
+    $tpl = $m.Groups[1].Value -replace '\\n', "`n"
+    $blob = Join-Path ([System.IO.Path]::GetTempPath()) ("relscan-" + [guid]::NewGuid().ToString("N") + ".bin")
+    try {
+        [System.IO.File]::WriteAllBytes($blob,
+            ([byte[]](0,1,77,90)) + [System.Text.Encoding]::UTF8.GetBytes($tpl) + ([byte[]](0,0)))
+        & pwsh -NoProfile -File $Target -AuditBinary $blob | Out-Null
+        Check "binary scan passes on the embedded template" ($LASTEXITCODE -eq 0) ("exit " + $LASTEXITCODE)
+
+        # ...and still catches a real one sitting right next to it.
+        [System.IO.File]::WriteAllBytes($blob,
+            ([byte[]](0,1,77,90)) + [System.Text.Encoding]::UTF8.GetBytes($tpl) +
+            ([byte[]](0)) + [System.Text.Encoding]::UTF8.GetBytes('_jdb' + '_session=RealLeakedSessionValue999') + ([byte[]](0)))
+        & pwsh -NoProfile -File $Target -AuditBinary $blob | Out-Null
+        Check "binary scan blocks a real embedded cookie" ($LASTEXITCODE -ne 0) "scan passed but should not have"
+    } finally {
+        Remove-Item -LiteralPath $blob -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Write-Output ""
 Write-Output "== 6. Repo restored =="
 $dirty = & git -C $RepoRoot status --porcelain -- . ':(exclude)scripts/*'
 Check "no probe left behind" (-not $dirty) ($dirty -join '; ')
