@@ -119,27 +119,29 @@ $Patterns = @(
     # A scanner narrower than the parser is a scanner with a documented hole,
     # so `\s*`, optional quotes and a floor of 1 are all deliberate. The cost
     # Separator is `[ \t]*`, not `\s*`: `\s` spans newlines, so a bare
-    # `RD_API_TOKEN=` at end of line would swallow the next non-blank line as
+    # a bare `<token-name>=` at end of line would swallow the next non-blank line as
     # its "value". parse_cookie_string drops any pair containing CR/LF outright
     # (F-05), so horizontal whitespace is also the correct grammar.
-    # Value charsets are NEGATIVE (`[^;\s"'\\]`), not positive. A positive
-    # class stops at the first character it does not know, so
-    # `_jdb_session=paste_session!ActualSecret` matched only the allowlisted
-    # prefix and the filter then discarded the whole hit — the real secret rode
-    # in behind a fixture. parse_cookie_string takes everything up to `;`, so
-    # the scanner does too.
+    # Value class is `[^;\r\n]`, i.e. EXACTLY what parse_cookie_string keeps:
+    # it splits on `;`, drops any pair containing CR/LF, and trims. Anything
+    # narrower truncates the match, and a truncated match is a bypass —
+    # `<cookie-name>=<fixture>"<real-secret>` matched only the allowlisted
+    # prefix, so the filter discarded the hit and the real secret rode in behind
+    # a fixture. Two earlier attempts (positive class, then a narrower negated
+    # class) both still stopped early; matching the complete value is the only
+    # form that cannot be prefixed.
     # The other cost is that short test fixtures now match — they are listed in
     # $AllowedLiterals, which is exactly the reviewable-diff tradeoff this
     # design already makes everywhere else.
-    @{ name = 'Cloudflare clearance cookie'; rx = 'cf' + '_clearance[ \t]*=[ \t]*["'']?' + '[^;\s"''\\]{1,}' },
-    @{ name = 'Cloudflare bot cookie';       rx = '__cf' + '_bm[ \t]*=[ \t]*["'']?' + '[^;\s"''\\]{1,}' },
-    @{ name = 'JavDB session cookie';        rx = '_jdb' + '_session[ \t]*=[ \t]*["'']?' + '[^;\s"''\\]{1,}' },
-    @{ name = 'remember_me_token=';          rx = 'remember_me_token[ \t]*=[ \t]*["'']?' + '[^;\s"''\\]{1,}' },
+    @{ name = 'Cloudflare clearance cookie'; rx = 'cf' + '_clearance[ \t]*=[ \t]*["'']?' + '[^;\r\n]{1,}' },
+    @{ name = 'Cloudflare bot cookie';       rx = '__cf' + '_bm[ \t]*=[ \t]*["'']?' + '[^;\r\n]{1,}' },
+    @{ name = 'JavDB session cookie';        rx = '_jdb' + '_session[ \t]*=[ \t]*["'']?' + '[^;\r\n]{1,}' },
+    @{ name = 'remember_me_token=';          rx = 'remember_me_token[ \t]*=[ \t]*["'']?' + '[^;\r\n]{1,}' },
     # token68 (RFC 7235) allows -._~+/ and trailing '='; the old [A-Za-z0-9_-]
     # stopped at the first '.' and reported a truncated match.
     @{ name = 'Authorization bearer header'; rx = 'Authorization:\s*' + 'Bearer\s+' + '[A-Za-z0-9_.~+/=-]{8,}' },
     @{ name = 'Bearer <token>';              rx = 'Bearer\s+' + '[A-Za-z0-9_.~+/=-]{16,}' },
-    @{ name = 'RD_API_TOKEN=<value>';        rx = 'RD_API' + '_TOKEN[ \t]*=[ \t]*["'']?' + '[^;\s"''\\]{1,}' }
+    @{ name = 'RD_API_TOKEN=<value>';        rx = 'RD_API' + '_TOKEN[ \t]*=[ \t]*["'']?' + '[^;\r\n]{1,}' }
 )
 
 # All regex evaluation in this script goes through these options. See the
@@ -168,104 +170,10 @@ $Patterns = @(
 # file to a skip list, which blinds the scanner to everything in that file
 # forever. A NEW fixture will fail the build until it is listed; that is the
 # intended cost.
-$AllowedLiterals = @(
-    'urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920',
-    'urn:btih:0201592fdeadbeef0201592fdeadbeef02015920',
-    'urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
-    'urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEF',
-    'urn:btih:0201592f00000000000000000000000000000001',
-    'urn:btih:0201592f00000000000000000000000000000002',
-    'urn:btih:0000000000000000000000000000000000000001',
-    'urn:btih:0000000000000000000000000000000000000002',
-    'urn:btih:0000000000000000000000000000000000000003',
-    'urn:btih:0123456789abcdef0123456789abcdef01234567',
-    'urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-    'urn:btih:cccccccccccccccccccccccccccccccccccccccc',
-    'urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01',
-    'urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-    'urn:btih:cccccccccccccccccccccccccccccccc',
-    # Dedupe-key collision PoC (prompt/security-audit-fixes-2026-07-28.md).
-    'urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a',
-    'magnet:?xt=urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920',
-    'magnet:?xt=urn:btih:0201592fdeadbeef0201592fdeadbeef02015920',
-    'magnet:?xt=urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
-    'magnet:?xt=urn:btih:0201592f00000000000000000000000000000001',
-    'magnet:?xt=urn:btih:0201592f00000000000000000000000000000002',
-    'magnet:?xt=urn:btih:0000000000000000000000000000000000000001',
-    'magnet:?xt=urn:btih:0000000000000000000000000000000000000002',
-    'magnet:?xt=urn:btih:0000000000000000000000000000000000000003',
-    'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567',
-    'magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-    'magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccccccccccc',
-    'magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a',
-    'magnet:?xt=urn:btih:0123456789abcdef',
-    'magnet:?xt=urn:btih:ABCDEF0123456789',
-    'MAGNET:?xt=urn:btih:ABCDEF0123456789',
-    'MAGNET:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01',
-    'magnet:?xt=urn:btih:fedcba9876543210',
-    # Prose: pattern listings in the redaction recipe, this script's own
-# pattern NAMES, template placeholders, and the worked example in the
-# comment above explaining the prefix-bypass. None are values.
-'RD_API_TOKEN=.+|_jdb_session=|cf_clearance=|Authorization:',
-'RD_API_TOKEN=<value>',
-'RD_API_TOKEN=`',
-'RD_API_TOKEN={RD_API_TOKEN}',
-'_jdb_session=...`',
-'_jdb_session=paste_session!ActualSecret`',
-'_jdb_session=|cf_clearance=|Authorization:',
-'cf_clearance=...`',
-'cf_clearance=XXX`.',
-'cf_clearance=|Authorization:',
-# Cookie / token fixtures. These only started matching once the patterns
-# were widened to production's grammar (floor of 1 char, optional quotes
-# and whitespace around `=`). Every value here is self-evidently a
-# placeholder — XXX, `...`, brand_new, clear_me — and lives in a test or
-# in documentation showing the cookie format.
-'RD_API_TOKEN=abc-123',
-'_jdb_session=...',
-'_jdb_session=XXX',
-'_jdb_session=abc',
-'_jdb_session=abc123',
-'_jdb_session=brand_new',
-'_jdb_session=clear_me',
-'_jdb_session=e2e_jdb_session',
-'_jdb_session=keep_me_alive',
-'_jdb_session=keyring_only',
-'_jdb_session=label_test',
-'_jdb_session=new',
-'_jdb_session=older_keyring_value',
-'_jdb_session=paste_session',
-'_jdb_session=preexisting_session',
-'_jdb_session=regress_session',
-'_jdb_session=resurrect_me',
-'_jdb_session=xyz',
-'cf_clearance=...',
-'cf_clearance=XXX',
-'cf_clearance=brand_new',
-'cf_clearance=clear_cf',
-'cf_clearance=e2e_cf_clearance',
-'cf_clearance=fresh',
-'cf_clearance=label_test_cf',
-'cf_clearance=paste_cf',
-'cf_clearance=preexisting_cf',
-'cf_clearance=regress_cf',
-'cf_clearance=resurrect_cf',
-'cf_clearance=xyz',
-'cf_clearance=xyz789',
-# Placeholder cookie values in the Rust cookie-store tests.
-    '_jdb_session=paste_session',
-    '_jdb_session=keep_me_alive',
-    '_jdb_session=e2e_jdb_session',
-    '_jdb_session=regress_session',
-    '_jdb_session=preexisting_session',
-    '_jdb_session=label_test',
-    '_jdb_session=older_keyring_value',
-    '_jdb_session=keyring_only',
-    '_jdb_session=resurrect_me'
-)
+$AllowFile = Join-Path $ScriptDir "release-scan-allowlist.txt"
+if (-not (Test-Path -LiteralPath $AllowFile)) { FailExit ("Missing allowlist: " + $AllowFile) }
+$AllowedLiterals = @(Get-Content -LiteralPath $AllowFile -Encoding utf8 |
+    Where-Object { $_ -and -not $_.StartsWith('#') })
 
 $RxOpts = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
 
@@ -289,8 +197,58 @@ $Encodings = @(
     # what Get-Content did give us for free: BOM detection. A UTF-16BE file
     # decoded as ASCII or UTF-16LE yields interleaved or byte-swapped text, so a
     # contiguous ASCII credential never reaches the regexes.
-    @{ label = 'UTF-16BE';   encoding = [System.Text.Encoding]::BigEndianUnicode }
+    @{ label = 'UTF-16BE';   encoding = [System.Text.Encoding]::BigEndianUnicode },
+    # UTF-32 both ways. Same failure as UTF-16BE: the NULs stay between
+    # characters under every other decoder, so an ASCII credential is never
+    # contiguous and matches nothing.
+    @{ label = 'UTF-32LE';   encoding = [System.Text.Encoding]::UTF32 },
+    @{ label = 'UTF-32BE';   encoding = (New-Object System.Text.UTF32Encoding $true, $true) }
 )
+
+
+function Get-SourceText {
+    <#
+      Decode one tracked text file ONCE, correctly.
+
+      Scanning every candidate encoding (what this used to do) is right for a
+      binary, which carries no encoding metadata — but for text it is actively
+      harmful: a file containing non-ASCII decodes differently under each
+      decoder, so the same fixture yields several different "complete values"
+      and the exact-value allowlist can never cover them all. commands.rs
+      (Chinese help text) hit exactly that and could not be allowlisted.
+
+      BOM wins when present. Otherwise interleaved NULs are the tell for a
+      BOM-less UTF-16/32 file — the case that made reading bytes necessary in
+      the first place — and everything else is UTF-8.
+    #>
+    param([byte[]]$Bytes)
+    if ($Bytes.Length -ge 4 -and $Bytes[0] -eq 0xFF -and $Bytes[1] -eq 0xFE -and $Bytes[2] -eq 0 -and $Bytes[3] -eq 0) {
+        return [System.Text.Encoding]::UTF32.GetString($Bytes, 4, $Bytes.Length - 4)
+    }
+    if ($Bytes.Length -ge 4 -and $Bytes[0] -eq 0 -and $Bytes[1] -eq 0 -and $Bytes[2] -eq 0xFE -and $Bytes[3] -eq 0xFF) {
+        return (New-Object System.Text.UTF32Encoding $true, $true).GetString($Bytes, 4, $Bytes.Length - 4)
+    }
+    if ($Bytes.Length -ge 2 -and $Bytes[0] -eq 0xFF -and $Bytes[1] -eq 0xFE) {
+        return [System.Text.Encoding]::Unicode.GetString($Bytes, 2, $Bytes.Length - 2)
+    }
+    if ($Bytes.Length -ge 2 -and $Bytes[0] -eq 0xFE -and $Bytes[1] -eq 0xFF) {
+        return [System.Text.Encoding]::BigEndianUnicode.GetString($Bytes, 2, $Bytes.Length - 2)
+    }
+    if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) {
+        return [System.Text.Encoding]::UTF8.GetString($Bytes, 3, $Bytes.Length - 3)
+    }
+    # No BOM. Sample the head for NULs; real UTF-8 source never contains them.
+    $probe = [Math]::Min(512, $Bytes.Length)
+    $nulEven = 0; $nulOdd = 0
+    for ($i = 0; $i -lt $probe; $i++) {
+        if ($Bytes[$i] -eq 0) { if ($i % 2 -eq 0) { $nulEven++ } else { $nulOdd++ } }
+    }
+    if (($nulEven + $nulOdd) -gt ($probe / 8)) {
+        if ($nulOdd -ge $nulEven) { return [System.Text.Encoding]::Unicode.GetString($Bytes) }
+        return [System.Text.Encoding]::BigEndianUnicode.GetString($Bytes)
+    }
+    return [System.Text.Encoding]::UTF8.GetString($Bytes)
+}
 
 function Invoke-SourceSecretScan {
 
@@ -349,6 +307,8 @@ function Invoke-SourceSecretScan {
     foreach ($rel in $sourceFiles) {
         $full = Join-Path $RepoRoot $rel
         if ($skipExt -contains ([System.IO.Path]::GetExtension($rel).ToLowerInvariant())) { continue }
+        # The allowlist data file is the one and only exclusion. See its header.
+        if ($rel -eq 'scripts/release-scan-allowlist.txt') { continue }
         $script:SourceEligible++
         # -LiteralPath: a tracked file called `notes[1].md` is a valid wildcard to
         # Test-Path, which would report it missing.
@@ -382,19 +342,16 @@ function Invoke-SourceSecretScan {
         # of each: production normalises `magnet:?xt=urn%3Abtih%3A<hash>` back to
         # `btih:<hash>` (verified via _magnet_dedupe_key) and interns it, so a scan
         # that only sees the raw bytes misses an escaped magnet entirely.
-        # Deduplicate. For text with no percent-escapes the decoded variant is
-        # identical to the raw one, so scanning both counted every fixture
-        # twice: $SourceAllowed became "how many decode passes ran" dressed up
-        # as a coverage number.
+        # One correct decode, plus a percent-decoded pass: production
+        # normalises `magnet:?xt=urn%3Abtih%3A<hash>` back to `btih:<hash>`
+        # before interning it, so an escaped magnet must not slip past.
+        $decoded = Get-SourceText -Bytes $bytes
         $variants = New-Object System.Collections.Generic.List[string]
-        foreach ($enc in $Encodings) {
-            $decoded = $enc.encoding.GetString($bytes)
-            if (-not $variants.Contains($decoded)) { $variants.Add($decoded) }
-            try {
-                $unescaped = [System.Uri]::UnescapeDataString($decoded)
-                if (-not $variants.Contains($unescaped)) { $variants.Add($unescaped) }
-            } catch { }
-        }
+        $variants.Add($decoded)
+        try {
+            $unescaped = [System.Uri]::UnescapeDataString($decoded)
+            if ($unescaped -cne $decoded) { $variants.Add($unescaped) }
+        } catch { }
         foreach ($text in $variants) {
             foreach ($p in $Patterns) {
                 foreach ($m in [regex]::Matches($text, $p.rx, $RxOpts)) {
@@ -656,7 +613,7 @@ foreach ($exe in $ScanTargets) {
         foreach ($p in $Patterns) {
             # Allowlist applies here too, and it has to: the app EMBEDS its own
             # cookies.txt template (commands.rs COOKIES_TEMPLATE) containing
-            # `_jdb_session=...` and `_jdb_session=XXX; cf_clearance=XXX`. Once
+            # the cookies.txt example line (session + clearance placeholders). Once
             # the patterns were widened to production's grammar, the binary scan
             # started flagging javdbmagnet.exe against its own help text — every
             # release would have failed. Matching is per-VALUE, not per-file or

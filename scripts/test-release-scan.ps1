@@ -138,6 +138,38 @@ try {
 }
 
 Write-Output ""
+Write-Output "== 5b. Red test: UTF-32LE-encoded secret =="
+# Same class as UTF-16BE. Get-SourceText picks the encoding from the BOM;
+# a regression that drops a branch shows up here.
+$u32 = Join-Path $RepoRoot "docs/troubleshooting/no-pending-links.md"
+$origU32 = [System.IO.File]::ReadAllBytes($u32)
+try {
+    $payload32 = ([System.Text.Encoding]::UTF8.GetString($origU32)) +
+                 "`nmagnet:?xt=urn:bt" + "ih:bb22cc33dd44ee55ff6677889900aabbccddeeff`n"
+    [System.IO.File]::WriteAllBytes($u32,
+        [System.Text.Encoding]::UTF32.GetPreamble() +
+        [System.Text.Encoding]::UTF32.GetBytes($payload32))
+    & pwsh -NoProfile -File $Target -AuditOnly | Out-Null
+    Check "blocks: secret inside a UTF-32LE file" ($LASTEXITCODE -ne 0) "scan passed but should not have"
+} finally {
+    [System.IO.File]::WriteAllBytes($u32, $origU32)
+}
+
+Write-Output ""
+Write-Output "== 5c. Red test: quote-prefixed bypass =="
+# The shape that survived two narrower value classes: value starts with an
+# allowlisted fixture and continues after a quote.
+$qf = Join-Path $RepoRoot "requirements-ci.txt"
+$origQ = [System.IO.File]::ReadAllBytes($qf)
+try {
+    Add-Content -LiteralPath $qf -Value ("`n# _jdb" + "_session=paste_session" + [char]34 + "RealSecretAfterQuote") -Encoding utf8
+    & pwsh -NoProfile -File $Target -AuditOnly | Out-Null
+    Check "blocks: quote-prefixed bypass" ($LASTEXITCODE -ne 0) "scan passed but should not have"
+} finally {
+    [System.IO.File]::WriteAllBytes($qf, $origQ)
+}
+
+Write-Output ""
 Write-Output "== 6. Repo restored =="
 $dirty = & git -C $RepoRoot status --porcelain -- . ':(exclude)scripts/*'
 Check "no probe left behind" (-not $dirty) ($dirty -join '; ')
