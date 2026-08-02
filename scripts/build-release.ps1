@@ -244,7 +244,11 @@ $ScanTargets = @(
 
 $Patterns = @(
     @{ name = 'urn:btih:<40hex>';            rx = 'urn:btih:[a-fA-F0-9]{40}' },
-    @{ name = 'magnet:?xt=urn:btih:';        rx = 'magnet:\?xt=urn:btih:' + '[a-fA-F0-9]+' },
+    # `{16,}` 而非 `+`：redact_magnet() 的輸出是固定 8 碼十六進位，用 `+` 會讓
+    # 這條 pattern 攔下專案自己**正確遮蔽後**的形式。真實 BTIH 是 40 碼（v1）
+    # 或 64 碼（v2），16 是安全的分界——放行 8 碼遮蔽輸出，攔下任何真實長度。
+    # 這個收緊讓三份文件不必再整檔豁免（見下方 $skipFiles）。
+    @{ name = 'magnet:?xt=urn:btih:';        rx = 'magnet:\?xt=urn:btih:' + '[a-fA-F0-9]{16,}' },
     @{ name = 'Cloudflare clearance cookie'; rx = 'cf' + '_clearance=' + '[A-Za-z0-9_.-]{20,}' },
     @{ name = 'Cloudflare bot cookie';       rx = '__cf' + '_bm=' + '[A-Za-z0-9_.-]{20,}' },
     @{ name = 'JavDB session cookie';        rx = '_jdb' + '_session=' + '[A-Za-z0-9_.-]{10,}' },
@@ -341,23 +345,25 @@ $skipExt = @('.exe', '.msi', '.zip', '.7z', '.png', '.ico', '.icns', '.dll')
 # Skipping by exact path for the one-offs and by prefix/suffix for
 # the test directories keeps the rule resilient to new test files.
 #
-# The four prose entries below only became visible when the scan widened
-# from "changed files" to "all tracked files". Each documents the magnet
-# handling code and therefore quotes magnet URIs as examples; every hash in
-# them was verified by hand to be synthetic — truncated 8-hex fragments
-# (0201592f, a8736d7a, 7b1d1d93), or, in the security-audit file, a made-up
-# 40-hex used to demonstrate a dedupe-key collision PoC. None of these files
-# ship: the portable zip contains two exes and a generated README.txt.
-# They are listed individually rather than skipping docs/ wholesale, so a
-# real cookie or token pasted into any other document still fails the build.
+# Widening the scan from "changed files" to "all tracked files" surfaced four
+# prose files that quote magnet URIs while documenting the magnet-handling
+# code. Three of them only ever quoted redact_magnet()'s own 8-hex output and
+# stopped matching once the pattern above required 16+ hex — they are back
+# under the scan rather than exempt, which is the better outcome: a real
+# cookie or token pasted into them still fails the build.
+#
+# Only the security-audit writeup still needs an exemption. It carries a full
+# 40-hex BTIH to demonstrate a dedupe-key collision PoC, where the whole point
+# is that the SAME string appears twice (once as a bare `btih:<hex>` href,
+# once inside a real magnet URI); the hash is arbitrary and paired with a
+# `dn=REAL` placeholder. It is a dated archive, so the alternative — truncating
+# the hash in the document — would mean editing a historical record.
+# Listed individually rather than exempting docs/ or prompt/ wholesale.
 $skipFiles = @(
     'app/src-tauri/src/legacy_import.rs',
     'app/src-tauri/src/commands.rs',
     'scripts/build-release.ps1',
-    'docs/superpowers/specs/2026-05-10-tauri-rewrite-design.md',
-    'prompt/security-audit-fixes-2026-07-28.md',
-    'spikes/pyinstaller_sidecar/NOTES.md',
-    'spikes/python_sidecar_protocol/NOTES.md'
+    'prompt/security-audit-fixes-2026-07-28.md'
 )
 $skipPrefixes = @('tests/')
 $skipSuffixes = @('.test.ts', '.test.js', '.test.tsx', '.spec.ts')
