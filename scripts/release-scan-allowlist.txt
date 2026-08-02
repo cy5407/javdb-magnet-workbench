@@ -1,3 +1,4 @@
+# [source]
 # Complete, production-parsed values that are known synthetic fixtures.
 # One per line; blank lines and lines starting with # are ignored.
 #
@@ -12,7 +13,6 @@
 urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920
 urn:btih:0201592fdeadbeef0201592fdeadbeef02015920
 urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF
-urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEF
 urn:btih:0201592f00000000000000000000000000000001
 urn:btih:0201592f00000000000000000000000000000002
 urn:btih:0000000000000000000000000000000000000001
@@ -23,9 +23,6 @@ urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 urn:btih:cccccccccccccccccccccccccccccccccccccccc
 urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01
-urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-urn:btih:cccccccccccccccccccccccccccccccc
 urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a
 magnet:?xt=urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920
 magnet:?xt=urn:btih:0201592fdeadbeef0201592fdeadbeef02015920
@@ -46,82 +43,35 @@ MAGNET:?xt=urn:btih:ABCDEF0123456789
 MAGNET:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01
 magnet:?xt=urn:btih:fedcba9876543210
 RD_API_TOKEN=.+|_jdb_session=|cf_clearance=|Authorization: Bearer|magnet:\?xt=urn:btih:[A-Fa-f0-9]{32,}"
-RD_API_TOKEN=.+|_jdb_session=|cf_clearance=|Authorization:',
 RD_API_TOKEN=<value>'
-RD_API_TOKEN=<value>',
-RD_API_TOKEN=` at end of line would swallow the next non-blank line as
-RD_API_TOKEN=`',
-RD_API_TOKEN=abc-123',
 RD_API_TOKEN=abc-123\n")
-RD_API_TOKEN={RD_API_TOKEN}',
 RD_API_TOKEN={RD_API_TOKEN}\n"
 _jdb_session=...   (登入 session)\n#   cf_clearance=...   (Cloudflare 通行證)\n#\n# === 方法 A: 瀏覽器 DevTools Network 分頁 (推薦) ===\n#   1. 用瀏覽器 (Edge / Chrome / Firefox 都可) 登入 https://javdb.com\n#   2. 按 F12 開啟 DevTools\n#   3. 切換到「Network」(網路) 分頁\n#   4. 按 F5 重新整理頁面\n#   5. 點清單最上面那筆 request (網址通常是 javdb.com/)\n#   6. 右側找到「Request Headers」找到 \"Cookie:\" 那行\n#   7. 複製整行值 (不要包含 \"Cookie: \" 前綴), 貼到本檔最後一行\n#\n# === 方法 B: Application 分頁 (更直觀但要拼接) ===\n#   1. F12 → Application → Storage → Cookies → https://javdb.com\n#   2. 找出 _jdb_session 與 cf_clearance 兩個欄位的 Value\n#   3. 自行拼成: _jdb_session=...
-_jdb_session=...',
-_jdb_session=...` and `_jdb_session=XXX
-_jdb_session=...`',
 _jdb_session=XXX"))
-_jdb_session=XXX',
 _jdb_session=abc",
-_jdb_session=abc',
-_jdb_session=abc123',
 _jdb_session=abc\ncf_clearance=xyz\nlocale=zh"
-_jdb_session=brand_new',
-_jdb_session=clear_me',
-_jdb_session=e2e_jdb_session',
 _jdb_session=keep_me_alive"
-_jdb_session=keep_me_alive',
 _jdb_session=keyring_only").expect("seed")
-_jdb_session=keyring_only',
-_jdb_session=label_test',
-_jdb_session=new',
 _jdb_session=older_keyring_value")
-_jdb_session=older_keyring_value',
-_jdb_session=paste_session!ActualSecret`',
-_jdb_session=paste_session"ActualSecret` matched only the allowlisted
-_jdb_session=paste_session',
-_jdb_session=preexisting_session',
-_jdb_session=regress_session',
-_jdb_session=resurrect_me'
-_jdb_session=resurrect_me',
 _jdb_session=xyz"
-_jdb_session=xyz',
 _jdb_session=|cf_clearance=|Authorization: Bearer|magnet:\?xt=urn:btih:[A-Fa-f0-9]{32,}"
-_jdb_session=|cf_clearance=|Authorization:',
 cf_clearance=...   (Cloudflare 通行證)\n#\n# === 方法 A: 瀏覽器 DevTools Network 分頁 (推薦) ===\n#   1. 用瀏覽器 (Edge / Chrome / Firefox 都可) 登入 https://javdb.com\n#   2. 按 F12 開啟 DevTools\n#   3. 切換到「Network」(網路) 分頁\n#   4. 按 F5 重新整理頁面\n#   5. 點清單最上面那筆 request (網址通常是 javdb.com/)\n#   6. 右側找到「Request Headers」找到 \"Cookie:\" 那行\n#   7. 複製整行值 (不要包含 \"Cookie: \" 前綴), 貼到本檔最後一行\n#\n# === 方法 B: Application 分頁 (更直觀但要拼接) ===\n#   1. F12 → Application → Storage → Cookies → https://javdb.com\n#   2. 找出 _jdb_session 與 cf_clearance 兩個欄位的 Value\n#   3. 自行拼成: _jdb_session=...
-cf_clearance=...',
 cf_clearance=...` line
-cf_clearance=...`',
-cf_clearance=XXX',
-cf_clearance=XXX\n\
-cf_clearance=XXX`. Once
-cf_clearance=XXX`.',
 cf_clearance=brand_new",
-cf_clearance=brand_new',
 cf_clearance=clear_cf")
 cf_clearance=clear_cf",
-cf_clearance=clear_cf',
-cf_clearance=e2e_cf_clearance',
 cf_clearance=fresh",
-cf_clearance=fresh',
 cf_clearance=fresh\n").unwrap()
 cf_clearance=label_test_cf",
-cf_clearance=label_test_cf',
 cf_clearance=paste_cf  \n",
 cf_clearance=paste_cf",
-cf_clearance=paste_cf',
 cf_clearance=preexisting_cf"
-cf_clearance=preexisting_cf',
-cf_clearance=regress_cf',
 cf_clearance=resurrect_cf"
-cf_clearance=resurrect_cf',
 cf_clearance=xyz  \n",
 cf_clearance=xyz")
 cf_clearance=xyz").is_ok())
-cf_clearance=xyz',
-cf_clearance=xyz789',
 cf_clearance=xyz\nlocale=zh"
 cf_clearance=|Authorization: Bearer|magnet:\?xt=urn:btih:[A-Fa-f0-9]{32,}"
-cf_clearance=|Authorization:',
 remember_me_token='
 urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a
 magnet:?xt=urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920
@@ -142,68 +92,34 @@ magnet:?xt=urn:btih:ABCDEF0123456789
 MAGNET:?xt=urn:btih:ABCDEF0123456789
 MAGNET:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01
 magnet:?xt=urn:btih:fedcba9876543210
-RD_API_TOKEN=.+|_jdb_session=|cf_clearance=|Authorization:
-RD_API_TOKEN=<value>
-RD_API_TOKEN=`
-RD_API_TOKEN={RD_API_TOKEN}
-_jdb_session=...`
-_jdb_session=paste_session!ActualSecret`
-_jdb_session=|cf_clearance=|Authorization:
-cf_clearance=...`
-cf_clearance=XXX`.
-cf_clearance=|Authorization:
-RD_API_TOKEN=abc-123
-_jdb_session=...
-_jdb_session=XXX
 _jdb_session=abc
 _jdb_session=abc123
 _jdb_session=brand_new
 _jdb_session=clear_me
 _jdb_session=e2e_jdb_session
-_jdb_session=keep_me_alive
-_jdb_session=keyring_only
 _jdb_session=label_test
 _jdb_session=new
-_jdb_session=older_keyring_value
 _jdb_session=paste_session
 _jdb_session=preexisting_session
 _jdb_session=regress_session
 _jdb_session=resurrect_me
-_jdb_session=xyz
-cf_clearance=...
-cf_clearance=XXX
-cf_clearance=brand_new
-cf_clearance=clear_cf
 cf_clearance=e2e_cf_clearance
-cf_clearance=fresh
-cf_clearance=label_test_cf
-cf_clearance=paste_cf
-cf_clearance=preexisting_cf
 cf_clearance=regress_cf
-cf_clearance=resurrect_cf
 cf_clearance=xyz
 cf_clearance=xyz789
 _jdb_session=paste_session
-_jdb_session=keep_me_alive
 _jdb_session=e2e_jdb_session
 _jdb_session=regress_session
 _jdb_session=preexisting_session
 _jdb_session=label_test
-_jdb_session=older_keyring_value
-_jdb_session=keyring_only
 _jdb_session=resurrect_me
 # COOKIES_TEMPLATE in commands.rs — the app's own cookies.txt help text,
 # which is compiled into javdbmagnet.exe. Placeholders only (XXX / ...).
 # COOKIES_TEMPLATE as the binary scan sees it: the exe embeds this help
 # text, and ASCII decoding turns each non-ASCII byte into '?'. Values are
 # bounded by NUL/CR/LF, so the adjacent prose is part of the match.
-cf_clearance=...   (Cloudflare ?????????)
-_jdb_session=...   (?????? session)
 # Short-form fixtures surfaced by lowering the length floors to production's
 # (register_magnets takes a 3-char infohash; secret_store takes a 1-char token).
-_jdb_session=
-Bearer 
-cf_clearance=
 magnet:?xt=urn:btih:0001
 magnet:?xt=urn:btih:01234567
 magnet:?xt=urn:btih:aaa
@@ -220,8 +136,42 @@ magnet:?xt=urn:btih:LEAKABLE
 magnet:?xt=urn:btih:rd
 magnet:?xt=urn:btih:some
 magnet:?xt=urn:btih:web1
-RD_API_TOKEN=
-urn:bt
 magnet:?xt=urn:btih:aaaa1111
 MAGNET:?xt=urn:btih:abc
 magnet:?xt=urn:btih:bbbb2222
+cf_clearance=...
+cf_clearance=XXX
+_jdb_session=XXX
+cf_clearance=XXX\n\
+_jdb_session=...
+magnet:?xt=urn:btih:...
+magnet:?xt=urn:btih:0201592f...
+magnet:?xt=urn:btih:00000000...
+bearer token
+magnet:?xt=urn:btih:0201592f9a...
+Bearer header
+magnet:?xt=urn:btih:c12fe1c0...
+Bearer token
+MAGNET:?XT=URN:BTIH:...
+bearer header
+Bearer token68
+magnet:?xt=urn:btih:a8736d7a...
+magnet:?xt=urn:btih:7b1d1d93...
+Bearer LEAKABLE
+Bearer tok-xyz
+magnet:?xt=urn:btih:01234567...
+magnet:?xt=urn:btih:ABCDEF01...
+Bearer floor
+Bearer pattern
+# [binary]
+# ONLY what the shipped exe legitimately embeds: the cookies.txt help text
+# from commands.rs::COOKIES_TEMPLATE, as the binary scan decodes it (ASCII,
+# so each non-ASCII byte shows as '?'). Nothing from the source list belongs
+# here — a magnet fixture in a test file is expected, the same string inside
+# javdbmagnet.exe is not.
+_jdb_session=...
+_jdb_session=XXX
+cf_clearance=...
+cf_clearance=XXX
+cf_clearance=...   (Cloudflare ?????????)
+_jdb_session=...   (?????? session)

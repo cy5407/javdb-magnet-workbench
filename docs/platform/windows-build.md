@@ -19,6 +19,14 @@ pwsh -File scripts\verify-windows-build.ps1
 pwsh -File scripts\build-release.ps1
 ```
 
+這條命令的 Step 0 會**先跑一次 `scripts/test-release-scan.ps1`**（機密掃描的
+紅測套件），失敗即中止、不產出任何 artifact。這道關卡本來只掛在
+`npm run release` 上，而本文件教的正是直接呼叫打包腳本——那條路完全繞過它。
+關卡因此改放在打包腳本內部，兩個入口都會跑到。
+
+`-AuditOnly` / `-AuditBinary` 不會跑紅測：紅測本身就是用這兩個模式呼叫打包
+腳本的，在那裡執行會無限遞迴。
+
 `verify-windows-build.ps1` 不打包，它只做驗證：環境齊全性 → 三個既有 gate →
 `cargo test --lib` → 重建 sidecar 並用真的 JSON-lines 協定跟它對話。
 

@@ -292,7 +292,12 @@ cd app
 npm run release
 ```
 
-`scripts/build-release.ps1` 會：
+打包腳本的 Step 0 會**先跑一次 `scripts/test-release-scan.ps1`**（機密掃描的
+紅測套件），失敗即中止、不產出任何 artifact。這道關卡放在腳本內部而非 npm
+script 裡，因為直接呼叫 `pwsh -File scripts/build-release.ps1` 也是文件記載的
+用法，掛在 wrapper 上的關卡會被那條路徑整個繞過。
+
+接著 `scripts/build-release.ps1` 會：
 
 1. PyInstaller 打包 `sidecar.exe`
 2. `npx tauri build --no-bundle`（包含 Vite 前端 build + cargo release build；

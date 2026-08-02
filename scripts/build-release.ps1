@@ -57,6 +57,30 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+# Truncate first: Add-Content appends, so a second run silently mixes this
+# run's values with the previous run's. The dump exists to be reviewed by hand
+# before entries reach the allowlist; a stale line in it is a bad decision.
+#
+# This block sits AFTER $ErrorActionPreference on purpose. It used to run
+# before it, so a Remove-Item that failed but left the path appendable — a
+# locked or ACL-restricted file on Windows — was a non-terminating error that
+# nothing noticed, and the run then appended to stale content. Failing to
+# truncate must abort, not degrade silently: the whole value of this file is
+# that a human trusts every line in it is from this run.
+if ($DumpUnmatched) {
+    if (Test-Path -LiteralPath $DumpUnmatched -PathType Container) {
+        # Remove-Item on a non-empty directory PROMPTS for confirmation. In a
+        # non-interactive run that either hangs or dies with an unhelpful null
+        # reference, which is a worse failure than the stale-append it was
+        # added to prevent. Reject the input instead of trying to delete it.
+        Write-Host ("[FAIL] -DumpUnmatched must be a file path, not a directory: " + $DumpUnmatched) -ForegroundColor Red
+        exit 1
+    }
+    if (Test-Path -LiteralPath $DumpUnmatched) {
+        Remove-Item -LiteralPath $DumpUnmatched -Force -Confirm:$false -ErrorAction Stop
+    }
+}
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -123,43 +147,33 @@ $Patterns = @(
     # Real v1 infohashes are 40 hex (or 32 base32); 16 is a safe floor that
     # passes the 8-char redacted form and catches every real length.
     # Floor of 1, matching production: register_magnets accepts
-    # `magnet:?xt=urn:btih:abc`. The 16-char floor that used to sit here was
-    # really a proxy for "don't flag redact_magnet()'s own output", which is
-    # `<8hex>...`. That is now expressed directly: an ATOMIC group consumes the
-    # hex run and a negative lookahead rejects a trailing ellipsis. Atomic
-    # matters — with normal backtracking the engine would just give back one
-    # character and match the shorter prefix instead.
-    @{ name = 'magnet:?xt=';                 rx = 'magnet:\?xt=urn:bt' + '[im]h:(?>[a-zA-Z0-9]+)(?!\.\.\.)' },
-    # Length floors and separator grammar now follow what PRODUCTION accepts,
-    # not what a "realistic" secret looks like. secret_store.rs takes 1-255
-    # ASCII alphanumerics; legacy_import.rs trims whitespace around `=` and
-    # strips surrounding quotes; parse_cookie_string trims each `k = v` pair.
-    # A scanner narrower than the parser is a scanner with a documented hole,
-    # so `\s*`, optional quotes and a floor of 1 are all deliberate. The cost
-    # Separator is `[ \t]*`, not `\s*`: `\s` spans newlines, so a bare
-    # a bare `<token-name>=` at end of line would swallow the next non-blank line as
-    # its "value". parse_cookie_string drops any pair containing CR/LF outright
-    # (F-05), so horizontal whitespace is also the correct grammar.
-    # Value class is `[^;\r\n]`, i.e. EXACTLY what parse_cookie_string keeps:
-    # it splits on `;`, drops any pair containing CR/LF, and trims. Anything
-    # narrower truncates the match, and a truncated match is a bypass —
-    # `<cookie-name>=<fixture>"<real-secret>` matched only the allowlisted
-    # prefix, so the filter discarded the hit and the real secret rode in behind
-    # a fixture. Two earlier attempts (positive class, then a narrower negated
-    # class) both still stopped early; matching the complete value is the only
-    # form that cannot be prefixed.
-    # The other cost is that short test fixtures now match — they are listed in
-    # $AllowedLiterals, which is exactly the reviewable-diff tradeoff this
-    # design already makes everywhere else.
-    @{ name = 'Cloudflare clearance cookie'; rx = 'cf' + '_clearance[^\S\r\n]*=[^\S\r\n]*["'']?' + '[^;\r\n]{1,}' },
-    @{ name = 'Cloudflare bot cookie';       rx = '__cf' + '_bm[^\S\r\n]*=[^\S\r\n]*["'']?' + '[^;\r\n]{1,}' },
-    @{ name = 'JavDB session cookie';        rx = '_jdb' + '_session[^\S\r\n]*=[^\S\r\n]*["'']?' + '[^;\r\n]{1,}' },
-    @{ name = 'remember_me_token=';          rx = 'remember_me_token[^\S\r\n]*=[^\S\r\n]*["'']?' + '[^;\r\n]{1,}' },
+    # `magnet:?xt=urn:btih:abc`.
+    #
+    # No atomic group and no ellipsis lookahead here any more. That construct
+    # was meant to exempt redact_magnet()'s own `<8hex>...` output, but it
+    # exempted EVERY short hash followed by an ellipsis — so
+    # `magnet:?xt=urn:btih:abc` + `...` + a real trailing secret, which
+    # production stores,
+    # produced zero hits. The redacted form is a fixed set of literals, so it
+    # belongs in the allowlist like every other known-safe string; expressing it
+    # as a pattern exemption made the hole wider than the thing it excused.
+    #
+    # `.` is INSIDE the value class on purpose. Without it the match for
+    # `...abc...RealSecret` would stop at the first dot and yield the same value
+    # as the harmless `...abc...`, so allowlisting the redacted form would
+    # re-open the identical hole through the allowlist instead of the regex.
+    # With `.` included the two produce different values and only the exact
+    # redacted literal is exempt.
+    @{ name = 'magnet:?xt=';                 rx = 'magnet:\?xt=urn:bt' + '[im]h:[a-zA-Z0-9.]{1,}' },
+    @{ name = 'Cloudflare clearance cookie'; rx = 'cf' + '_clearance[\u0009\u000B-\u000C\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]*=[\u0009\u000B-\u000C\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]*["'']?' + '[^;\r\n]{1,}' },
+    @{ name = 'Cloudflare bot cookie';       rx = '__cf' + '_bm[\u0009\u000B-\u000C\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]*=[\u0009\u000B-\u000C\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]*["'']?' + '[^;\r\n]{1,}' },
+    @{ name = 'JavDB session cookie';        rx = '_jdb' + '_session[\u0009\u000B-\u000C\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]*=[\u0009\u000B-\u000C\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]*["'']?' + '[^;\r\n]{1,}' },
+    @{ name = 'remember_me_token=';          rx = 'remember_me_token[\u0009\u000B-\u000C\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]*=[\u0009\u000B-\u000C\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]*["'']?' + '[^;\r\n]{1,}' },
     # token68 (RFC 7235) allows -._~+/ and trailing '='; the old [A-Za-z0-9_-]
     # stopped at the first '.' and reported a truncated match.
-    @{ name = 'Authorization bearer header'; rx = 'Authorization:\s*' + 'Bearer\s+' + '[A-Za-z0-9_.~+/=-]{8,}' },
-    @{ name = 'Bearer <token>';              rx = 'Bearer\s+' + '[A-Za-z0-9_.~+/=-]{16,}' },
-    @{ name = 'RD_API_TOKEN=<value>';        rx = 'RD_API' + '_TOKEN[^\S\r\n]*=[^\S\r\n]*["'']?' + '[^;\r\n]{1,}' }
+    @{ name = 'Authorization bearer header'; rx = 'Authorization:[\u0009\u000B-\u000C\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]*' + 'Bearer[\u0009\u000B-\u000C\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]+' + '[A-Za-z0-9_.~+/=-]{1,}' },
+    @{ name = 'Bearer <token>';              rx = 'Bearer[\u0009\u000B-\u000C\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]+' + '[A-Za-z0-9_.~+/=-]{1,}' },
+    @{ name = 'RD_API_TOKEN=<value>';        rx = 'RD_API' + '_TOKEN[\u0009\u000B-\u000C\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]*=[\u0009\u000B-\u000C\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]*["'']?' + '[^;\r\n]{1,}' }
 )
 
 # All regex evaluation in this script goes through these options. See the
@@ -190,31 +204,29 @@ $Patterns = @(
 # intended cost.
 $AllowFile = Join-Path $ScriptDir "release-scan-allowlist.txt"
 if (-not (Test-Path -LiteralPath $AllowFile)) { FailExit ("Missing allowlist: " + $AllowFile) }
-$AllowedLiterals = @(Get-Content -LiteralPath $AllowFile -Encoding utf8 |
-    Where-Object { $_ -and -not $_.StartsWith('#') })
+# `# [source]` / `# [binary]` headers split the file. Anything before the first
+# header belongs to source.
+$AllowRaw = @()
+$section = 'source'
+# value -> line number in the data file, so a stale entry can be reported by
+# position instead of by content.
+# Same comparer for the same reason: two entries differing only by case are two
+# different entries here, and reporting one under the other's line number would
+# point a maintainer at the wrong line.
+$AllowLineNumbers = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::Ordinal)
+$AllowLineNo = 0
+foreach ($line in (Get-Content -LiteralPath $AllowFile -Encoding utf8)) {
+    $AllowLineNo++
+    $secHdr = [regex]::Match($line, '^#\s*\[(source|binary)\]\s*$')
+    if ($secHdr.Success) { $section = $secHdr.Groups[1].Value; continue }
+    if (-not $line -or $line.StartsWith('#')) { continue }
+    $AllowRaw += [pscustomobject]@{ section = $section; value = $line }
+    if (-not $AllowLineNumbers.ContainsKey($line)) { $AllowLineNumbers[$line] = $AllowLineNo }
+}
+$AllowedLiterals = @($AllowRaw | Where-Object { $_.section -eq 'source' } | ForEach-Object { $_.value })
 
-# Binary variant of the same rules. In a PE image the value class must also
-# stop at control bytes: `[^;\r\n]` happily eats NULs and whatever follows,
-# so the exe's own embedded COOKIES_TEMPLATE matched a run of adjacent binary
-# garbage that no allowlist entry could ever equal — every release failed at
-# the binary scan while every source test passed.
-#
-# The ONLY addition over the source class is NUL, because unrelated data can
-# abut a string in a PE image. Everything else production accepts stays in:
-# two earlier attempts excluded whitespace, then all C0 bytes, and each one
-# reopened the prefix bypass — `<fixture><TAB><real-secret>` truncated to the
-# allowlisted fixture and the hit was dropped. parse_cookie_string rejects only
-# CR/LF, so neither may the scanner.
-#
-# The template needs no special casing: each of its cookie lines ends in a
-# newline, so matches terminate there naturally. Its ASCII-decoded values (the
-# Chinese becomes one `?` per byte) are allowlisted explicitly — see the
-# COOKIES_TEMPLATE section of release-scan-allowlist.txt.
-# Only the app's own embedded cookies.txt template. Kept separate from the
-# source allowlist on purpose: a magnet fixture in a test file is expected, the
-# same string compiled into javdbmagnet.exe is not.
 $BinaryAllowedLiterals = @(
-    $AllowedLiterals | Where-Object { $_ -cmatch '^(_jdb' + '_session|cf' + '_clearance)=(\.\.\.|XXX)' }
+    $AllowRaw | Where-Object { $_.section -eq 'binary' } | ForEach-Object { $_.value }
 )
 
 $BinaryPatterns = @(
@@ -227,6 +239,18 @@ $RxOpts = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
 
 $ScanFail = $false
 $BinaryHitCount = 0
+# Which source allowlist literals actually matched something this run. An entry
+# that matches nothing is a permanent exemption for a value the repo no longer
+# contains — dead weight at best, and at worst a pre-approved hole for the day
+# that exact string comes back as a real secret. -DumpUnmatched finds what to
+# ADD; nothing found what to REMOVE, and a stale `Bearer ` entry survived in
+# the list until a test happened to trip over it.
+# Ordinal, case-SENSITIVE. A plain `@{}` is case-insensitive while matching uses
+# `-ccontains`, so `<name>=abc` being present marked `<name>=ABC` as used and the
+# stale variant stayed silently pre-approved. This list already carries several
+# case variants of the same value on purpose (`magnet:` vs `MAGNET:`), so the
+# two comparers must agree.
+$AllowedUsed = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
 # We decode the binary bytes both as ASCII *and* UTF-16LE because PE
 # images routinely embed strings in both encodings:
 #   - ASCII / UTF-8 covers Rust &str literals, format!() output, and
@@ -292,7 +316,12 @@ function Get-SourceText {
     # alternates every other byte. The previous heuristic only compared even
     # vs odd offsets, which cannot separate UTF-32 from UTF-16 at all — a
     # BOM-less UTF-32 file scanned as garbage and its contents were never seen.
-    $probe = [Math]::Min(1024, $Bytes.Length)
+    # Scan the WHOLE file, not a prefix sample. A 1024-byte probe reflects
+    # only whatever happens to sit at the head: a BOM-less UTF-16LE file whose
+    # first 600 characters are CJK has no NUL in the probe at all, gets called
+    # UTF-8, and everything after it is never decoded. The files here are source
+    # text — counting bytes over all of them is not a cost worth optimising.
+    $probe = $Bytes.Length
     if ($probe -lt 4) { return [System.Text.Encoding]::UTF8.GetString($Bytes) }
     $mod = @(0, 0, 0, 0)
     $nulTotal = 0
@@ -321,7 +350,6 @@ function Get-SourceText {
         return [System.Text.Encoding]::Unicode.GetString($Bytes)
     }
     return [System.Text.Encoding]::BigEndianUnicode.GetString($Bytes)
-    return [System.Text.Encoding]::UTF8.GetString($Bytes)
 }
 
 function Invoke-SourceSecretScan {
@@ -429,12 +457,37 @@ function Invoke-SourceSecretScan {
         foreach ($text in $variants) {
             foreach ($p in $Patterns) {
                 foreach ($m in [regex]::Matches($text, $p.rx, $RxOpts)) {
-                    if ($AllowedLiterals -ccontains $m.Value) { $script:SourceAllowed++; continue }
+                    if ($AllowedLiterals -ccontains $m.Value) {
+                        $script:SourceAllowed++
+                        [void]$script:AllowedUsed.Add($m.Value)
+                        continue
+                    }
                     if ($DumpUnmatched) { Add-Content -LiteralPath $DumpUnmatched -Value $m.Value -Encoding utf8 }
                     $script:SourceHits += ("      " + $rel + "  [" + $p.name + "]")
                 }
             }
         }
+    }
+    $script:DeadAllowlist = @($AllowedLiterals | Where-Object { -not $script:AllowedUsed.Contains($_) })
+    if ($script:DeadAllowlist.Count -gt 0) {
+        Write-Host ("    [WARN] " + $script:DeadAllowlist.Count +
+            " allowlist entries matched nothing this run (stale exemptions):") -ForegroundColor Yellow
+        # Line number + short digest, never the value. The first version echoed
+        # the literal, reasoning that a value matching nothing cannot be in the
+        # repo — but "not in the repo any more" is exactly the shape of a real
+        # credential that was allowlisted by mistake and later removed. Printing
+        # it here would copy it into the build/CI log, which is the same
+        # persistent artifact -DumpUnmatched exists to avoid writing to.
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            foreach ($dead in $script:DeadAllowlist) {
+                $lineNo = $script:AllowLineNumbers[$dead]
+                $digest = [BitConverter]::ToString(
+                    $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($dead))).Replace('-', '').Substring(0, 12)
+                Write-Host ("      line " + $lineNo + "  sha256:" + $digest) -ForegroundColor Yellow
+            }
+        } finally { $sha.Dispose() }
+        Write-Host "      Remove those lines from scripts/release-scan-allowlist.txt." -ForegroundColor Yellow
     }
     if ($script:SourceHits.Count -gt 0) {
         Write-Host "    Source secret scan LEAK:" -ForegroundColor Red
@@ -532,6 +585,33 @@ if ($AuditOnly) {
     Write-Output "[PASS] audit-only scan clean"
     exit 0
 }
+
+# --------------------------------------------------------------------------
+# Step 0: the scanner's own red tests, on the full-build path only.
+#
+# `npm run release` was made to chain `release:test`, but that only covers the
+# npm entry point — and docs/platform/windows-build.md tells people to run
+# `pwsh -File scripts\build-release.ps1` directly, which bypassed it entirely.
+# A gate that a documented entry point walks around is not a gate. It lives
+# here now, so every path that actually produces an artifact runs it.
+#
+# Audit modes are excluded because the suite itself invokes this script with
+# -AuditOnly / -AuditBinary; running the tests there would recurse forever.
+# --------------------------------------------------------------------------
+$RedTestScript = Join-Path $ScriptDir "test-release-scan.ps1"
+if (-not (Test-Path -LiteralPath $RedTestScript)) {
+    FailExit ("Missing red-test suite: " + $RedTestScript)
+}
+Write-Output "==> Step 0: scanner red tests"
+# Same host that is running this script, so the tests exercise the engine that
+# will actually do the scanning a few lines from now.
+$SelfHost = (Get-Process -Id $PID).Path
+if (-not $SelfHost) { $SelfHost = 'pwsh' }
+& $SelfHost -NoProfile -File $RedTestScript
+if ($LASTEXITCODE -ne 0) {
+    FailExit "Scanner red tests failed; refusing to build. Fix them before shipping."
+}
+Write-Output "    [OK]   scanner red tests passed"
 
 function Assert-NoIndexMask {
     # assume-unchanged (h) and skip-worktree (S) make git report a clean tree

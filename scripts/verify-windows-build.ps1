@@ -19,6 +19,10 @@
 # Run:
 #     pwsh -File scripts\verify-windows-build.ps1
 #     pwsh -File scripts\verify-windows-build.ps1 -SkipSlow   # 略過 cargo 與 sidecar 重建
+#
+# -SkipSlow 不會略過 release-scan Red 測試。那條 gate 直接決定出貨物是否夾帶
+# 機密，是這份腳本裡最不該被開關掉的一項；它的成本也只是幾次掃描，不屬於
+# 「slow」的範疇。
 
 param(
     [switch]$SkipSlow
@@ -143,7 +147,7 @@ try {
 # 4. cargo test —— 這是本次移植最高風險的一步
 # ---------------------------------------------------------------------------
 if ($SkipSlow) {
-    Warn "-SkipSlow：略過 cargo test 與 sidecar 重建"
+    Warn "-SkipSlow：略過 cargo test 與 sidecar 重建（release-scan 測試仍會執行）"
 } else {
     Step "Gate: cargo test --lib  (驗 2026-08-01 的 keyring 平台拆分)"
     if (-not (Test-Path $SidecarExe)) {
@@ -186,7 +190,9 @@ cargo test --lib 失敗。
 # `pwsh`（7.x）。同一支腳本在兩者下的字串、編碼與 regex 行為並不完全一致，只驗
 # 其中一個等於只驗了一半——正式出貨走的偏偏是 5.1 那條。
 # ---------------------------------------------------------------------------
-if (-not $SkipSlow) {
+# 刻意不受 -SkipSlow 影響：先前它被歸在 -SkipSlow 之下，而 -SkipSlow 的說明只
+# 提到 cargo 與 sidecar，於是「略過重建」的人在不知情下連機密掃描一起關掉了。
+if ($true) {
     $ScanTest = Join-Path $ScriptDir "test-release-scan.ps1"
     $hosts = @()
     foreach ($h in @('powershell', 'pwsh')) {
@@ -202,8 +208,17 @@ if (-not $SkipSlow) {
             if ($LASTEXITCODE -ne 0) { Bad ("release-scan 測試在 " + $h + " 下失敗") }
             else { Ok ("release-scan 測試通過 (" + (Split-Path $h -Leaf) + ")") }
         }
+        # 在 Windows 上少一個 host 是**失敗**而非警告：`npm run release` 走的正是
+        # Windows PowerShell 5.1，若它沒跑過，這份腳本回報 PASS 等於替一條從未
+        # 驗過的出貨路徑背書。非 Windows 上 `powershell` 本來就不存在，那裡才是
+        # 警告。
         if ($hosts.Count -lt 2) {
-            Warn "只找到一個 PowerShell host；正式 release 走 Windows PowerShell 5.1，請確認它也跑過"
+            $onWindows = if (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) { $IsWindows } else { $true }
+            if ($onWindows) {
+                Bad "只找到一個 PowerShell host。正式 release 走 Windows PowerShell 5.1，兩個 host 都必須跑過才算通過"
+            } else {
+                Warn "只找到一個 PowerShell host（非 Windows 環境）；正式 release 走 5.1，須在 Windows 上補驗"
+            }
         }
     }
 }
