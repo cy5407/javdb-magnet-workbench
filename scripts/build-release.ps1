@@ -15,9 +15,11 @@
 #   4. Audit staging dir         (whitelist: exe + exe + README.txt; nothing else)
 #   5. Binary content scan       (tokens / magnets / Cloudflare cookies must NOT
 #                                 appear in either exe)
-#   6. Source secret scan        (same patterns over every `git ls-files`
-#                                 entry, read from disk; fails if it walks
-#                                 0 files)
+#   6. Source secret scan        (same patterns, case-insensitive, over every
+#                                 tracked text file; no file-level exemptions —
+#                                 known fixtures are allowlisted by exact
+#                                 value. Fails closed on unreadable files, on
+#                                 an eligible/scanned mismatch, and on 0 files)
 #   7. Compress-Archive → release/JavDBMagnet_<version>_portable.zip
 #   8. SHA256 for zip + 2 exes  → release/SHA256SUMS.txt
 #   9. Write release/release-manifest.json
@@ -73,6 +75,26 @@ function FailExit($msg) {
 # ---------------------------------------------------------------------------
 # Step 0: Prepare release/ output dir
 # ---------------------------------------------------------------------------
+Step "Verifying working tree is clean"
+# The build reads the WORKING TREE (npm/cargo/PyInstaller all compile what is on
+# disk), but the manifest records `git rev-parse HEAD`. With uncommitted edits
+# those two describe different code, and the manifest silently vouches for a
+# commit that was never what shipped.
+#
+# Untracked files matter just as much and are easy to miss: `git ls-files` does
+# not see them, so the source scan skips them entirely — yet PyInstaller
+# resolves the sidecar's dependency graph from the repo root, so an untracked
+# top-level module CAN be pulled into sidecar.exe. Scanning "every tracked
+# file" is not the same as scanning every build input.
+$treeStatus = & git -C $RepoRoot status --porcelain
+if ($LASTEXITCODE -ne 0) { FailExit "git status failed (exit $LASTEXITCODE); refusing to build" }
+if ($treeStatus) {
+    Write-Output "    Working tree is not clean:"
+    $treeStatus | ForEach-Object { Write-Output ("      " + $_) }
+    FailExit "Refusing to build: commit or stash everything first, so git_commit describes what actually ships."
+}
+Ok "Working tree clean (tracked + untracked)"
+
 Step "Preparing release output directory"
 if (-not (Test-Path $ReleaseOutDir)) { New-Item -ItemType Directory -Force -Path $ReleaseOutDir | Out-Null }
 # Clean previous run's artifacts under release/ (zip, sums, manifest, staging).
@@ -243,12 +265,24 @@ $ScanTargets = @(
 )
 
 $Patterns = @(
+    # Every pattern below is matched case-INSENSITIVELY (see $RxOpts). URI
+    # schemes are case-insensitive per RFC 3986, and this project's own parser
+    # agrees: sidecar.py lower-cases before its `startswith("magnet:")` check
+    # and _REDACT_MAGNET_RX carries re.IGNORECASE. A case-sensitive scan would
+    # therefore miss `MAGNET:?XT=URN:BTIH:...` — a string production happily
+    # accepts and interns. Verified: register_magnets returns ok for the
+    # upper-case form while the old pattern did not match it at all.
     @{ name = 'urn:btih:<40hex>';            rx = 'urn:btih:[a-fA-F0-9]{40}' },
-    # `{16,}` 而非 `+`：redact_magnet() 的輸出是固定 8 碼十六進位，用 `+` 會讓
-    # 這條 pattern 攔下專案自己**正確遮蔽後**的形式。真實 BTIH 是 40 碼（v1）
-    # 或 64 碼（v2），16 是安全的分界——放行 8 碼遮蔽輸出，攔下任何真實長度。
-    # 這個收緊讓三份文件不必再整檔豁免（見下方 $skipFiles）。
-    @{ name = 'magnet:?xt=urn:btih:';        rx = 'magnet:\?xt=urn:btih:' + '[a-fA-F0-9]{16,}' },
+    # BitTorrent v1 infohashes are 40 hex OR 32 base32 (BEP 9); v2 uses a
+    # different URN entirely (`urn:btmh:`, BEP 52). An earlier commit message
+    # claimed "64-hex btih v2" — that form does not exist. Cover all three.
+    @{ name = 'urn:btih:<32base32>';         rx = 'urn:btih:[A-Z2-7]{32}' },
+    @{ name = 'urn:btmh: (BitTorrent v2)';   rx = 'urn:bt' + 'mh:[a-fA-F0-9]{10,}' },
+    # `{16,}` rather than `+`: redact_magnet()'s output is a fixed 8 hex chars,
+    # so `+` made this pattern flag the project's own CORRECTLY REDACTED form.
+    # Real v1 infohashes are 40 hex (or 32 base32); 16 is a safe floor that
+    # passes the 8-char redacted form and catches every real length.
+    @{ name = 'magnet:?xt=';                 rx = 'magnet:\?xt=urn:bt' + '[im]h:[a-zA-Z0-9]{16,}' },
     @{ name = 'Cloudflare clearance cookie'; rx = 'cf' + '_clearance=' + '[A-Za-z0-9_.-]{20,}' },
     @{ name = 'Cloudflare bot cookie';       rx = '__cf' + '_bm=' + '[A-Za-z0-9_.-]{20,}' },
     @{ name = 'JavDB session cookie';        rx = '_jdb' + '_session=' + '[A-Za-z0-9_.-]{10,}' },
@@ -257,6 +291,10 @@ $Patterns = @(
     @{ name = 'Bearer <30+ char token>';     rx = 'Bearer ' + '[A-Za-z0-9_-]{30,}' },
     @{ name = 'RD_API_TOKEN=<value>';        rx = 'RD_API' + '_TOKEN=' + '[A-Za-z0-9_-]{20,}' }
 )
+
+# All regex evaluation in this script goes through these options. See the
+# comment above $Patterns for why IgnoreCase is not optional here.
+$RxOpts = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
 
 $ScanFail = $false
 $BinaryHitCount = 0
@@ -282,14 +320,14 @@ foreach ($exe in $ScanTargets) {
     foreach ($enc in $Encodings) {
         $text = $enc.encoding.GetString($bytes)
         foreach ($p in $Patterns) {
-            $regexMatches = [regex]::Matches($text, $p.rx)
+            $regexMatches = [regex]::Matches($text, $p.rx, $RxOpts)
             if ($regexMatches.Count -gt 0) {
+                # Artifact + pattern + count ONLY. Never echo the matched value:
+                # the whole point of this step is that a secret reached a binary,
+                # and printing it would copy that secret into the build log —
+                # which, once this runs in CI, is a persistent artifact of its
+                # own. Reproduce locally if you need to see the value.
                 $hits += "      [$($enc.label)] $($p.name)  count=$($regexMatches.Count)"
-                $regexMatches | Select-Object -First 1 | ForEach-Object {
-                    $sample = $_.Value
-                    if ($sample.Length -gt 70) { $sample = $sample.Substring(0,70) + "..." }
-                    $hits += "        sample: $sample"
-                }
                 $BinaryHitCount += $regexMatches.Count
             }
         }
@@ -322,91 +360,134 @@ if ($ScanFail) { FailExit "Binary content scan failed" }
 # Untracked files are deliberately out of scope: they are neither committed
 # nor shipped inside the portable zip.
 # ---------------------------------------------------------------------------
-Step "Source secret scan (all tracked files)"
-$trackedFiles = & git -C $RepoRoot ls-files
+Step "Source secret scan (all tracked text files)"
+# -z + NUL split: without it git quotes paths containing non-ASCII or control
+# characters ("\303\251.md"), and the quoted name matches nothing on disk — the
+# file is then silently dropped from the scan.
+$lsRaw = & git -C $RepoRoot ls-files -z
 if ($LASTEXITCODE -ne 0) {
     Write-Error "FATAL: source-secret-scan git ls-files failed (exit $LASTEXITCODE). Refusing to ship a release without a source scan."
     exit 1
 }
-$sourceFiles = $trackedFiles |
-    Where-Object { $_ -and (Test-Path (Join-Path $RepoRoot $_) -PathType Leaf) } |
-    Sort-Object -Unique
+$sourceFiles = @(($lsRaw -join "") -split "`0" | Where-Object { $_ } | Sort-Object -Unique)
 $skipExt = @('.exe', '.msi', '.zip', '.7z', '.png', '.ico', '.icns', '.dll')
-# Files / paths whose job is to CONTAIN the patterns we're scanning for:
-#   - legacy_import.rs has secret-bearing test fixtures inline
-#   - commands.rs has the M9 cookie e2e tests (tests_cookies_e2e module)
-#     with `_jdb_session=...` fixture strings that touch the real
-#     Credential Manager via KeyringSandbox; the values are clearly
-#     non-secret placeholders (e2e_jdb_session, paste_session, etc.)
-#     but they trip the JavDB session cookie pattern regardless.
-#   - build-release.ps1 has the regex literals themselves
-#   - tests/        Python unittest fixtures (BTIH hex sentinels, etc.)
-#   - *.test.ts     Vitest fixtures (redacted magnet samples)
-# Skipping by exact path for the one-offs and by prefix/suffix for
-# the test directories keeps the rule resilient to new test files.
+
+# Known-synthetic literals, allowlisted BY EXACT VALUE rather than by file.
 #
-# Widening the scan from "changed files" to "all tracked files" surfaced four
-# prose files that quote magnet URIs while documenting the magnet-handling
-# code. Three of them only ever quoted redact_magnet()'s own 8-hex output and
-# stopped matching once the pattern above required 16+ hex — they are back
-# under the scan rather than exempt, which is the better outcome: a real
-# cookie or token pasted into them still fails the build.
+# The previous design skipped whole files (commands.rs, legacy_import.rs,
+# tests/, *.test.ts, four prose docs, and this script). That exempted ~23 text
+# files INCLUDING production Rust and the gate itself: any real token later
+# pasted into them would never have been seen. "Every tracked file" was not
+# true.
 #
-# Only the security-audit writeup still needs an exemption. It carries a full
-# 40-hex BTIH to demonstrate a dedupe-key collision PoC, where the whole point
-# is that the SAME string appears twice (once as a bare `btih:<hex>` href,
-# once inside a real magnet URI); the hash is arbitrary and paired with a
-# `dn=REAL` placeholder. It is a dated archive, so the alternative — truncating
-# the hash in the document — would mean editing a historical record.
-# Listed individually rather than exempting docs/ or prompt/ wholesale.
-$skipFiles = @(
-    'app/src-tauri/src/legacy_import.rs',
-    'app/src-tauri/src/commands.rs',
-    'scripts/build-release.ps1',
-    'prompt/security-audit-fixes-2026-07-28.md'
+# Now nothing is exempt. Every tracked text file is scanned, and a match only
+# passes if its exact text appears below. Each entry is a fixture whose
+# synthetic nature is self-evident (DEADBEEF / repeated nibbles / sequential
+# counters / obvious placeholder session names), except the one PoC hash in the
+# security-audit archive, which demonstrates a dedupe-key collision where the
+# point is that the SAME arbitrary string appears twice.
+#
+# Adding an entry here is a visible, reviewable diff line — unlike adding a
+# file to a skip list, which blinds the scanner to everything in that file
+# forever. A NEW fixture will fail the build until it is listed; that is the
+# intended cost.
+$AllowedLiterals = @(
+    'urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920',
+    'urn:btih:0201592fdeadbeef0201592fdeadbeef02015920',
+    'urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
+    'urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEF',
+    'urn:btih:0201592f00000000000000000000000000000001',
+    'urn:btih:0201592f00000000000000000000000000000002',
+    'urn:btih:0000000000000000000000000000000000000001',
+    'urn:btih:0000000000000000000000000000000000000002',
+    'urn:btih:0000000000000000000000000000000000000003',
+    'urn:btih:0123456789abcdef0123456789abcdef01234567',
+    'urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    'urn:btih:cccccccccccccccccccccccccccccccccccccccc',
+    'urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01',
+    'urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    'urn:btih:cccccccccccccccccccccccccccccccc',
+    # Dedupe-key collision PoC (prompt/security-audit-fixes-2026-07-28.md).
+    'urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a',
+    'magnet:?xt=urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920',
+    'magnet:?xt=urn:btih:0201592fdeadbeef0201592fdeadbeef02015920',
+    'magnet:?xt=urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
+    'magnet:?xt=urn:btih:0201592f00000000000000000000000000000001',
+    'magnet:?xt=urn:btih:0201592f00000000000000000000000000000002',
+    'magnet:?xt=urn:btih:0000000000000000000000000000000000000001',
+    'magnet:?xt=urn:btih:0000000000000000000000000000000000000002',
+    'magnet:?xt=urn:btih:0000000000000000000000000000000000000003',
+    'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567',
+    'magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    'magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccccccccccc',
+    'magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a',
+    'magnet:?xt=urn:btih:0123456789abcdef',
+    'magnet:?xt=urn:btih:ABCDEF0123456789',
+    'MAGNET:?xt=urn:btih:ABCDEF0123456789',
+    'MAGNET:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01',
+    'magnet:?xt=urn:btih:fedcba9876543210',
+    # Placeholder cookie values in the Rust cookie-store tests.
+    '_jdb_session=paste_session',
+    '_jdb_session=keep_me_alive',
+    '_jdb_session=e2e_jdb_session',
+    '_jdb_session=regress_session',
+    '_jdb_session=preexisting_session',
+    '_jdb_session=label_test',
+    '_jdb_session=older_keyring_value',
+    '_jdb_session=keyring_only',
+    '_jdb_session=resurrect_me'
 )
-$skipPrefixes = @('tests/')
-$skipSuffixes = @('.test.ts', '.test.js', '.test.tsx', '.spec.ts')
-$SourceHits = @()
-$SourceScannedCount = 0
+
+$SourceHits    = @()
+$SourceEligible = 0   # tracked, non-binary, i.e. in scope
+$SourceScanned  = 0   # actually read and regexed
+$SourceAllowed  = 0   # matched but present in $AllowedLiterals
 foreach ($rel in $sourceFiles) {
-    if ($skipFiles -contains $rel) { continue }
-    $relForward = $rel.Replace('\', '/')
-    $skipThis = $false
-    foreach ($p in $skipPrefixes) { if ($relForward.StartsWith($p)) { $skipThis = $true; break } }
-    if ($skipThis) { continue }
-    foreach ($s in $skipSuffixes) { if ($relForward.EndsWith($s)) { $skipThis = $true; break } }
-    if ($skipThis) { continue }
     $full = Join-Path $RepoRoot $rel
+    # -LiteralPath: a tracked file called `notes[1].md` is a valid wildcard to
+    # Test-Path, which would report it missing and drop it from the scan.
+    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
     if ($skipExt -contains ([System.IO.Path]::GetExtension($full).ToLowerInvariant())) { continue }
-    $text = Get-Content -LiteralPath $full -Raw -ErrorAction SilentlyContinue
-    if ($null -eq $text) { continue }
-    $SourceScannedCount++
+    $SourceEligible++
+    # Fail CLOSED on read errors. The old code used -ErrorAction SilentlyContinue
+    # and `continue`d on $null, so an unreadable file vanished from the scan
+    # while the run still reported success — a file the scanner could not read
+    # is exactly the file worth worrying about.
+    try {
+        $text = Get-Content -LiteralPath $full -Raw -ErrorAction Stop
+    } catch {
+        FailExit ("Source secret scan could not read " + $rel + ": " + $_.Exception.Message)
+    }
+    if ($null -eq $text) { $text = "" }   # legitimately empty file
+    $SourceScanned++
     foreach ($p in $Patterns) {
-        $regexMatches = [regex]::Matches($text, $p.rx)
-        if ($regexMatches.Count -gt 0) {
-            $SourceHits += [pscustomobject]@{
-                File = $rel
-                Pattern = $p.name
-                Count = $regexMatches.Count
-            }
+        foreach ($m in [regex]::Matches($text, $p.rx, $RxOpts)) {
+            if ($AllowedLiterals -ccontains $m.Value) { $SourceAllowed++; continue }
+            $SourceHits += ("      " + $rel + "  [" + $p.name + "]")
         }
     }
 }
 if ($SourceHits.Count -gt 0) {
-    Write-Host "    SOURCE secret pattern hits:" -ForegroundColor Red
-    $SourceHits | ForEach-Object {
-        Write-Host ("      {0}  {1}  count={2}" -f $_.File, $_.Pattern, $_.Count) -ForegroundColor Red
-    }
+    Write-Host "    Source secret scan LEAK:" -ForegroundColor Red
+    # File + pattern only, never the matched text (same reasoning as the binary
+    # scan above).
+    $SourceHits | Sort-Object -Unique | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+    Write-Host "    If a hit is a synthetic fixture, add its exact value to `$AllowedLiterals." -ForegroundColor Red
     FailExit "Source secret scan failed"
 }
 # A scan that walked nothing must never report success — that is the exact
 # failure mode this step was rewritten to eliminate, so assert it explicitly
 # instead of trusting the file list to be non-empty.
-if ($SourceScannedCount -eq 0) {
-    FailExit "Source secret scan walked 0 files — the scan is not covering anything. Check git ls-files and the skip lists."
+if ($SourceScanned -eq 0) {
+    FailExit "Source secret scan walked 0 files — the scan is not covering anything. Check git ls-files and skipExt."
 }
-Ok ("No source secret patterns (" + $SourceScannedCount + " tracked files scanned)")
+if ($SourceScanned -ne $SourceEligible) {
+    FailExit ("Source secret scan read " + $SourceScanned + " of " + $SourceEligible + " eligible files; refusing to ship a partial scan.")
+}
+Ok ("No unexpected source secrets (" + $SourceScanned + " text files scanned, " + $SourceAllowed + " allowlisted fixture matches)")
 
 # ---------------------------------------------------------------------------
 # Step 8: Compress staging dir to release/JavDBMagnet_<v>_portable.zip
@@ -471,10 +552,16 @@ $manifest = [ordered]@{
         portable_forbidden_files = 0
         binary_secret_hits       = $BinaryHitCount
         source_secret_hits       = $SourceHits.Count
-        # Recorded so `source_secret_hits: 0` is interpretable. Without the
-        # denominator a scan that covered nothing is indistinguishable from
-        # one that covered the whole repo and found nothing.
-        source_files_scanned     = $SourceScannedCount
+        # Denominators, so `source_secret_hits: 0` is interpretable: without
+        # them a scan that covered nothing is indistinguishable from one that
+        # covered the whole repo and found nothing. `eligible` vs `scanned`
+        # must be equal — a gap means files were dropped.
+        source_files_eligible    = $SourceEligible
+        source_files_scanned     = $SourceScanned
+        source_allowlisted_hits  = $SourceAllowed
+        # The build compiles the working tree; this records that the tree
+        # matched git_commit exactly, so the commit really describes what shipped.
+        working_tree_clean       = $true
     }
     signing     = @{
         requested = ($env:SIGN -eq "1")

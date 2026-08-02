@@ -303,7 +303,8 @@ npm run release
 3. 在 `release/JavDBMagnet/` 暫存 `javdbmagnet.exe` + `sidecar.exe` + `README.txt`
 4. Staging 白名單稽核（只允許上述 3 個檔；其他任何檔案 → fail）
 5. 兩個 exe 內容掃 secret pattern（BTIH hash、Cloudflare cookie、Bearer token、RD token、magnet URI）→ 命中即 fail
-6. 掃描本次變更的 source/docs 是否含 secret pattern
+6. 掃描**全部受追蹤文字檔**是否含 secret pattern（大小寫不敏感；無整檔豁免，
+   已知測試 fixture 以完整字面量列入 allowlist）→ 命中即 fail
 7. `Compress-Archive` 產 `release/JavDBMagnet_<version>_portable.zip`（zip root 為 `JavDBMagnet/`）
 8. 算 SHA256（portable.zip / javdbmagnet.exe / sidecar.exe），寫入 `release/SHA256SUMS.txt`
 9. 寫 release manifest 到 `release/release-manifest.json`（`"bundle": "portable-zip"`）
