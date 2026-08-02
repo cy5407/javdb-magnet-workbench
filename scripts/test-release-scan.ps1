@@ -80,18 +80,24 @@ Write-Output ""
 Write-Output "== 4. Red tests: each planted secret must fail the scan =="
 # Every entry is a form production accepts. A regression that narrows the
 # scanner shows up here as a [FAIL].
+#
+# Each payload is SPLIT across a `+` in source so this file's own text does not
+# contain a contiguous secret-shaped literal — otherwise the scan flags this
+# file, and "fix" would mean allowlisting the payloads, which would stop the
+# red tests from ever failing. Same technique build-release.ps1 uses for its
+# own $Patterns. The runtime value is unchanged.
 $probes = @(
-    @{ n = 'plain 40-hex magnet';   f = 'README.md';                      s = 'magnet:?xt=urn:btih:ff11ee22dd33cc44bb55aa6699887766554433ff' },
-    @{ n = 'upper-case MAGNET';     f = 'README.md';                      s = 'MAGNET:?XT=URN:BTIH:1234567890ABCDEF1234567890ABCDEF12345678' },
-    @{ n = 'percent-encoded magnet';f = 'CLAUDE.md';                      s = 'magnet:?xt=urn%3Abtih%3Aff11ee22dd33cc44bb55aa6699887766554433ee' },
-    @{ n = 'base32 v1 infohash';    f = 'CLAUDE.md';                      s = 'urn:btih:MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U' },
-    @{ n = 'btmh v2 infohash';      f = 'app_logging.py';                 s = '# urn:btmh:1220abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567' },
-    @{ n = '40-hex plus 2 (greedy)';f = 'rd_outcome_log.py';              s = '# urn:btih:0123456789abcdef0123456789abcdef01234567FF' },
-    @{ n = 'RD token, spaces+quotes';f = 'pyproject.toml';                s = '# RD_API_TOKEN = "Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MA"' },
-    @{ n = 'RD token, short';       f = 'sonar-project.properties';       s = '# RD_API_TOKEN=sh0rtTok' },
-    @{ n = 'cookie with spaces';    f = 'requirements-ci.txt';            s = '# _jdb_session = LiveSessionValue123456' },
-    @{ n = 'Bearer token68 charset';f = 'javdb_scraper.py';               s = '# Authorization: Bearer ab.cd~ef+gh/ij=klmnopqrst' },
-    @{ n = 'secret in production rs';f = 'app/src-tauri/src/pending.rs';  s = '// cf_clearance=RealLookingClearanceValue999' }
+    @{ n = 'plain 40-hex magnet';   f = 'README.md';                      s = 'magnet:?xt=urn:bt' + 'ih:ff11ee22dd33cc44bb55aa6699887766554433ff' },
+    @{ n = 'upper-case MAGNET';     f = 'README.md';                      s = 'MAGNET:?XT=URN:BT' + 'IH:1234567890ABCDEF1234567890ABCDEF12345678' },
+    @{ n = 'percent-encoded magnet';f = 'CLAUDE.md';                      s = 'magnet:?xt=urn%3Abt' + 'ih%3Aff11ee22dd33cc44bb55aa6699887766554433ee' },
+    @{ n = 'base32 v1 infohash';    f = 'CLAUDE.md';                      s = 'urn:bt' + 'ih:MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U' },
+    @{ n = 'btmh v2 infohash';      f = 'app_logging.py';                 s = '# urn:bt' + 'mh:1220abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567' },
+    @{ n = '40-hex plus 2 (greedy)';f = 'rd_outcome_log.py';              s = '# urn:bt' + 'ih:0123456789abcdef0123456789abcdef01234567FF' },
+    @{ n = 'RD token, spaces+quotes';f = 'pyproject.toml';                s = '# RD_API' + '_TOKEN = "Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MA"' },
+    @{ n = 'RD token, short';       f = 'sonar-project.properties';       s = '# RD_API' + '_TOKEN=sh0rtTok' },
+    @{ n = 'cookie with spaces';    f = 'requirements-ci.txt';            s = '# _jdb' + '_session = LiveSessionValue123456' },
+    @{ n = 'Bearer token68 charset';f = 'javdb_scraper.py';               s = '# Authorization: ' + 'Bea' + 'rer ab.cd~ef+gh/ij=klmnopqrst' },
+    @{ n = 'secret in production rs';f = 'app/src-tauri/src/pending.rs';  s = '// cf' + '_clearance=RealLookingClearanceValue999' }
 )
 foreach ($p in $probes) {
     $full = Join-Path $RepoRoot $p.f
@@ -113,7 +119,7 @@ $u16 = Join-Path $RepoRoot "docs/troubleshooting/rd-token.md"
 $origBytes = [System.IO.File]::ReadAllBytes($u16)
 try {
     $payload = ([System.Text.Encoding]::UTF8.GetString($origBytes)) +
-               "`nmagnet:?xt=urn:btih:aa11bb22cc33dd44ee55ff6677889900aabbccdd`n"
+               "`nmagnet:?xt=urn:bt" + "ih:aa11bb22cc33dd44ee55ff6677889900aabbccdd`n"
     [System.IO.File]::WriteAllBytes($u16,
         [System.Text.Encoding]::BigEndianUnicode.GetPreamble() +
         [System.Text.Encoding]::BigEndianUnicode.GetBytes($payload))
