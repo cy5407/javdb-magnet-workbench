@@ -35,6 +35,14 @@
 # Or from app/:
 #     npm run release
 
+param(
+    # Run ONLY the source secret scan and exit. No build, no staging, no zip.
+    # Added so this gate can actually be executed and red-tested on its own:
+    # a full release run costs minutes of PyInstaller + cargo before it would
+    # ever reach the scan.
+    [switch]$AuditOnly
+)
+
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
@@ -75,6 +83,312 @@ function FailExit($msg) {
 # ---------------------------------------------------------------------------
 # Step 0: Prepare release/ output dir
 # ---------------------------------------------------------------------------
+
+$Patterns = @(
+    # Every pattern below is matched case-INSENSITIVELY (see $RxOpts). URI
+    # schemes are case-insensitive per RFC 3986, and this project's own parser
+    # agrees: sidecar.py lower-cases before its `startswith("magnet:")` check
+    # and _REDACT_MAGNET_RX carries re.IGNORECASE. A case-sensitive scan would
+    # therefore miss `MAGNET:?XT=URN:BTIH:...` — a string production happily
+    # accepts and interns. Verified: register_magnets returns ok for the
+    # upper-case form while the old pattern did not match it at all.
+    # GREEDY `{40,}`, not `{40}` and not `{40}(?!hex)`. All three were tried:
+    #   {40}            — a 42-hex value matches its first 40 chars, and if
+    #                     those 40 are allowlisted the real value passes.
+    #   {40}(?![hex])   — a 42-hex value then matches NOTHING AT ALL (the
+    #                     lookahead fails at every start offset), which is a
+    #                     bigger hole than the one it was meant to close. This
+    #                     was caught by executing the red test, not by reading.
+    #   {40,}           — consumes the whole run, so anything longer than an
+    #                     allowlisted literal is a distinct value and fails.
+    @{ name = 'urn:btih:<40+hex>';           rx = 'urn:btih:[a-fA-F0-9]{40,}' },
+    # BitTorrent v1 infohashes are 40 hex OR 32 base32 (BEP 9); v2 uses a
+    # different URN entirely (`urn:btmh:`, BEP 52). An earlier commit message
+    # claimed "64-hex btih v2" — that form does not exist. Cover all three.
+    @{ name = 'urn:btih:<32+base32>';        rx = 'urn:btih:[A-Z2-7]{32,}' },
+    @{ name = 'urn:btmh: (BitTorrent v2)';   rx = 'urn:bt' + 'mh:[a-fA-F0-9]{10,}' },
+    # `{16,}` rather than `+`: redact_magnet()'s output is a fixed 8 hex chars,
+    # so `+` made this pattern flag the project's own CORRECTLY REDACTED form.
+    # Real v1 infohashes are 40 hex (or 32 base32); 16 is a safe floor that
+    # passes the 8-char redacted form and catches every real length.
+    @{ name = 'magnet:?xt=';                 rx = 'magnet:\?xt=urn:bt' + '[im]h:[a-zA-Z0-9]{16,}' },
+    # Length floors and separator grammar now follow what PRODUCTION accepts,
+    # not what a "realistic" secret looks like. secret_store.rs takes 1-255
+    # ASCII alphanumerics; legacy_import.rs trims whitespace around `=` and
+    # strips surrounding quotes; parse_cookie_string trims each `k = v` pair.
+    # A scanner narrower than the parser is a scanner with a documented hole,
+    # so `\s*`, optional quotes and a floor of 1 are all deliberate. The cost
+    # is that short test fixtures now match — they are listed in
+    # $AllowedLiterals, which is exactly the reviewable-diff tradeoff this
+    # design already makes everywhere else.
+    @{ name = 'Cloudflare clearance cookie'; rx = 'cf' + '_clearance\s*=\s*["'']?' + '[A-Za-z0-9_.~+/=-]{1,}' },
+    @{ name = 'Cloudflare bot cookie';       rx = '__cf' + '_bm\s*=\s*["'']?' + '[A-Za-z0-9_.~+/=-]{1,}' },
+    @{ name = 'JavDB session cookie';        rx = '_jdb' + '_session\s*=\s*["'']?' + '[A-Za-z0-9_.~+/=-]{1,}' },
+    @{ name = 'remember_me_token=';          rx = 'remember_me_token\s*=\s*["'']?' + '[A-Za-z0-9_.~+/=-]{1,}' },
+    # token68 (RFC 7235) allows -._~+/ and trailing '='; the old [A-Za-z0-9_-]
+    # stopped at the first '.' and reported a truncated match.
+    @{ name = 'Authorization bearer header'; rx = 'Authorization:\s*' + 'Bearer\s+' + '[A-Za-z0-9_.~+/=-]{8,}' },
+    @{ name = 'Bearer <token>';              rx = 'Bearer\s+' + '[A-Za-z0-9_.~+/=-]{16,}' },
+    @{ name = 'RD_API_TOKEN=<value>';        rx = 'RD_API' + '_TOKEN\s*=\s*["'']?' + '[A-Za-z0-9_-]{1,}' }
+)
+
+# All regex evaluation in this script goes through these options. See the
+# comment above $Patterns for why IgnoreCase is not optional here.
+$RxOpts = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+
+$ScanFail = $false
+$BinaryHitCount = 0
+# We decode the binary bytes both as ASCII *and* UTF-16LE because PE
+# images routinely embed strings in both encodings:
+#   - ASCII / UTF-8 covers Rust &str literals, format!() output, and
+#     anything wired through libc-style APIs.
+#   - UTF-16LE covers strings handed to the Win32 wide API (e.g. a
+#     `let path = format!("HKCU\\...\\{}", token);` later passed to
+#     `RegOpenKeyExW`), which would otherwise sail past an ASCII-only
+#     scan even though the secret material is plainly readable in a
+#     hex dump.
+# Running both passes is cheap (two regex sweeps over the same byte
+# blob); failing to do it would silently halve the scan's coverage.
+$Encodings = @(
+    @{ label = 'ASCII';      encoding = [System.Text.Encoding]::ASCII },
+    @{ label = 'UTF-16LE';   encoding = [System.Text.Encoding]::Unicode }
+)
+
+function Invoke-SourceSecretScan {
+
+    # ---------------------------------------------------------------------------
+    # Step 7: Source secret scan — over EVERY tracked file
+    #
+    # This used to derive its file list from `git diff <origin/HEAD>..HEAD` plus
+    # the working-tree diff. That made coverage depend on where HEAD happened to
+    # sit: cutting a release from an already-pushed master left both diffs empty,
+    # so the scan walked ZERO files and still wrote `source_secret_hits: 0` into
+    # the manifest — a vacuous pass that read exactly like a real one. It was
+    # found the hard way: a magnet literal sat in verify-windows-build.ps1 from
+    # the commit that introduced it and was never once scanned, until an
+    # unrelated edit to that file finally pulled it into the diff.
+    #
+    # The file list now comes from `git ls-files`, so coverage is a property of
+    # the repo rather than of the branch topology. Content is read from disk, so
+    # uncommitted edits to tracked files are scanned as they actually are.
+    # Untracked files are deliberately out of scope: they are neither committed
+    # nor shipped inside the portable zip.
+    # ---------------------------------------------------------------------------
+    Step "Source secret scan (all tracked text files)"
+    # -z + NUL split: without it git quotes paths containing non-ASCII or control
+    # characters ("\303\251.md"), and the quoted name matches nothing on disk — the
+    # file is then silently dropped from the scan.
+    # Windows PowerShell 5.1 decodes native-command output using the console code
+    # page, not UTF-8. A tracked filename with non-ASCII characters would come back
+    # mangled, Test-Path would then fail to resolve it, and the entry would vanish
+    # from the scan. Force UTF-8 for the duration of the git call.
+    $prevOutEnc = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        $lsRaw = & git -C $RepoRoot ls-files -z
+        $lsExit = $LASTEXITCODE
+    } finally {
+        [Console]::OutputEncoding = $prevOutEnc
+    }
+    if ($lsExit -ne 0) {
+        Write-Error "FATAL: source-secret-scan git ls-files failed (exit $lsExit). Refusing to ship a release without a source scan."
+        exit 1
+    }
+    $sourceFiles = @(($lsRaw -join "") -split "`0" | Where-Object { $_ } | Sort-Object -Unique)
+    $skipExt = @('.exe', '.msi', '.zip', '.7z', '.png', '.ico', '.icns', '.dll')
+
+    # Known-synthetic literals, allowlisted BY EXACT VALUE rather than by file.
+    #
+    # The previous design skipped whole files (commands.rs, legacy_import.rs,
+    # tests/, *.test.ts, four prose docs, and this script). That exempted ~23 text
+    # files INCLUDING production Rust and the gate itself: any real token later
+    # pasted into them would never have been seen. "Every tracked file" was not
+    # true.
+    #
+    # Now nothing is exempt. Every tracked text file is scanned, and a match only
+    # passes if its exact text appears below. Each entry is a fixture whose
+    # synthetic nature is self-evident (DEADBEEF / repeated nibbles / sequential
+    # counters / obvious placeholder session names), except the one PoC hash in the
+    # security-audit archive, which demonstrates a dedupe-key collision where the
+    # point is that the SAME arbitrary string appears twice.
+    #
+    # Adding an entry here is a visible, reviewable diff line — unlike adding a
+    # file to a skip list, which blinds the scanner to everything in that file
+    # forever. A NEW fixture will fail the build until it is listed; that is the
+    # intended cost.
+    $AllowedLiterals = @(
+        'urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920',
+        'urn:btih:0201592fdeadbeef0201592fdeadbeef02015920',
+        'urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
+        'urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEF',
+        'urn:btih:0201592f00000000000000000000000000000001',
+        'urn:btih:0201592f00000000000000000000000000000002',
+        'urn:btih:0000000000000000000000000000000000000001',
+        'urn:btih:0000000000000000000000000000000000000002',
+        'urn:btih:0000000000000000000000000000000000000003',
+        'urn:btih:0123456789abcdef0123456789abcdef01234567',
+        'urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        'urn:btih:cccccccccccccccccccccccccccccccccccccccc',
+        'urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01',
+        'urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        'urn:btih:cccccccccccccccccccccccccccccccc',
+        # Dedupe-key collision PoC (prompt/security-audit-fixes-2026-07-28.md).
+        'urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a',
+        'magnet:?xt=urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920',
+        'magnet:?xt=urn:btih:0201592fdeadbeef0201592fdeadbeef02015920',
+        'magnet:?xt=urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
+        'magnet:?xt=urn:btih:0201592f00000000000000000000000000000001',
+        'magnet:?xt=urn:btih:0201592f00000000000000000000000000000002',
+        'magnet:?xt=urn:btih:0000000000000000000000000000000000000001',
+        'magnet:?xt=urn:btih:0000000000000000000000000000000000000002',
+        'magnet:?xt=urn:btih:0000000000000000000000000000000000000003',
+        'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567',
+        'magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        'magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccccccccccc',
+        'magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a',
+        'magnet:?xt=urn:btih:0123456789abcdef',
+        'magnet:?xt=urn:btih:ABCDEF0123456789',
+        'MAGNET:?xt=urn:btih:ABCDEF0123456789',
+        'MAGNET:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01',
+        'magnet:?xt=urn:btih:fedcba9876543210',
+        # Cookie / token fixtures. These only started matching once the patterns
+    # were widened to production's grammar (floor of 1 char, optional quotes
+    # and whitespace around `=`). Every value here is self-evidently a
+    # placeholder — XXX, `...`, brand_new, clear_me — and lives in a test or
+    # in documentation showing the cookie format.
+    'RD_API_TOKEN=abc-123',
+    '_jdb_session=...',
+    '_jdb_session=XXX',
+    '_jdb_session=abc',
+    '_jdb_session=abc123',
+    '_jdb_session=brand_new',
+    '_jdb_session=clear_me',
+    '_jdb_session=e2e_jdb_session',
+    '_jdb_session=keep_me_alive',
+    '_jdb_session=keyring_only',
+    '_jdb_session=label_test',
+    '_jdb_session=new',
+    '_jdb_session=older_keyring_value',
+    '_jdb_session=paste_session',
+    '_jdb_session=preexisting_session',
+    '_jdb_session=regress_session',
+    '_jdb_session=resurrect_me',
+    '_jdb_session=xyz',
+    'cf_clearance=...',
+    'cf_clearance=XXX',
+    'cf_clearance=brand_new',
+    'cf_clearance=clear_cf',
+    'cf_clearance=e2e_cf_clearance',
+    'cf_clearance=fresh',
+    'cf_clearance=label_test_cf',
+    'cf_clearance=paste_cf',
+    'cf_clearance=preexisting_cf',
+    'cf_clearance=regress_cf',
+    'cf_clearance=resurrect_cf',
+    'cf_clearance=xyz',
+    'cf_clearance=xyz789',
+    # Placeholder cookie values in the Rust cookie-store tests.
+        '_jdb_session=paste_session',
+        '_jdb_session=keep_me_alive',
+        '_jdb_session=e2e_jdb_session',
+        '_jdb_session=regress_session',
+        '_jdb_session=preexisting_session',
+        '_jdb_session=label_test',
+        '_jdb_session=older_keyring_value',
+        '_jdb_session=keyring_only',
+        '_jdb_session=resurrect_me'
+    )
+
+    $SourceHits    = @()
+    $SourceEligible = 0   # tracked, non-binary, i.e. in scope
+    $SourceScanned  = 0   # actually read and regexed
+    $SourceAllowed  = 0   # matched but present in $AllowedLiterals
+    foreach ($rel in $sourceFiles) {
+        $full = Join-Path $RepoRoot $rel
+        if ($skipExt -contains ([System.IO.Path]::GetExtension($rel).ToLowerInvariant())) { continue }
+        $SourceEligible++
+        # -LiteralPath: a tracked file called `notes[1].md` is a valid wildcard to
+        # Test-Path, which would report it missing.
+        #
+        # Fail CLOSED here, and count the entry as eligible BEFORE testing it. The
+        # earlier version skipped unresolvable paths before incrementing, so the
+        # eligible-equals-scanned invariant could never detect them — the exact
+        # blind spot that invariant was added to close. The working tree is
+        # verified clean at Step 0, so every index entry must exist on disk; one
+        # that does not means the path came back mangled (encoding) or something
+        # changed underneath the build.
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+            FailExit ("Source secret scan could not resolve tracked path: " + $rel + " — refusing to ship a partial scan.")
+        }
+        # Fail CLOSED on read errors. The old code used -ErrorAction SilentlyContinue
+        # and `continue`d on $null, so an unreadable file vanished from the scan
+        # while the run still reported success — a file the scanner could not read
+        # is exactly the file worth worrying about.
+        # Read BYTES, not text. Get-Content -Raw picks an encoding for you, and the
+        # default differs between Windows PowerShell 5.1 and PowerShell 7: a
+        # BOM-less UTF-16LE file decodes into ASCII interleaved with NULs, so a
+        # perfectly readable secret matches nothing while I/O "succeeds" and
+        # eligible still equals scanned.
+        try {
+            $bytes = [System.IO.File]::ReadAllBytes($full)
+        } catch {
+            FailExit ("Source secret scan could not read " + $rel + ": " + $_.Exception.Message)
+        }
+        $SourceScanned++
+        # Same two-encoding sweep the binary scan does, plus a percent-decoded pass
+        # of each: production normalises `magnet:?xt=urn%3Abtih%3A<hash>` back to
+        # `btih:<hash>` (verified via _magnet_dedupe_key) and interns it, so a scan
+        # that only sees the raw bytes misses an escaped magnet entirely.
+        $variants = New-Object System.Collections.Generic.List[string]
+        foreach ($enc in $Encodings) {
+            $decoded = $enc.encoding.GetString($bytes)
+            $variants.Add($decoded)
+            try { $variants.Add([System.Uri]::UnescapeDataString($decoded)) } catch { }
+        }
+        foreach ($text in $variants) {
+            foreach ($p in $Patterns) {
+                foreach ($m in [regex]::Matches($text, $p.rx, $RxOpts)) {
+                    if ($AllowedLiterals -ccontains $m.Value) { $SourceAllowed++; continue }
+                    $SourceHits += ("      " + $rel + "  [" + $p.name + "]")
+                }
+            }
+        }
+    }
+    if ($SourceHits.Count -gt 0) {
+        Write-Host "    Source secret scan LEAK:" -ForegroundColor Red
+        # File + pattern only, never the matched text (same reasoning as the binary
+        # scan above).
+        $SourceHits | Sort-Object -Unique | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+        Write-Host "    If a hit is a synthetic fixture, add its exact value to `$AllowedLiterals." -ForegroundColor Red
+        FailExit "Source secret scan failed"
+    }
+    # A scan that walked nothing must never report success — that is the exact
+    # failure mode this step was rewritten to eliminate, so assert it explicitly
+    # instead of trusting the file list to be non-empty.
+    if ($SourceScanned -eq 0) {
+        FailExit "Source secret scan walked 0 files — the scan is not covering anything. Check git ls-files and skipExt."
+    }
+    if ($SourceScanned -ne $SourceEligible) {
+        FailExit ("Source secret scan read " + $SourceScanned + " of " + $SourceEligible + " eligible files; refusing to ship a partial scan.")
+    }
+    Ok ("No unexpected source secrets (" + $SourceScanned + " text files scanned, " + $SourceAllowed + " allowlisted fixture matches)")
+}
+
+# --------------------------------------------------------------------------
+# -AuditOnly: run just the scan and exit. The clean-tree gate is skipped on
+# this path ON PURPOSE — red-testing the scanner means planting a secret,
+# which necessarily dirties the tree. Never use this mode to ship.
+# --------------------------------------------------------------------------
+if ($AuditOnly) {
+    Write-Output "== AUDIT ONLY: source secret scan, no build =="
+    Invoke-SourceSecretScan
+    Write-Output "[PASS] audit-only scan clean"
+    exit 0
+}
+
 Step "Verifying working tree is clean"
 # The build reads the WORKING TREE (npm/cargo/PyInstaller all compile what is on
 # disk), but the manifest records `git rev-parse HEAD`. With uncommitted edits
@@ -88,8 +402,21 @@ Step "Verifying working tree is clean"
 # file" is not the same as scanning every build input.
 $BuildStartHead = (& git -C $RepoRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { FailExit "git rev-parse HEAD failed; refusing to build" }
-$treeStatus = & git -C $RepoRoot status --porcelain
+# --untracked-files=all explicitly: `status.showUntrackedFiles=no` in any
+# config layer would otherwise hide untracked files entirely, and untracked
+# top-level modules CAN be pulled into sidecar.exe by PyInstaller.
+$treeStatus = & git -C $RepoRoot status --porcelain --untracked-files=all
 if ($LASTEXITCODE -ne 0) { FailExit "git status failed (exit $LASTEXITCODE); refusing to build" }
+# assume-unchanged (h) and skip-worktree (S) make git report a clean tree while
+# the file on disk differs from the index — the build would compile content
+# that neither git status nor the source scan ever sees.
+$maskedEntries = & git -C $RepoRoot ls-files -v
+if ($LASTEXITCODE -ne 0) { FailExit "git ls-files -v failed; refusing to build" }
+$masked = @($maskedEntries | Where-Object { $_ -cmatch '^[a-z]' -or $_ -cmatch '^S ' })
+if ($masked.Count -gt 0) {
+    $masked | ForEach-Object { Write-Output ("      " + $_) }
+    FailExit "Tracked files are marked assume-unchanged/skip-worktree; git cannot vouch for their contents. Clear with: git update-index --no-assume-unchanged --no-skip-worktree <path>"
+}
 if ($treeStatus) {
     Write-Output "    Working tree is not clean:"
     $treeStatus | ForEach-Object { Write-Output ("      " + $_) }
@@ -265,62 +592,17 @@ $ScanTargets = @(
     (Join-Path $StagingDir "javdbmagnet.exe"),
     (Join-Path $StagingDir "sidecar.exe")
 )
-
-$Patterns = @(
-    # Every pattern below is matched case-INSENSITIVELY (see $RxOpts). URI
-    # schemes are case-insensitive per RFC 3986, and this project's own parser
-    # agrees: sidecar.py lower-cases before its `startswith("magnet:")` check
-    # and _REDACT_MAGNET_RX carries re.IGNORECASE. A case-sensitive scan would
-    # therefore miss `MAGNET:?XT=URN:BTIH:...` — a string production happily
-    # accepts and interns. Verified: register_magnets returns ok for the
-    # upper-case form while the old pattern did not match it at all.
-    @{ name = 'urn:btih:<40hex>';            rx = 'urn:btih:[a-fA-F0-9]{40}' },
-    # BitTorrent v1 infohashes are 40 hex OR 32 base32 (BEP 9); v2 uses a
-    # different URN entirely (`urn:btmh:`, BEP 52). An earlier commit message
-    # claimed "64-hex btih v2" — that form does not exist. Cover all three.
-    @{ name = 'urn:btih:<32base32>';         rx = 'urn:btih:[A-Z2-7]{32}' },
-    @{ name = 'urn:btmh: (BitTorrent v2)';   rx = 'urn:bt' + 'mh:[a-fA-F0-9]{10,}' },
-    # `{16,}` rather than `+`: redact_magnet()'s output is a fixed 8 hex chars,
-    # so `+` made this pattern flag the project's own CORRECTLY REDACTED form.
-    # Real v1 infohashes are 40 hex (or 32 base32); 16 is a safe floor that
-    # passes the 8-char redacted form and catches every real length.
-    @{ name = 'magnet:?xt=';                 rx = 'magnet:\?xt=urn:bt' + '[im]h:[a-zA-Z0-9]{16,}' },
-    @{ name = 'Cloudflare clearance cookie'; rx = 'cf' + '_clearance=' + '[A-Za-z0-9_.-]{20,}' },
-    @{ name = 'Cloudflare bot cookie';       rx = '__cf' + '_bm=' + '[A-Za-z0-9_.-]{20,}' },
-    @{ name = 'JavDB session cookie';        rx = '_jdb' + '_session=' + '[A-Za-z0-9_.-]{10,}' },
-    @{ name = 'remember_me_token=';          rx = 'remember_me_token=[A-Za-z0-9_.-]{10,}' },
-    @{ name = 'Authorization bearer header'; rx = 'Authorization:\s*' + 'Bearer\s+' + '[A-Za-z0-9_-]{20,}' },
-    @{ name = 'Bearer <30+ char token>';     rx = 'Bearer ' + '[A-Za-z0-9_-]{30,}' },
-    @{ name = 'RD_API_TOKEN=<value>';        rx = 'RD_API' + '_TOKEN=' + '[A-Za-z0-9_-]{20,}' }
-)
-
-# All regex evaluation in this script goes through these options. See the
-# comment above $Patterns for why IgnoreCase is not optional here.
-$RxOpts = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
-
-$ScanFail = $false
-$BinaryHitCount = 0
-# We decode the binary bytes both as ASCII *and* UTF-16LE because PE
-# images routinely embed strings in both encodings:
-#   - ASCII / UTF-8 covers Rust &str literals, format!() output, and
-#     anything wired through libc-style APIs.
-#   - UTF-16LE covers strings handed to the Win32 wide API (e.g. a
-#     `let path = format!("HKCU\\...\\{}", token);` later passed to
-#     `RegOpenKeyExW`), which would otherwise sail past an ASCII-only
-#     scan even though the secret material is plainly readable in a
-#     hex dump.
-# Running both passes is cheap (two regex sweeps over the same byte
-# blob); failing to do it would silently halve the scan's coverage.
-$Encodings = @(
-    @{ label = 'ASCII';      encoding = [System.Text.Encoding]::ASCII },
-    @{ label = 'UTF-16LE';   encoding = [System.Text.Encoding]::Unicode }
-)
 foreach ($exe in $ScanTargets) {
     $name = Split-Path $exe -Leaf
     $bytes = [System.IO.File]::ReadAllBytes($exe)
     $hits = @()
     foreach ($enc in $Encodings) {
-        $text = $enc.encoding.GetString($bytes)
+        $decoded = $enc.encoding.GetString($bytes)
+        # Percent-decoded pass for the same reason as the source scan: an
+        # escaped magnet is still a magnet by the time production sees it.
+        $texts = @($decoded)
+        try { $texts += [System.Uri]::UnescapeDataString($decoded) } catch { }
+        foreach ($text in $texts) {
         foreach ($p in $Patterns) {
             $regexMatches = [regex]::Matches($text, $p.rx, $RxOpts)
             if ($regexMatches.Count -gt 0) {
@@ -333,6 +615,7 @@ foreach ($exe in $ScanTargets) {
                 $BinaryHitCount += $regexMatches.Count
             }
         }
+        }
     }
     if ($hits.Count -gt 0) {
         Write-Host "    [$name] LEAK:" -ForegroundColor Red
@@ -343,174 +626,7 @@ foreach ($exe in $ScanTargets) {
     }
 }
 if ($ScanFail) { FailExit "Binary content scan failed" }
-
-# ---------------------------------------------------------------------------
-# Step 7: Source secret scan — over EVERY tracked file
-#
-# This used to derive its file list from `git diff <origin/HEAD>..HEAD` plus
-# the working-tree diff. That made coverage depend on where HEAD happened to
-# sit: cutting a release from an already-pushed master left both diffs empty,
-# so the scan walked ZERO files and still wrote `source_secret_hits: 0` into
-# the manifest — a vacuous pass that read exactly like a real one. It was
-# found the hard way: a magnet literal sat in verify-windows-build.ps1 from
-# the commit that introduced it and was never once scanned, until an
-# unrelated edit to that file finally pulled it into the diff.
-#
-# The file list now comes from `git ls-files`, so coverage is a property of
-# the repo rather than of the branch topology. Content is read from disk, so
-# uncommitted edits to tracked files are scanned as they actually are.
-# Untracked files are deliberately out of scope: they are neither committed
-# nor shipped inside the portable zip.
-# ---------------------------------------------------------------------------
-Step "Source secret scan (all tracked text files)"
-# -z + NUL split: without it git quotes paths containing non-ASCII or control
-# characters ("\303\251.md"), and the quoted name matches nothing on disk — the
-# file is then silently dropped from the scan.
-# Windows PowerShell 5.1 decodes native-command output using the console code
-# page, not UTF-8. A tracked filename with non-ASCII characters would come back
-# mangled, Test-Path would then fail to resolve it, and the entry would vanish
-# from the scan. Force UTF-8 for the duration of the git call.
-$prevOutEnc = [Console]::OutputEncoding
-try {
-    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-    $lsRaw = & git -C $RepoRoot ls-files -z
-    $lsExit = $LASTEXITCODE
-} finally {
-    [Console]::OutputEncoding = $prevOutEnc
-}
-if ($lsExit -ne 0) {
-    Write-Error "FATAL: source-secret-scan git ls-files failed (exit $lsExit). Refusing to ship a release without a source scan."
-    exit 1
-}
-$sourceFiles = @(($lsRaw -join "") -split "`0" | Where-Object { $_ } | Sort-Object -Unique)
-$skipExt = @('.exe', '.msi', '.zip', '.7z', '.png', '.ico', '.icns', '.dll')
-
-# Known-synthetic literals, allowlisted BY EXACT VALUE rather than by file.
-#
-# The previous design skipped whole files (commands.rs, legacy_import.rs,
-# tests/, *.test.ts, four prose docs, and this script). That exempted ~23 text
-# files INCLUDING production Rust and the gate itself: any real token later
-# pasted into them would never have been seen. "Every tracked file" was not
-# true.
-#
-# Now nothing is exempt. Every tracked text file is scanned, and a match only
-# passes if its exact text appears below. Each entry is a fixture whose
-# synthetic nature is self-evident (DEADBEEF / repeated nibbles / sequential
-# counters / obvious placeholder session names), except the one PoC hash in the
-# security-audit archive, which demonstrates a dedupe-key collision where the
-# point is that the SAME arbitrary string appears twice.
-#
-# Adding an entry here is a visible, reviewable diff line — unlike adding a
-# file to a skip list, which blinds the scanner to everything in that file
-# forever. A NEW fixture will fail the build until it is listed; that is the
-# intended cost.
-$AllowedLiterals = @(
-    'urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920',
-    'urn:btih:0201592fdeadbeef0201592fdeadbeef02015920',
-    'urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
-    'urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEF',
-    'urn:btih:0201592f00000000000000000000000000000001',
-    'urn:btih:0201592f00000000000000000000000000000002',
-    'urn:btih:0000000000000000000000000000000000000001',
-    'urn:btih:0000000000000000000000000000000000000002',
-    'urn:btih:0000000000000000000000000000000000000003',
-    'urn:btih:0123456789abcdef0123456789abcdef01234567',
-    'urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-    'urn:btih:cccccccccccccccccccccccccccccccccccccccc',
-    'urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01',
-    'urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-    'urn:btih:cccccccccccccccccccccccccccccccc',
-    # Dedupe-key collision PoC (prompt/security-audit-fixes-2026-07-28.md).
-    'urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a',
-    'magnet:?xt=urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920',
-    'magnet:?xt=urn:btih:0201592fdeadbeef0201592fdeadbeef02015920',
-    'magnet:?xt=urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
-    'magnet:?xt=urn:btih:0201592f00000000000000000000000000000001',
-    'magnet:?xt=urn:btih:0201592f00000000000000000000000000000002',
-    'magnet:?xt=urn:btih:0000000000000000000000000000000000000001',
-    'magnet:?xt=urn:btih:0000000000000000000000000000000000000002',
-    'magnet:?xt=urn:btih:0000000000000000000000000000000000000003',
-    'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567',
-    'magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-    'magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccccccccccc',
-    'magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a',
-    'magnet:?xt=urn:btih:0123456789abcdef',
-    'magnet:?xt=urn:btih:ABCDEF0123456789',
-    'MAGNET:?xt=urn:btih:ABCDEF0123456789',
-    'MAGNET:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01',
-    'magnet:?xt=urn:btih:fedcba9876543210',
-    # Placeholder cookie values in the Rust cookie-store tests.
-    '_jdb_session=paste_session',
-    '_jdb_session=keep_me_alive',
-    '_jdb_session=e2e_jdb_session',
-    '_jdb_session=regress_session',
-    '_jdb_session=preexisting_session',
-    '_jdb_session=label_test',
-    '_jdb_session=older_keyring_value',
-    '_jdb_session=keyring_only',
-    '_jdb_session=resurrect_me'
-)
-
-$SourceHits    = @()
-$SourceEligible = 0   # tracked, non-binary, i.e. in scope
-$SourceScanned  = 0   # actually read and regexed
-$SourceAllowed  = 0   # matched but present in $AllowedLiterals
-foreach ($rel in $sourceFiles) {
-    $full = Join-Path $RepoRoot $rel
-    if ($skipExt -contains ([System.IO.Path]::GetExtension($rel).ToLowerInvariant())) { continue }
-    $SourceEligible++
-    # -LiteralPath: a tracked file called `notes[1].md` is a valid wildcard to
-    # Test-Path, which would report it missing.
-    #
-    # Fail CLOSED here, and count the entry as eligible BEFORE testing it. The
-    # earlier version skipped unresolvable paths before incrementing, so the
-    # eligible-equals-scanned invariant could never detect them — the exact
-    # blind spot that invariant was added to close. The working tree is
-    # verified clean at Step 0, so every index entry must exist on disk; one
-    # that does not means the path came back mangled (encoding) or something
-    # changed underneath the build.
-    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
-        FailExit ("Source secret scan could not resolve tracked path: " + $rel + " — refusing to ship a partial scan.")
-    }
-    # Fail CLOSED on read errors. The old code used -ErrorAction SilentlyContinue
-    # and `continue`d on $null, so an unreadable file vanished from the scan
-    # while the run still reported success — a file the scanner could not read
-    # is exactly the file worth worrying about.
-    try {
-        $text = Get-Content -LiteralPath $full -Raw -ErrorAction Stop
-    } catch {
-        FailExit ("Source secret scan could not read " + $rel + ": " + $_.Exception.Message)
-    }
-    if ($null -eq $text) { $text = "" }   # legitimately empty file
-    $SourceScanned++
-    foreach ($p in $Patterns) {
-        foreach ($m in [regex]::Matches($text, $p.rx, $RxOpts)) {
-            if ($AllowedLiterals -ccontains $m.Value) { $SourceAllowed++; continue }
-            $SourceHits += ("      " + $rel + "  [" + $p.name + "]")
-        }
-    }
-}
-if ($SourceHits.Count -gt 0) {
-    Write-Host "    Source secret scan LEAK:" -ForegroundColor Red
-    # File + pattern only, never the matched text (same reasoning as the binary
-    # scan above).
-    $SourceHits | Sort-Object -Unique | ForEach-Object { Write-Host $_ -ForegroundColor Red }
-    Write-Host "    If a hit is a synthetic fixture, add its exact value to `$AllowedLiterals." -ForegroundColor Red
-    FailExit "Source secret scan failed"
-}
-# A scan that walked nothing must never report success — that is the exact
-# failure mode this step was rewritten to eliminate, so assert it explicitly
-# instead of trusting the file list to be non-empty.
-if ($SourceScanned -eq 0) {
-    FailExit "Source secret scan walked 0 files — the scan is not covering anything. Check git ls-files and skipExt."
-}
-if ($SourceScanned -ne $SourceEligible) {
-    FailExit ("Source secret scan read " + $SourceScanned + " of " + $SourceEligible + " eligible files; refusing to ship a partial scan.")
-}
-Ok ("No unexpected source secrets (" + $SourceScanned + " text files scanned, " + $SourceAllowed + " allowlisted fixture matches)")
+Invoke-SourceSecretScan
 
 # ---------------------------------------------------------------------------
 # Step 8: Compress staging dir to release/JavDBMagnet_<v>_portable.zip
@@ -559,12 +675,13 @@ Ok ("Wrote " + $SumsPath)
 # hardcoding `working_tree_clean = true`, would make the field an assertion
 # about the past rather than about the artifact.
 Step "Re-verifying source snapshot after build"
+$ManifestPath = Join-Path $ReleaseOutDir "release-manifest.json"
 $gitCommit = (& git -C $RepoRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { FailExit "git rev-parse HEAD failed after build" }
 if ($gitCommit -ne $BuildStartHead) {
     FailExit ("HEAD moved during the build (" + $BuildStartHead + " -> " + $gitCommit + "); the artifacts do not match either commit.")
 }
-$treeStatusAfter = & git -C $RepoRoot status --porcelain
+$treeStatusAfter = & git -C $RepoRoot status --porcelain --untracked-files=all
 if ($LASTEXITCODE -ne 0) { FailExit "git status failed after build" }
 if ($treeStatusAfter) {
     $treeStatusAfter | ForEach-Object { Write-Output ("      " + $_) }
@@ -599,12 +716,15 @@ $manifest = [ordered]@{
         source_files_eligible    = $SourceEligible
         source_files_scanned     = $SourceScanned
         source_allowlisted_hits  = $SourceAllowed
-        # Asserted BEFORE the build and re-verified AFTER it (HEAD unchanged
-        # and porcelain still empty), so git_commit really does identify the
-        # source that was compiled and scanned — not merely what HEAD was when
-        # the run started.
+        # Checked before the build and re-checked after it. This does NOT prove
+        # the compiler observed exactly this snapshot: an edit made and reverted
+        # mid-build leaves both checks clean while an artifact was produced from
+        # transient source. The field is named for what is actually verified.
+        # Proving the stronger property requires building from an immutable
+        # checkout (git archive / a throwaway worktree), which this pipeline
+        # does not yet do.
         working_tree_clean       = $true
-        source_snapshot_verified = "before_and_after_build"
+        source_snapshot_verified = "pre_and_post_build_clean"
     }
     signing     = @{
         requested = ($env:SIGN -eq "1")
