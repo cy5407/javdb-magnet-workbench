@@ -86,6 +86,8 @@ Step "Verifying working tree is clean"
 # resolves the sidecar's dependency graph from the repo root, so an untracked
 # top-level module CAN be pulled into sidecar.exe. Scanning "every tracked
 # file" is not the same as scanning every build input.
+$BuildStartHead = (& git -C $RepoRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0) { FailExit "git rev-parse HEAD failed; refusing to build" }
 $treeStatus = & git -C $RepoRoot status --porcelain
 if ($LASTEXITCODE -ne 0) { FailExit "git status failed (exit $LASTEXITCODE); refusing to build" }
 if ($treeStatus) {
@@ -364,9 +366,20 @@ Step "Source secret scan (all tracked text files)"
 # -z + NUL split: without it git quotes paths containing non-ASCII or control
 # characters ("\303\251.md"), and the quoted name matches nothing on disk — the
 # file is then silently dropped from the scan.
-$lsRaw = & git -C $RepoRoot ls-files -z
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "FATAL: source-secret-scan git ls-files failed (exit $LASTEXITCODE). Refusing to ship a release without a source scan."
+# Windows PowerShell 5.1 decodes native-command output using the console code
+# page, not UTF-8. A tracked filename with non-ASCII characters would come back
+# mangled, Test-Path would then fail to resolve it, and the entry would vanish
+# from the scan. Force UTF-8 for the duration of the git call.
+$prevOutEnc = [Console]::OutputEncoding
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $lsRaw = & git -C $RepoRoot ls-files -z
+    $lsExit = $LASTEXITCODE
+} finally {
+    [Console]::OutputEncoding = $prevOutEnc
+}
+if ($lsExit -ne 0) {
+    Write-Error "FATAL: source-secret-scan git ls-files failed (exit $lsExit). Refusing to ship a release without a source scan."
     exit 1
 }
 $sourceFiles = @(($lsRaw -join "") -split "`0" | Where-Object { $_ } | Sort-Object -Unique)
@@ -447,11 +460,21 @@ $SourceScanned  = 0   # actually read and regexed
 $SourceAllowed  = 0   # matched but present in $AllowedLiterals
 foreach ($rel in $sourceFiles) {
     $full = Join-Path $RepoRoot $rel
-    # -LiteralPath: a tracked file called `notes[1].md` is a valid wildcard to
-    # Test-Path, which would report it missing and drop it from the scan.
-    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
-    if ($skipExt -contains ([System.IO.Path]::GetExtension($full).ToLowerInvariant())) { continue }
+    if ($skipExt -contains ([System.IO.Path]::GetExtension($rel).ToLowerInvariant())) { continue }
     $SourceEligible++
+    # -LiteralPath: a tracked file called `notes[1].md` is a valid wildcard to
+    # Test-Path, which would report it missing.
+    #
+    # Fail CLOSED here, and count the entry as eligible BEFORE testing it. The
+    # earlier version skipped unresolvable paths before incrementing, so the
+    # eligible-equals-scanned invariant could never detect them — the exact
+    # blind spot that invariant was added to close. The working tree is
+    # verified clean at Step 0, so every index entry must exist on disk; one
+    # that does not means the path came back mangled (encoding) or something
+    # changed underneath the build.
+    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+        FailExit ("Source secret scan could not resolve tracked path: " + $rel + " — refusing to ship a partial scan.")
+    }
     # Fail CLOSED on read errors. The old code used -ErrorAction SilentlyContinue
     # and `continue`d on $null, so an unreadable file vanished from the scan
     # while the run still reported success — a file the scanner could not read
@@ -529,8 +552,25 @@ $sumsLines = $HashTargets | ForEach-Object {
 Set-Content -Path $SumsPath -Value $sumsLines -Encoding utf8
 Ok ("Wrote " + $SumsPath)
 
-$ManifestPath = Join-Path $ReleaseOutDir "release-manifest.json"
+# Re-verify the snapshot. The clean-tree assertion at Step 0 is minutes old by
+# now: PyInstaller, cargo and the two scans all ran in between, and any edit or
+# checkout during that window would leave the manifest vouching for a commit
+# that is not what was compiled and scanned. Checking only at the start, then
+# hardcoding `working_tree_clean = true`, would make the field an assertion
+# about the past rather than about the artifact.
+Step "Re-verifying source snapshot after build"
 $gitCommit = (& git -C $RepoRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0) { FailExit "git rev-parse HEAD failed after build" }
+if ($gitCommit -ne $BuildStartHead) {
+    FailExit ("HEAD moved during the build (" + $BuildStartHead + " -> " + $gitCommit + "); the artifacts do not match either commit.")
+}
+$treeStatusAfter = & git -C $RepoRoot status --porcelain
+if ($LASTEXITCODE -ne 0) { FailExit "git status failed after build" }
+if ($treeStatusAfter) {
+    $treeStatusAfter | ForEach-Object { Write-Output ("      " + $_) }
+    FailExit "Working tree changed during the build; the scanned source is not what shipped."
+}
+Ok ("Snapshot unchanged through build: " + $gitCommit)
 $manifest = [ordered]@{
     name        = $pkgJson.name
     version     = $Version
@@ -559,9 +599,12 @@ $manifest = [ordered]@{
         source_files_eligible    = $SourceEligible
         source_files_scanned     = $SourceScanned
         source_allowlisted_hits  = $SourceAllowed
-        # The build compiles the working tree; this records that the tree
-        # matched git_commit exactly, so the commit really describes what shipped.
+        # Asserted BEFORE the build and re-verified AFTER it (HEAD unchanged
+        # and porcelain still empty), so git_commit really does identify the
+        # source that was compiled and scanned — not merely what HEAD was when
+        # the run started.
         working_tree_clean       = $true
+        source_snapshot_verified = "before_and_after_build"
     }
     signing     = @{
         requested = ($env:SIGN -eq "1")
