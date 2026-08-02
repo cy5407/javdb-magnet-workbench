@@ -353,11 +353,18 @@ function Invoke-SourceSecretScan {
         # of each: production normalises `magnet:?xt=urn%3Abtih%3A<hash>` back to
         # `btih:<hash>` (verified via _magnet_dedupe_key) and interns it, so a scan
         # that only sees the raw bytes misses an escaped magnet entirely.
+        # Deduplicate. For text with no percent-escapes the decoded variant is
+        # identical to the raw one, so scanning both counted every fixture
+        # twice: $SourceAllowed became "how many decode passes ran" dressed up
+        # as a coverage number.
         $variants = New-Object System.Collections.Generic.List[string]
         foreach ($enc in $Encodings) {
             $decoded = $enc.encoding.GetString($bytes)
-            $variants.Add($decoded)
-            try { $variants.Add([System.Uri]::UnescapeDataString($decoded)) } catch { }
+            if (-not $variants.Contains($decoded)) { $variants.Add($decoded) }
+            try {
+                $unescaped = [System.Uri]::UnescapeDataString($decoded)
+                if (-not $variants.Contains($unescaped)) { $variants.Add($unescaped) }
+            } catch { }
         }
         foreach ($text in $variants) {
             foreach ($p in $Patterns) {
@@ -612,10 +619,22 @@ foreach ($exe in $ScanTargets) {
         # Percent-decoded pass for the same reason as the source scan: an
         # escaped magnet is still a magnet by the time production sees it.
         $texts = @($decoded)
-        try { $texts += [System.Uri]::UnescapeDataString($decoded) } catch { }
+        try {
+            $u = [System.Uri]::UnescapeDataString($decoded)
+            if ($u -cne $decoded) { $texts += $u }
+        } catch { }
         foreach ($text in $texts) {
         foreach ($p in $Patterns) {
-            $regexMatches = [regex]::Matches($text, $p.rx, $RxOpts)
+            # Allowlist applies here too, and it has to: the app EMBEDS its own
+            # cookies.txt template (commands.rs COOKIES_TEMPLATE) containing
+            # `_jdb_session=...` and `_jdb_session=XXX; cf_clearance=XXX`. Once
+            # the patterns were widened to production's grammar, the binary scan
+            # started flagging javdbmagnet.exe against its own help text — every
+            # release would have failed. Matching is per-VALUE, not per-file or
+            # per-line, so a real secret elsewhere in the same binary is a
+            # different match and still fails.
+            $regexMatches = @([regex]::Matches($text, $p.rx, $RxOpts) |
+                Where-Object { $AllowedLiterals -cnotcontains $_.Value })
             if ($regexMatches.Count -gt 0) {
                 # Artifact + pattern + count ONLY. Never echo the matched value:
                 # the whole point of this step is that a secret reached a binary,
