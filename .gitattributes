@@ -1,0 +1,14 @@
+# 行尾正規化
+#
+# Tauri CLI 在每次 `tauri build` 時會回寫 app/src-tauri/Cargo.toml（即使版本
+# 沒變也整檔重寫），而且一律寫出 LF。core.autocrlf=true 卻讓 git 以 CRLF
+# 簽出，於是磁碟大小與 index 記錄的 stat size 不符（2064 vs 2012）。
+#
+# git 一旦發現 size 不同就直接判定 modified，不會再去比對內容雜湊——即使
+# blob sha 完全相同也一樣。build-release.ps1 建置後的快照檢查因此每次都誤報
+# 「Working tree changed during the build」，讓整條 release pipeline 在所有
+# 掃描都通過之後仍以 exit 1 收場。
+#
+# 統一以 LF 簽出，git 與 tauri 寫入的格式就一致，size 永遠相符。
+# 兩個 .toml 的 blob 本來就是 LF，所以這裡不涉及任何內容變更。
+*.toml text eol=lf
