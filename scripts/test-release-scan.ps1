@@ -193,6 +193,15 @@ if ($m.Success) {
             ([byte[]](0)) + [System.Text.Encoding]::UTF8.GetBytes('_jdb' + '_session=RealLeakedSessionValue999') + ([byte[]](0)))
         & pwsh -NoProfile -File $Target -AuditBinary $blob | Out-Null
         Check "binary scan blocks a real embedded cookie" ($LASTEXITCODE -ne 0) "scan passed but should not have"
+
+        # Prefix bypass in the binary path: value begins with an allowlisted
+        # fixture and continues after a space. A whitespace-terminated class
+        # returned only the fixture and dropped the hit.
+        [System.IO.File]::WriteAllBytes($blob,
+            ([byte[]](0,1,77,90)) + [System.Text.Encoding]::UTF8.GetBytes($tpl) +
+            ([byte[]](0)) + [System.Text.Encoding]::UTF8.GetBytes('_jdb' + '_session=paste_session RealSecretRidesAlong') + ([byte[]](0)))
+        & pwsh -NoProfile -File $Target -AuditBinary $blob | Out-Null
+        Check "binary scan blocks a fixture-prefixed cookie" ($LASTEXITCODE -ne 0) "scan passed but should not have"
     } finally {
         Remove-Item -LiteralPath $blob -Force -ErrorAction SilentlyContinue
     }

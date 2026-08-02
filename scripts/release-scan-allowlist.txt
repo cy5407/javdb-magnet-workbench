@@ -194,3 +194,8 @@ _jdb_session=keyring_only
 _jdb_session=resurrect_me
 # COOKIES_TEMPLATE in commands.rs — the app's own cookies.txt help text,
 # which is compiled into javdbmagnet.exe. Placeholders only (XXX / ...).
+# COOKIES_TEMPLATE as the binary scan sees it: the exe embeds this help
+# text, and ASCII decoding turns each non-ASCII byte into '?'. Values are
+# bounded by NUL/CR/LF, so the adjacent prose is part of the match.
+cf_clearance=...   (Cloudflare ?????????)
+_jdb_session=...   (?????? session)
