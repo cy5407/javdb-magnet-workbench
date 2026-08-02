@@ -118,22 +118,155 @@ $Patterns = @(
     # strips surrounding quotes; parse_cookie_string trims each `k = v` pair.
     # A scanner narrower than the parser is a scanner with a documented hole,
     # so `\s*`, optional quotes and a floor of 1 are all deliberate. The cost
-    # is that short test fixtures now match — they are listed in
+    # Separator is `[ \t]*`, not `\s*`: `\s` spans newlines, so a bare
+    # `RD_API_TOKEN=` at end of line would swallow the next non-blank line as
+    # its "value". parse_cookie_string drops any pair containing CR/LF outright
+    # (F-05), so horizontal whitespace is also the correct grammar.
+    # Value charsets are NEGATIVE (`[^;\s"'\\]`), not positive. A positive
+    # class stops at the first character it does not know, so
+    # `_jdb_session=paste_session!ActualSecret` matched only the allowlisted
+    # prefix and the filter then discarded the whole hit — the real secret rode
+    # in behind a fixture. parse_cookie_string takes everything up to `;`, so
+    # the scanner does too.
+    # The other cost is that short test fixtures now match — they are listed in
     # $AllowedLiterals, which is exactly the reviewable-diff tradeoff this
     # design already makes everywhere else.
-    @{ name = 'Cloudflare clearance cookie'; rx = 'cf' + '_clearance\s*=\s*["'']?' + '[A-Za-z0-9_.~+/=-]{1,}' },
-    @{ name = 'Cloudflare bot cookie';       rx = '__cf' + '_bm\s*=\s*["'']?' + '[A-Za-z0-9_.~+/=-]{1,}' },
-    @{ name = 'JavDB session cookie';        rx = '_jdb' + '_session\s*=\s*["'']?' + '[A-Za-z0-9_.~+/=-]{1,}' },
-    @{ name = 'remember_me_token=';          rx = 'remember_me_token\s*=\s*["'']?' + '[A-Za-z0-9_.~+/=-]{1,}' },
+    @{ name = 'Cloudflare clearance cookie'; rx = 'cf' + '_clearance[ \t]*=[ \t]*["'']?' + '[^;\s"''\\]{1,}' },
+    @{ name = 'Cloudflare bot cookie';       rx = '__cf' + '_bm[ \t]*=[ \t]*["'']?' + '[^;\s"''\\]{1,}' },
+    @{ name = 'JavDB session cookie';        rx = '_jdb' + '_session[ \t]*=[ \t]*["'']?' + '[^;\s"''\\]{1,}' },
+    @{ name = 'remember_me_token=';          rx = 'remember_me_token[ \t]*=[ \t]*["'']?' + '[^;\s"''\\]{1,}' },
     # token68 (RFC 7235) allows -._~+/ and trailing '='; the old [A-Za-z0-9_-]
     # stopped at the first '.' and reported a truncated match.
     @{ name = 'Authorization bearer header'; rx = 'Authorization:\s*' + 'Bearer\s+' + '[A-Za-z0-9_.~+/=-]{8,}' },
     @{ name = 'Bearer <token>';              rx = 'Bearer\s+' + '[A-Za-z0-9_.~+/=-]{16,}' },
-    @{ name = 'RD_API_TOKEN=<value>';        rx = 'RD_API' + '_TOKEN\s*=\s*["'']?' + '[A-Za-z0-9_-]{1,}' }
+    @{ name = 'RD_API_TOKEN=<value>';        rx = 'RD_API' + '_TOKEN[ \t]*=[ \t]*["'']?' + '[^;\s"''\\]{1,}' }
 )
 
 # All regex evaluation in this script goes through these options. See the
 # comment above $Patterns for why IgnoreCase is not optional here.
+# NOTE: script scope, defined BEFORE the binary scan. It lived inside
+# Invoke-SourceSecretScan until the binary scan started using it too — and
+# the binary scan runs FIRST, so under Set-StrictMode the release aborted
+# on an undefined variable. Third instance of the same mistake: moving code
+# into a function silently rebinds every name it assigns.
+# Known-synthetic literals, allowlisted BY EXACT VALUE rather than by file.
+#
+# The previous design skipped whole files (commands.rs, legacy_import.rs,
+# tests/, *.test.ts, four prose docs, and this script). That exempted ~23 text
+# files INCLUDING production Rust and the gate itself: any real token later
+# pasted into them would never have been seen. "Every tracked file" was not
+# true.
+#
+# Now nothing is exempt. Every tracked text file is scanned, and a match only
+# passes if its exact text appears below. Each entry is a fixture whose
+# synthetic nature is self-evident (DEADBEEF / repeated nibbles / sequential
+# counters / obvious placeholder session names), except the one PoC hash in the
+# security-audit archive, which demonstrates a dedupe-key collision where the
+# point is that the SAME arbitrary string appears twice.
+#
+# Adding an entry here is a visible, reviewable diff line — unlike adding a
+# file to a skip list, which blinds the scanner to everything in that file
+# forever. A NEW fixture will fail the build until it is listed; that is the
+# intended cost.
+$AllowedLiterals = @(
+    'urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920',
+    'urn:btih:0201592fdeadbeef0201592fdeadbeef02015920',
+    'urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
+    'urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEF',
+    'urn:btih:0201592f00000000000000000000000000000001',
+    'urn:btih:0201592f00000000000000000000000000000002',
+    'urn:btih:0000000000000000000000000000000000000001',
+    'urn:btih:0000000000000000000000000000000000000002',
+    'urn:btih:0000000000000000000000000000000000000003',
+    'urn:btih:0123456789abcdef0123456789abcdef01234567',
+    'urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    'urn:btih:cccccccccccccccccccccccccccccccccccccccc',
+    'urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01',
+    'urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    'urn:btih:cccccccccccccccccccccccccccccccc',
+    # Dedupe-key collision PoC (prompt/security-audit-fixes-2026-07-28.md).
+    'urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a',
+    'magnet:?xt=urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920',
+    'magnet:?xt=urn:btih:0201592fdeadbeef0201592fdeadbeef02015920',
+    'magnet:?xt=urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
+    'magnet:?xt=urn:btih:0201592f00000000000000000000000000000001',
+    'magnet:?xt=urn:btih:0201592f00000000000000000000000000000002',
+    'magnet:?xt=urn:btih:0000000000000000000000000000000000000001',
+    'magnet:?xt=urn:btih:0000000000000000000000000000000000000002',
+    'magnet:?xt=urn:btih:0000000000000000000000000000000000000003',
+    'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567',
+    'magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    'magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccccccccccc',
+    'magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a',
+    'magnet:?xt=urn:btih:0123456789abcdef',
+    'magnet:?xt=urn:btih:ABCDEF0123456789',
+    'MAGNET:?xt=urn:btih:ABCDEF0123456789',
+    'MAGNET:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01',
+    'magnet:?xt=urn:btih:fedcba9876543210',
+    # Prose: pattern listings in the redaction recipe, this script's own
+# pattern NAMES, template placeholders, and the worked example in the
+# comment above explaining the prefix-bypass. None are values.
+'RD_API_TOKEN=.+|_jdb_session=|cf_clearance=|Authorization:',
+'RD_API_TOKEN=<value>',
+'RD_API_TOKEN=`',
+'RD_API_TOKEN={RD_API_TOKEN}',
+'_jdb_session=...`',
+'_jdb_session=paste_session!ActualSecret`',
+'_jdb_session=|cf_clearance=|Authorization:',
+'cf_clearance=...`',
+'cf_clearance=XXX`.',
+'cf_clearance=|Authorization:',
+# Cookie / token fixtures. These only started matching once the patterns
+# were widened to production's grammar (floor of 1 char, optional quotes
+# and whitespace around `=`). Every value here is self-evidently a
+# placeholder — XXX, `...`, brand_new, clear_me — and lives in a test or
+# in documentation showing the cookie format.
+'RD_API_TOKEN=abc-123',
+'_jdb_session=...',
+'_jdb_session=XXX',
+'_jdb_session=abc',
+'_jdb_session=abc123',
+'_jdb_session=brand_new',
+'_jdb_session=clear_me',
+'_jdb_session=e2e_jdb_session',
+'_jdb_session=keep_me_alive',
+'_jdb_session=keyring_only',
+'_jdb_session=label_test',
+'_jdb_session=new',
+'_jdb_session=older_keyring_value',
+'_jdb_session=paste_session',
+'_jdb_session=preexisting_session',
+'_jdb_session=regress_session',
+'_jdb_session=resurrect_me',
+'_jdb_session=xyz',
+'cf_clearance=...',
+'cf_clearance=XXX',
+'cf_clearance=brand_new',
+'cf_clearance=clear_cf',
+'cf_clearance=e2e_cf_clearance',
+'cf_clearance=fresh',
+'cf_clearance=label_test_cf',
+'cf_clearance=paste_cf',
+'cf_clearance=preexisting_cf',
+'cf_clearance=regress_cf',
+'cf_clearance=resurrect_cf',
+'cf_clearance=xyz',
+'cf_clearance=xyz789',
+# Placeholder cookie values in the Rust cookie-store tests.
+    '_jdb_session=paste_session',
+    '_jdb_session=keep_me_alive',
+    '_jdb_session=e2e_jdb_session',
+    '_jdb_session=regress_session',
+    '_jdb_session=preexisting_session',
+    '_jdb_session=label_test',
+    '_jdb_session=older_keyring_value',
+    '_jdb_session=keyring_only',
+    '_jdb_session=resurrect_me'
+)
+
 $RxOpts = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
 
 $ScanFail = $false
@@ -202,110 +335,6 @@ function Invoke-SourceSecretScan {
     $sourceFiles = @(($lsRaw -join "") -split "`0" | Where-Object { $_ } | Sort-Object -Unique)
     $skipExt = @('.exe', '.msi', '.zip', '.7z', '.png', '.ico', '.icns', '.dll')
 
-    # Known-synthetic literals, allowlisted BY EXACT VALUE rather than by file.
-    #
-    # The previous design skipped whole files (commands.rs, legacy_import.rs,
-    # tests/, *.test.ts, four prose docs, and this script). That exempted ~23 text
-    # files INCLUDING production Rust and the gate itself: any real token later
-    # pasted into them would never have been seen. "Every tracked file" was not
-    # true.
-    #
-    # Now nothing is exempt. Every tracked text file is scanned, and a match only
-    # passes if its exact text appears below. Each entry is a fixture whose
-    # synthetic nature is self-evident (DEADBEEF / repeated nibbles / sequential
-    # counters / obvious placeholder session names), except the one PoC hash in the
-    # security-audit archive, which demonstrates a dedupe-key collision where the
-    # point is that the SAME arbitrary string appears twice.
-    #
-    # Adding an entry here is a visible, reviewable diff line — unlike adding a
-    # file to a skip list, which blinds the scanner to everything in that file
-    # forever. A NEW fixture will fail the build until it is listed; that is the
-    # intended cost.
-    $AllowedLiterals = @(
-        'urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920',
-        'urn:btih:0201592fdeadbeef0201592fdeadbeef02015920',
-        'urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
-        'urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEF',
-        'urn:btih:0201592f00000000000000000000000000000001',
-        'urn:btih:0201592f00000000000000000000000000000002',
-        'urn:btih:0000000000000000000000000000000000000001',
-        'urn:btih:0000000000000000000000000000000000000002',
-        'urn:btih:0000000000000000000000000000000000000003',
-        'urn:btih:0123456789abcdef0123456789abcdef01234567',
-        'urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        'urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-        'urn:btih:cccccccccccccccccccccccccccccccccccccccc',
-        'urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01',
-        'urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        'urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-        'urn:btih:cccccccccccccccccccccccccccccccc',
-        # Dedupe-key collision PoC (prompt/security-audit-fixes-2026-07-28.md).
-        'urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a',
-        'magnet:?xt=urn:btih:0201592fDEADBEEF0201592fDEADBEEF02015920',
-        'magnet:?xt=urn:btih:0201592fdeadbeef0201592fdeadbeef02015920',
-        'magnet:?xt=urn:btih:DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF',
-        'magnet:?xt=urn:btih:0201592f00000000000000000000000000000001',
-        'magnet:?xt=urn:btih:0201592f00000000000000000000000000000002',
-        'magnet:?xt=urn:btih:0000000000000000000000000000000000000001',
-        'magnet:?xt=urn:btih:0000000000000000000000000000000000000002',
-        'magnet:?xt=urn:btih:0000000000000000000000000000000000000003',
-        'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567',
-        'magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        'magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-        'magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccccccccccc',
-        'magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a',
-        'magnet:?xt=urn:btih:0123456789abcdef',
-        'magnet:?xt=urn:btih:ABCDEF0123456789',
-        'MAGNET:?xt=urn:btih:ABCDEF0123456789',
-        'MAGNET:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01',
-        'magnet:?xt=urn:btih:fedcba9876543210',
-        # Cookie / token fixtures. These only started matching once the patterns
-    # were widened to production's grammar (floor of 1 char, optional quotes
-    # and whitespace around `=`). Every value here is self-evidently a
-    # placeholder — XXX, `...`, brand_new, clear_me — and lives in a test or
-    # in documentation showing the cookie format.
-    'RD_API_TOKEN=abc-123',
-    '_jdb_session=...',
-    '_jdb_session=XXX',
-    '_jdb_session=abc',
-    '_jdb_session=abc123',
-    '_jdb_session=brand_new',
-    '_jdb_session=clear_me',
-    '_jdb_session=e2e_jdb_session',
-    '_jdb_session=keep_me_alive',
-    '_jdb_session=keyring_only',
-    '_jdb_session=label_test',
-    '_jdb_session=new',
-    '_jdb_session=older_keyring_value',
-    '_jdb_session=paste_session',
-    '_jdb_session=preexisting_session',
-    '_jdb_session=regress_session',
-    '_jdb_session=resurrect_me',
-    '_jdb_session=xyz',
-    'cf_clearance=...',
-    'cf_clearance=XXX',
-    'cf_clearance=brand_new',
-    'cf_clearance=clear_cf',
-    'cf_clearance=e2e_cf_clearance',
-    'cf_clearance=fresh',
-    'cf_clearance=label_test_cf',
-    'cf_clearance=paste_cf',
-    'cf_clearance=preexisting_cf',
-    'cf_clearance=regress_cf',
-    'cf_clearance=resurrect_cf',
-    'cf_clearance=xyz',
-    'cf_clearance=xyz789',
-    # Placeholder cookie values in the Rust cookie-store tests.
-        '_jdb_session=paste_session',
-        '_jdb_session=keep_me_alive',
-        '_jdb_session=e2e_jdb_session',
-        '_jdb_session=regress_session',
-        '_jdb_session=preexisting_session',
-        '_jdb_session=label_test',
-        '_jdb_session=older_keyring_value',
-        '_jdb_session=keyring_only',
-        '_jdb_session=resurrect_me'
-    )
 
     # $script: scope, not function-local. The manifest at the end of the run
     # reads these, and a plain `$SourceHits = @()` inside a function creates a

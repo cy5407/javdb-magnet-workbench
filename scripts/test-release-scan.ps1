@@ -97,7 +97,15 @@ $probes = @(
     @{ n = 'RD token, short';       f = 'sonar-project.properties';       s = '# RD_API' + '_TOKEN=sh0rtTok' },
     @{ n = 'cookie with spaces';    f = 'requirements-ci.txt';            s = '# _jdb' + '_session = LiveSessionValue123456' },
     @{ n = 'Bearer token68 charset';f = 'javdb_scraper.py';               s = '# Authorization: ' + 'Bea' + 'rer ab.cd~ef+gh/ij=klmnopqrst' },
-    @{ n = 'secret in production rs';f = 'app/src-tauri/src/pending.rs';  s = '// cf' + '_clearance=RealLookingClearanceValue999' }
+    @{ n = 'secret in production rs';f = 'app/src-tauri/src/pending.rs';  s = '// cf' + '_clearance=RealLookingClearanceValue999' },
+    # Prefix bypass: the value STARTS with an allowlisted fixture and continues
+    # with a character a positive charset would not know. A regex that stops
+    # early returns only the allowlisted prefix and the filter drops the hit,
+    # taking the real secret with it. parse_cookie_string accepts this value.
+    @{ n = 'allowlisted prefix + secret'; f = 'requirements-sidecar.txt';    s = '# _jdb' + '_session=paste_session' + [char]33 + 'RealSecretRidesAlong' },
+    # Same shape one layer up: a whole extra line whose value merely begins
+    # like a fixture.
+    @{ n = 'fixture-prefixed cf value';   f = 'PSScriptAnalyzerSettings.psd1'; s = '# cf' + '_clearance=XXX' + [char]33 + 'ActualClearanceValue' }
 )
 foreach ($p in $probes) {
     $full = Join-Path $RepoRoot $p.f
