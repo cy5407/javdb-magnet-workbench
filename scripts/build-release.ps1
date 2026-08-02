@@ -151,7 +151,12 @@ $BinaryHitCount = 0
 # blob); failing to do it would silently halve the scan's coverage.
 $Encodings = @(
     @{ label = 'ASCII';      encoding = [System.Text.Encoding]::ASCII },
-    @{ label = 'UTF-16LE';   encoding = [System.Text.Encoding]::Unicode }
+    @{ label = 'UTF-16LE';   encoding = [System.Text.Encoding]::Unicode },
+    # UTF-16BE too. Reading raw bytes fixed the BOM-less UTF-16LE hole but lost
+    # what Get-Content did give us for free: BOM detection. A UTF-16BE file
+    # decoded as ASCII or UTF-16LE yields interleaved or byte-swapped text, so a
+    # contiguous ASCII credential never reaches the regexes.
+    @{ label = 'UTF-16BE';   encoding = [System.Text.Encoding]::BigEndianUnicode }
 )
 
 function Invoke-SourceSecretScan {
@@ -302,14 +307,20 @@ function Invoke-SourceSecretScan {
         '_jdb_session=resurrect_me'
     )
 
-    $SourceHits    = @()
-    $SourceEligible = 0   # tracked, non-binary, i.e. in scope
-    $SourceScanned  = 0   # actually read and regexed
-    $SourceAllowed  = 0   # matched but present in $AllowedLiterals
+    # $script: scope, not function-local. The manifest at the end of the run
+    # reads these, and a plain `$SourceHits = @()` inside a function creates a
+    # local that evaporates on return — under Set-StrictMode the manifest step
+    # then aborts AFTER the whole build and hashing has already run. Same class
+    # of mistake as dropping the $ManifestPath assignment: extracting code into
+    # a function silently changed a binding.
+    $script:SourceHits     = @()
+    $script:SourceEligible = 0   # tracked, non-binary, i.e. in scope
+    $script:SourceScanned  = 0   # actually read and regexed
+    $script:SourceAllowed  = 0   # matched but present in $AllowedLiterals
     foreach ($rel in $sourceFiles) {
         $full = Join-Path $RepoRoot $rel
         if ($skipExt -contains ([System.IO.Path]::GetExtension($rel).ToLowerInvariant())) { continue }
-        $SourceEligible++
+        $script:SourceEligible++
         # -LiteralPath: a tracked file called `notes[1].md` is a valid wildcard to
         # Test-Path, which would report it missing.
         #
@@ -337,7 +348,7 @@ function Invoke-SourceSecretScan {
         } catch {
             FailExit ("Source secret scan could not read " + $rel + ": " + $_.Exception.Message)
         }
-        $SourceScanned++
+        $script:SourceScanned++
         # Same two-encoding sweep the binary scan does, plus a percent-decoded pass
         # of each: production normalises `magnet:?xt=urn%3Abtih%3A<hash>` back to
         # `btih:<hash>` (verified via _magnet_dedupe_key) and interns it, so a scan
@@ -351,30 +362,30 @@ function Invoke-SourceSecretScan {
         foreach ($text in $variants) {
             foreach ($p in $Patterns) {
                 foreach ($m in [regex]::Matches($text, $p.rx, $RxOpts)) {
-                    if ($AllowedLiterals -ccontains $m.Value) { $SourceAllowed++; continue }
-                    $SourceHits += ("      " + $rel + "  [" + $p.name + "]")
+                    if ($AllowedLiterals -ccontains $m.Value) { $script:SourceAllowed++; continue }
+                    $script:SourceHits += ("      " + $rel + "  [" + $p.name + "]")
                 }
             }
         }
     }
-    if ($SourceHits.Count -gt 0) {
+    if ($script:SourceHits.Count -gt 0) {
         Write-Host "    Source secret scan LEAK:" -ForegroundColor Red
         # File + pattern only, never the matched text (same reasoning as the binary
         # scan above).
-        $SourceHits | Sort-Object -Unique | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+        $script:SourceHits | Sort-Object -Unique | ForEach-Object { Write-Host $_ -ForegroundColor Red }
         Write-Host "    If a hit is a synthetic fixture, add its exact value to `$AllowedLiterals." -ForegroundColor Red
         FailExit "Source secret scan failed"
     }
     # A scan that walked nothing must never report success — that is the exact
     # failure mode this step was rewritten to eliminate, so assert it explicitly
     # instead of trusting the file list to be non-empty.
-    if ($SourceScanned -eq 0) {
+    if ($script:SourceScanned -eq 0) {
         FailExit "Source secret scan walked 0 files — the scan is not covering anything. Check git ls-files and skipExt."
     }
-    if ($SourceScanned -ne $SourceEligible) {
-        FailExit ("Source secret scan read " + $SourceScanned + " of " + $SourceEligible + " eligible files; refusing to ship a partial scan.")
+    if ($script:SourceScanned -ne $script:SourceEligible) {
+        FailExit ("Source secret scan read " + $script:SourceScanned + " of " + $script:SourceEligible + " eligible files; refusing to ship a partial scan.")
     }
-    Ok ("No unexpected source secrets (" + $SourceScanned + " text files scanned, " + $SourceAllowed + " allowlisted fixture matches)")
+    Ok ("No unexpected source secrets (" + $script:SourceScanned + " text files scanned, " + $script:SourceAllowed + " allowlisted fixture matches)")
 }
 
 # --------------------------------------------------------------------------
