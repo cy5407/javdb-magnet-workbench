@@ -50,3 +50,8 @@ lto = true
 incremental = false
 opt-level = "s"
 strip = true
+
+# wayland-scanner 0.31.10 pins vulnerable quick-xml 0.39.x. The vendored
+# source only raises that dependency to 0.41 and adapts its GeneralRef decode.
+[patch.crates-io]
+wayland-scanner = { path = "../../vendor/wayland-scanner-0.31.10" }
