@@ -49,6 +49,26 @@ _UNSET = object()
 LABEL_ZH = {"hit": "秒回", "slow": "慢但完成", "miss": "沒人有"}
 
 
+def _configure_piped_streams_for_utf8() -> None:
+    """讓被其他程式擷取的報表穩定使用 UTF-8。
+
+    Windows 的 Python 在 stdout/stderr 是 pipe 時會沿用系統 ANSI code
+    page；呼叫端若依本工具的 UTF-8 文件讀取，中文報表會在解碼時失敗。互動式
+    終端仍保留使用者原本的 code page，只有非 TTY 的資料交換改成 UTF-8。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream.isatty():
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (OSError, ValueError):
+            # 少數自訂 stream 不支援重設編碼；維持原行為，避免報表本身無法執行。
+            pass
+
+
 def load_events(path: Path) -> list[dict]:
     """讀主檔與所有輪替備份（.1/.2/.3），跳過壞行。
 
@@ -362,6 +382,7 @@ def default_log_path() -> Optional[Path]:
 
 
 def main(argv: list[str]) -> int:
+    _configure_piped_streams_for_utf8()
     ap = argparse.ArgumentParser(description="RD 送出成效報表")
     ap.add_argument("--log", type=Path, default=None,
                     help="rd_outcomes.jsonl 路徑（預設自動尋找 log 目錄）")
