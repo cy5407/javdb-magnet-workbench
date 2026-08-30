@@ -6,6 +6,13 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+# 沒有這個區塊時，GITHUB_TOKEN 會吃 repo／org 的預設權限（可能是 write-all）。
+# 這個 workflow 只讀原始碼並把結果送到 SonarCloud，不寫回 GitHub，所以只給讀。
+# PR 掃描時 scan-action 需要讀 PR metadata 做 new-code 判定，故加 pull-requests: read。
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   sonarcloud:
     name: SonarCloud Scan
