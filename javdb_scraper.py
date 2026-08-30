@@ -83,7 +83,7 @@ def fetch_magnets(url: str, session, cookies: dict) -> dict:
     soup = BeautifulSoup(resp.text, "html.parser")
 
     title_tag = soup.select_one("h2.title.is-4 .current-title")
-    title = title_tag.text.strip() if title_tag else "未知"
+    title = title_tag.get_text(strip=True) if title_tag is not None else "未知"
 
     code_tag = soup.select_one(".panel-block .value a")
     code = ""

@@ -114,7 +114,7 @@ def reset_for_tests() -> None:
     """丟棄模組狀態，讓測試能對不同 log_dir 重新 configure。"""
     global _logger, _configured, _log_path, _dropped_count
     if _logger is not None:
-        for h in list(_logger.handlers):
+        for h in _logger.handlers:
             try:
                 h.close()
             except Exception:
@@ -203,6 +203,11 @@ def log_send(
     `meta` 是 fetch 當下留存的 JavDB 列資訊（name/size/tags/date/code 與群組排名）；
     手貼磁力只會有 name，其餘為空 —— 缺 metadata 不是低品質的證據，分析時要當
     「未知」處理而不是「非高清」。
+
+    註：`cache_wait` / `file_pick` / `min_size_mb` 必須以 keyword-only 具名參數
+    存在，嚴禁收進 `**kwargs`。具名參數能保證呼叫端若打錯欄位名稱時立刻拋出
+    TypeError；本模組是觀測資料的唯一來源，靜默吞掉欄位將導致分析資料失真且難以察覺。
+    SonarCloud 的「參數數量不超過 13 個」規則在此刻意不遵守。
     """
     meta = meta or {}
     payload = {

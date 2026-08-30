@@ -32,7 +32,7 @@ import time
 import urllib.parse
 import uuid
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:  # pragma: no cover — module-init path tweak, runs once on import
@@ -73,11 +73,13 @@ MAX_RD_MIN_SIZE_MB = 1_000_000
 # Helpers
 # ---------------------------------------------------------------------------
 
+_MAGNET_SCHEME = "magnet:"
+
 # BTIH v1 is 40 hex chars; v2 is 64. The {1,128} bound keeps the regex
-# linear (Sonar flags unbounded `+` on `[a-fA-F0-9]` as polynomial
+# linear (Sonar flags unbounded `+` on `[a-f0-9]` as polynomial
 # backtracking) while still covering both.
 _REDACT_MAGNET_RX = re.compile(
-    r"^magnet:\?xt=urn:btih:([a-fA-F0-9]{1,128})",
+    r"^magnet:\?xt=urn:btih:([a-f0-9]{1,128})",
     re.IGNORECASE,
 )
 
@@ -89,7 +91,7 @@ def redact_magnet(uri: str) -> str:
     m = _REDACT_MAGNET_RX.match(uri)
     if m:
         return f"magnet:?xt=urn:btih:{m.group(1)[:8]}..."
-    return "magnet:..." if uri.lower().startswith("magnet:") else "<not-a-magnet>"
+    return f"{_MAGNET_SCHEME}..." if uri.lower().startswith(_MAGNET_SCHEME) else "<not-a-magnet>"
 
 
 def _btih8(uri: str) -> str:
@@ -476,7 +478,8 @@ def _begin_scrape_meta_batch(state: DaemonState, batch_id: str | None) -> None:
     """
     if batch_id is None or batch_id == state.active_scrape_batch_id:
         return
-    for hid, meta in list(state.magnet_meta.items()):
+    for hid in list(state.magnet_meta):
+        meta = state.magnet_meta[hid]
         if meta.get("source") != "javdb":
             continue
         manual = state.manual_meta.get(hid)
@@ -487,37 +490,79 @@ def _begin_scrape_meta_batch(state: DaemonState, batch_id: str | None) -> None:
     state.active_scrape_batch_id = batch_id
 
 
-def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
-    if not state.handshake_done:
-        return _err(req, "bad_request", "handshake required before fetch_javdb")
-    url = req.get("url")
-    batch_id = req.get("batch_id")
-    if (
-        not isinstance(batch_id, str)
-        or not batch_id
-        or len(batch_id) > MAX_SCRAPE_BATCH_ID_LEN
-    ):
-        return _err(req, "bad_request", "batch_id must be a non-empty bounded string")
-    # The frontend has already replaced its web groups by the time this RPC is
-    # made. Reset ownership before URL validation as well as before network I/O:
-    # an allowlist rejection is still a settled first row of the new batch.
-    _begin_scrape_meta_batch(state, batch_id)
+def _validate_batch_id(batch_id: Any) -> Optional[tuple[str, str]]:
+    if not isinstance(batch_id, str) or not batch_id or len(batch_id) > MAX_SCRAPE_BATCH_ID_LEN:
+        return ("bad_request", "batch_id must be a non-empty bounded string")
+    return None
+
+
+def _validate_javdb_url(url: Any) -> Optional[tuple[str, str]]:
     # Require https:// — JavDB itself serves over TLS, so accepting plain
     # http:// here would only enable MITM / Cloudflare-bypass attempts
     # against the user's cookies, never a legitimate fetch. Sonar's
     # "Using http protocol is insecure" (S5332) flags the previous
     # http-or-https accept-list as a clear-text-channel risk.
     if not isinstance(url, str) or not url.startswith("https://"):
-        return _err(req, "bad_request", "url must start with https://")
-    # F-01: pin the host to javdb.com (or *.javdb.com). See
-    # _is_javdb_host for the rationale; without this gate the JavDB
-    # cookies would be sent to any HTTPS URL the caller passes in.
+        return ("bad_request", "url must start with https://")
     try:
         host = (urllib.parse.urlparse(url).hostname or "")
     except ValueError:
-        return _err(req, "bad_request", "url is not a valid URL")
+        return ("bad_request", "url is not a valid URL")
+    # F-01: pin the host to javdb.com (or *.javdb.com). See
+    # _is_javdb_host for the rationale; without this gate the JavDB
+    # cookies would be sent to any HTTPS URL the caller passes in.
     if not _is_javdb_host(host):
-        return _err(req, "bad_request", "url host not allowed")
+        return ("bad_request", "url host not allowed")
+    return None
+
+
+def _process_scraped_magnets(state: DaemonState, magnets_in: list[dict]) -> list[dict]:
+    """Bound, validate and intern magnets parsed from page."""
+    if len(magnets_in) > MAX_FETCH_MAGNETS:
+        magnets_in = magnets_in[:MAX_FETCH_MAGNETS]
+    magnets_out = []
+    for m in magnets_in:
+        full = m.get("magnet", "")
+        if not isinstance(full, str) or len(full) > MAX_MAGNET_URI_LEN:
+            continue   # silently drop oversized — the page itself is malicious
+        if not full.lower().startswith(_MAGNET_SCHEME):
+            continue   # F-xx: hostile page may serve non-magnet hrefs
+                       # the register path enforces the same prefix, so both writers
+                       # into the handle table agree.
+        # Intern via the reverse table so a magnet that already has a
+        # handle (e.g. re-fetch of the same JavDB page, or previously
+        # registered by the paste path) keeps its existing handle_id.
+        handle_id, _deduped = _intern_magnet(state, full)
+        magnets_out.append({
+            "handle_id": handle_id,
+            "name": m.get("name", ""),
+            "size": m.get("size", ""),
+            "tags": list(m.get("tags", [])),
+            "date": m.get("date", ""),
+            "magnet_redacted": redact_magnet(full),
+        })
+    return magnets_out
+
+
+def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
+    if not state.handshake_done:
+        return _err(req, "bad_request", "handshake required before fetch_javdb")
+    url = req.get("url")
+    batch_id = req.get("batch_id")
+    batch_err = _validate_batch_id(batch_id)
+    if batch_err is not None:
+        return _err(req, batch_err[0], batch_err[1])
+    assert isinstance(batch_id, str)
+
+    # The frontend has already replaced its web groups by the time this RPC is
+    # made. Reset ownership before URL validation as well as before network I/O:
+    # an allowlist rejection is still a settled first row of the new batch.
+    _begin_scrape_meta_batch(state, batch_id)
+
+    url_err = _validate_javdb_url(url)
+    if url_err is not None:
+        return _err(req, url_err[0], url_err[1])
+    assert isinstance(url, str)
 
     try:
         session, engine = create_session()
@@ -537,31 +582,7 @@ def cmd_fetch_javdb(state: DaemonState, req: dict) -> dict:
                         "JavDB returned 403 / challenge")
         return _err(req, "network", error)
 
-    magnets_in = result.get("magnets", []) or []
-    # Bound attacker-controlled count from the parsed page.
-    if len(magnets_in) > MAX_FETCH_MAGNETS:
-        magnets_in = magnets_in[:MAX_FETCH_MAGNETS]
-    magnets_out = []
-    for m in magnets_in:
-        full = m.get("magnet", "")
-        if not isinstance(full, str) or len(full) > MAX_MAGNET_URI_LEN:
-            continue   # silently drop oversized — the page itself is malicious
-        if not full.lower().startswith("magnet:"):
-            continue   # F-xx: hostile page may serve non-magnet hrefs; the
-                       # register path enforces the same prefix, so both writers
-                       # into the handle table agree.
-        # Intern via the reverse table so a magnet that already has a
-        # handle (e.g. re-fetch of the same JavDB page, or previously
-        # registered by the paste path) keeps its existing handle_id.
-        handle_id, _deduped = _intern_magnet(state, full)
-        magnets_out.append({
-            "handle_id": handle_id,
-            "name": m.get("name", ""),
-            "size": m.get("size", ""),
-            "tags": list(m.get("tags", [])),
-            "date": m.get("date", ""),
-            "magnet_redacted": redact_magnet(full),
-        })
+    magnets_out = _process_scraped_magnets(state, result.get("magnets", []) or [])
 
     state.fetch_seq += 1
     _record_group_meta(
@@ -676,7 +697,7 @@ def cmd_register_magnets(state: DaemonState, req: dict) -> dict:
         if len(s) > MAX_MAGNET_URI_LEN:
             invalid.append(s[:64])   # truncate for invalid list so we don't echo full
             continue
-        if not s.lower().startswith("magnet:"):
+        if not s.lower().startswith(_MAGNET_SCHEME):
             invalid.append(s[:64])
             continue
 
@@ -1248,7 +1269,7 @@ def _emit(stdout: IO[str], obj: dict) -> None:
         stdout.write(json.dumps(obj, ensure_ascii=False))
         stdout.write("\n")
         stdout.flush()
-    except (BrokenPipeError, OSError) as e:
+    except OSError as e:
         if isinstance(e, BrokenPipeError) or getattr(e, "errno", None) == errno.EPIPE:
             sys.exit(0)
         raise
