@@ -117,7 +117,8 @@ function pickBy(
   rows: MagnetRow[],
   isBetter: (cur: MagnetRow, acc: MagnetRow) => boolean,
 ): MagnetRow[] {
-  return [rows.reduce((acc, cur) => (isBetter(cur, acc) ? cur : acc))];
+  if (rows.length === 0) return [];
+  return [rows.reduce((acc, cur) => (isBetter(cur, acc) ? cur : acc), rows[0])];
 }
 
 /**

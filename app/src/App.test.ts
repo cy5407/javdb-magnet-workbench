@@ -38,7 +38,7 @@ type InvokeHandler = (args?: Record<string, unknown>) => unknown;
 
 const cookies = (): CookiesStatus => ({
   present: false,
-  path: "C:\\test\\data\\cookies.txt",
+  path: String.raw`C:\test\data\cookies.txt`,
   modified_iso: null,
   size_bytes: 0,
   storage: "none",
@@ -51,7 +51,7 @@ const keyringCookies = (): CookiesStatus => ({ ...cookies(), present: true, stor
 // `read_settings` deliberately returns an empty api_token: the send button is
 // gated on the `rd_has_token` flag, and no fixture should look like a token.
 const baseHandlers = (): Record<string, InvokeHandler> => ({
-  get_paths: () => ({ data_dir: "C:\\test\\data", log_dir: "C:\\test\\logs" } satisfies PathInfo),
+  get_paths: () => ({ data_dir: String.raw`C:\test\data`, log_dir: String.raw`C:\test\logs` } satisfies PathInfo),
   read_settings: () =>
     ({
       version: 1,
@@ -825,7 +825,7 @@ describe("Theme Management", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /主題：light/ })).not.toBeNull();
-      expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+      expect(document.documentElement.dataset.theme).toBe("light");
     });
   });
 

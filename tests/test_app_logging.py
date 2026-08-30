@@ -277,7 +277,7 @@ class FileHandlerOSErrorFallback(unittest.TestCase):
         with mock.patch("logging.getLogger", side_effect=spy_get_logger):
             mod.setup_logging()
 
-        self.assertTrue(len(observed_resolved) > 0)
+        self.assertGreater(len(observed_resolved), 0)
         self.assertTrue(all(r is not None for r in observed_resolved),
                         f"Observed _resolved_log_file as None while _initialized was True: {observed_resolved}")
 

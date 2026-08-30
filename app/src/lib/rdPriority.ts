@@ -132,12 +132,17 @@ export function rdBadge(cls: RdRowClass): { text: string; title: string } | null
  * semantics as magnetUtils' pickBy.
  */
 function earliestBy(rows: MagnetRow[], tieBreak: RdTieBreak): MagnetRow {
+  // Callers (pickRdCandidate) guarantee non-empty input; this guard ensures future
+  // refactors breaking that invariant fail immediately instead of returning undefined
+  // masquerading as MagnetRow. Public boundary empty-input behavior is pinned by
+  // pickRdCandidate([]) -> null in rdPriority.test.ts.
+  if (rows.length === 0) throw new Error("earliestBy: rows must not be empty");
   return rows.reduce((acc, cur) => {
     const accKey = rdDateKey(acc);
     const curKey = rdDateKey(cur);
     if (curKey !== accKey) return curKey < accKey ? cur : acc;
     return tieBreak(cur, acc) < 0 ? cur : acc;
-  });
+  }, rows[0]);
 }
 
 /**

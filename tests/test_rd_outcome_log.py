@@ -571,13 +571,16 @@ class ReportTest(unittest.TestCase):
         self.assertIn("整體", out)
 
     def test_load_events_reads_rotated_backups_and_skips_bad_lines(self):
+        import os
         import tempfile
+        from unittest import mock
         with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / "rd_outcomes.jsonl"
-            p.write_text(json.dumps(send()) + "\n{ broken\n", encoding="utf-8")
-            (Path(d) / "rd_outcomes.jsonl.1").write_text(
-                json.dumps(send(btih8="bbbb")) + "\n", encoding="utf-8")
-            events = rd_log_report.load_events(p)
+            with mock.patch.dict(os.environ, {"JAVDB_LOG_DIR": d}):
+                p = Path(d) / "rd_outcomes.jsonl"
+                p.write_text(json.dumps(send()) + "\n{ broken\n", encoding="utf-8")
+                (Path(d) / "rd_outcomes.jsonl.1").write_text(
+                    json.dumps(send(btih8="bbbb")) + "\n", encoding="utf-8")
+                events = rd_log_report.load_events(p)
         self.assertEqual(len(events), 2)
 
 
@@ -724,7 +727,7 @@ class GroupMetaTest(unittest.TestCase):
 
         self.assertEqual(self.state.magnet_meta[hid]["source"], "manual")
         self.assertEqual(self.state.magnet_meta[hid]["name"], "PASTED")
-        self.assertEqual(self.state.magnet_meta[hid]["date_rank"], None)
+        self.assertIsNone(self.state.magnet_meta[hid]["date_rank"])
 
     def test_rejected_first_url_still_begins_the_new_metadata_batch(self):
         first = self._fetch([
@@ -812,7 +815,7 @@ class GroupMetaTest(unittest.TestCase):
                                         "magnets": [M1]})
         self.assertTrue(resp["ok"])
         self.assertEqual(resp["registered"][0]["handle_id"], hid)
-        self.assertEqual(resp["registered"][0]["deduped"], True)
+        self.assertTrue(resp["registered"][0]["deduped"])
         meta = self.state.magnet_meta[hid]
         self.assertEqual(meta["source"], "javdb")
         self.assertEqual(meta["tags"], ["高清"])
