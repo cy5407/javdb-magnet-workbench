@@ -402,10 +402,12 @@ class E2EReportOverRealLog(unittest.TestCase):
                 sc.call({"cmd": "rd_send_magnet", "request_id": "s1",
                          "handle_id": hid, "cache_wait": 5})
 
+            env = dict(os.environ, JAVDB_LOG_DIR=str(log_dir))
             out = subprocess.run(
                 [sys.executable, str(ROOT / "scripts" / "rd_log_report.py"),
                  "--log", str(log_dir / "rd_outcomes.jsonl")],
                 capture_output=True, text=True, encoding="utf-8",
+                env=env,
             )
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("RD 送出成效報表", out.stdout)

@@ -69,18 +69,45 @@ def _configure_piped_streams_for_utf8() -> None:
             pass
 
 
+# 為什麼是 containment（目錄侷限）而非只做 resolve()：
+# path.resolve() 僅將路徑正規化為絕對路徑並解析符號連結，並不能防禦路徑遍歷
+# （例如傳入 ../../../etc/passwd 依然 resolve 成功並能讀取）。
+# 真正的安全驗證必須確認解析後的路徑確實落在受信任的允許目錄（candidate log dirs）內。
+def _ensure_within_log_dirs(path: Path) -> Path:
+    """確認路徑落在允許的日誌目錄內，防止路徑遍歷。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from app_logging import _candidate_log_dirs  # type: ignore
+        candidates = _candidate_log_dirs()
+    except Exception:
+        candidates = []
+
+    resolved = path.resolve()
+    for candidate in candidates:
+        if resolved.is_relative_to(candidate.resolve()):
+            return resolved
+
+    cand_str = ", ".join(str(c.resolve()) for c in candidates) if candidates else "(無)"
+    raise ValueError(
+        f"路徑 '{path}'（解析為 '{resolved}'）不在允許的日誌目錄內。\n"
+        f"目前允許的日誌目錄：{cand_str}\n"
+        "如需讀取其他目錄的日誌，請設定環境變數 JAVDB_LOG_DIR 指定允許目錄。"
+    )
+
+
 def load_events(path: Path) -> list[dict]:
     """讀主檔與所有輪替備份（.1/.2/.3），跳過壞行。
 
     輪替備份必須一起讀，否則樣本會在檔案滿 5 MiB 時無聲消失一大塊。
     """
-    files = [path] + sorted(
-        path.parent.glob(path.name + ".*"),
+    resolved_path = _ensure_within_log_dirs(path)
+    files = [resolved_path] + sorted(
+        resolved_path.parent.glob(resolved_path.name + ".*"),
         key=lambda p: p.name,
     )
     events: list[dict] = []
     for f in files:
-        if not f.exists():
+        if not f.is_file():
             continue
         for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
@@ -104,15 +131,9 @@ def _parse_ts(raw: Any) -> Optional[datetime]:
         return None
 
 
-def label_sends(events: list[dict], threshold_ms: int) -> list[dict]:
-    """把 send 事件貼上三元標籤，用 check 事件補完 pending 的結局。
-
-    三元而非二元的理由：`completed` 混了「RD 本來就有」與「RD 在我們等待期間
-    下載完」，而分界線是 cache_wait 設定值 —— 只看 outcome 欄位，同一個 magnet
-    在不同設定下會被歸到不同類。
-    """
-    # torrent_id -> 最晚一次 completed check 的時間。保留時間是必要的：只存
-    # id 的話，任何一次 completed check 都能把「時間更晚的」send 救成 slow。
+# torrent_id -> 最晚一次 completed check 的時間。保留時間是必要的：只存
+# id 的話，任何一次 completed check 都能把「時間更晚的」send 救成 slow。
+def _collect_completed_checks(events: list[dict]) -> dict[str, Optional[datetime]]:
     completed_checks: dict[str, Optional[datetime]] = {}
     for e in events:
         if e.get("event") == "check" and e.get("outcome") == "completed":
@@ -123,38 +144,49 @@ def label_sends(events: list[dict], threshold_ms: int) -> list[dict]:
             prev = completed_checks.get(tid, _UNSET)
             if prev is _UNSET or (ts is not None and (prev is None or ts > prev)):
                 completed_checks[tid] = ts
+    return completed_checks
 
+
+def _label_send_event(e: dict, completed_checks: dict[str, Optional[datetime]], threshold_ms: int) -> str:
+    outcome = e.get("outcome")
+    # 終態失敗 = RD 拿不到這個磁力 = 沒人有。環境錯誤則不可歸因。
+    if outcome == "error":
+        return "miss" if e.get("error_code") in TERMINAL_FAILURE_CODES else "error"
+    if outcome == "completed":
+        elapsed = e.get("elapsed_ms")
+        # 缺欄位或非數字一律當「不是秒回」。舊版當成 0（→ hit）是錯的方向：
+        # 這份報表唯一的產出就是命中率，容錯不該往灌高的那一邊倒。
+        if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool) and elapsed < threshold_ms:
+            return "hit"
+        return "slow"
+    tid = e.get("torrent_id") or ""
+    # 只有「不早於這次 send」的 check 才算把它救回來。
+    if tid and tid in completed_checks:
+        check_ts = completed_checks[tid]
+        send_ts = _parse_ts(e.get("ts"))
+        if check_ts is None or send_ts is None:
+            return "slow"
+        try:
+            return "slow" if check_ts >= send_ts else "miss"
+        except TypeError:
+            return "slow"
+    return "miss"
+
+
+def label_sends(events: list[dict], threshold_ms: int) -> list[dict]:
+    """把 send 事件貼上三元標籤，用 check 事件補完 pending 的結局。
+
+    三元而非二元的理由：`completed` 混了「RD 本來就有」與「RD 在我們等待期間
+    下載完」，而分界線是 cache_wait 設定值 —— 只看 outcome 欄位，同一個 magnet
+    在不同設定下會被歸到不同類。
+    """
+    completed_checks = _collect_completed_checks(events)
     out: list[dict] = []
     for e in events:
         if e.get("event") != "send":
             continue
-        outcome = e.get("outcome")
-        if outcome == "error":
-            # 終態失敗 = RD 拿不到這個磁力 = 沒人有。環境錯誤則不可歸因。
-            label = "miss" if e.get("error_code") in TERMINAL_FAILURE_CODES else "error"
-        elif outcome == "completed":
-            elapsed = e.get("elapsed_ms")
-            # 缺欄位或非數字一律當「不是秒回」。舊版當成 0（→ hit）是錯的方向：
-            # 這份報表唯一的產出就是命中率，容錯不該往灌高的那一邊倒。
-            label = ("hit" if isinstance(elapsed, (int, float))
-                     and not isinstance(elapsed, bool)
-                     and elapsed < threshold_ms else "slow")
-        else:
-            tid = e.get("torrent_id") or ""
-            label = "miss"
-            if tid and tid in completed_checks:
-                # 只有「不早於這次 send」的 check 才算把它救回來。
-                check_ts = completed_checks[tid]
-                send_ts = _parse_ts(e.get("ts"))
-                if check_ts is None or send_ts is None:
-                    label = "slow"          # 時間不可解析 → 退回舊行為
-                else:
-                    try:
-                        label = "slow" if check_ts >= send_ts else "miss"
-                    except TypeError:
-                        label = "slow"      # naive/aware 混用
         row = dict(e)
-        row["label"] = label
+        row["label"] = _label_send_event(e, completed_checks, threshold_ms)
         out.append(row)
     return out
 
@@ -400,7 +432,12 @@ def main(argv: list[str]) -> int:
               "或先在 app 送出幾批以產生日誌。", file=sys.stderr)
         return 1
 
-    events = load_events(Path(path))
+    try:
+        events = load_events(Path(path))
+    except ValueError as e:
+        print(f"錯誤：{e}", file=sys.stderr)
+        return 2
+
     print(build_report(events, args.threshold_ms, args.min_n, args.include_repeats))
     return 0
 
