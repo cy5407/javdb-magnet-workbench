@@ -85,7 +85,7 @@
   不採信，親自重跑。
 - **切片原則**：任務切成 5 分鐘級的精確片段（函式級修法描述），每片完成
   即由委派方檢查點驗收，`--print-timeout` 用 10m；不發 30 分鐘大包。
-- 用既有 allow 清單跑，**永不帶 `--dangerously-skip-permissions`**。
+- **權限與危險指令防護**：允許使用 `--dangerously-skip-permissions`，但**嚴禁發出遞迴刪除指令**（如 `rm -rf`, `Remove-Item -Recurse`, `rmdir /s`, `shutil.rmtree` 等）；檔案清理必須**單檔逐一刪除**。全域 Hooks（`~/.gemini/config/hooks/pre_tool_guard.py`）會硬性阻擋任何遞迴刪除嘗試。
 - 給 Agy 的 prompt 一律用 `Cwd=` 指定工作目錄，命令不得寫 `cd <dir> && ...`
   形式（會被權限 prefix 比對整場拒絕）。
 - 驗收＝跑驗收命令 + 抽樣讀 diff + 範圍核對，不逐行讀。
@@ -106,6 +106,26 @@
 
 ## Git 規則
 
-- `git add`／`commit`／`push` 只由 Claude／Codex 執行；Agy 由全域 hooks
-  （`~/.gemini/config/hooks/pre_tool_guard.py`）硬性阻擋 git 變更與整個 gh CLI。
+- `git add`／`commit`／`push` 只由 Claude／Codex 執行。Agy 的阻擋分兩層，兩層
+  的涵蓋範圍不同，不要混談：
+  - **permissions 層**（`~/.gemini/antigravity-cli/settings.json` 的 `deny`）：
+    擋 `git push`／`commit`／`reset`／`clean`／`checkout`／`restore`／
+    `worktree remove`、`rm`／`del`／`rmdir`／`Remove-Item`、`sudo`。
+    (a) `trustedWorkspaces` 不含本專案，但 2026-08-30 實測顯示**在本專案執行
+    `agy -p` 時該 deny 清單仍被完整載入**（`cli.log` 的
+    `cli_setting_manager.go:92] CLI settings initialized: permissions=...Deny:[...]`）；
+    「被載入」不等於「會擋住」，實際攔截行為未測。
+    (b) `--dangerously-skip-permissions` 是否會整層跳過**仍未實測**——若會，這層
+    等於不存在。
+  - **hook 層**（`~/.gemini/config/hooks/pre_tool_guard.py`）：只攔遞迴刪除，
+    fail-closed。`gh` CLI **兩層都沒有涵蓋**，純屬 prompt 級約束。
+  在 (b) 未實測確認之前，不要把 permissions 層當成 `--dangerously-skip-permissions`
+  之下仍然成立的技術護欄。
+- **本專案目錄下的規則檔對 `agy` CLI 一律無效**（2026-08-30 指紋探針實測，
+  agy 1.1.22）：`爬蟲/GEMINI.md`、`AGENTS.md`、`.agents/rules/`、`.agent/rules/`、
+  `.agents/skills/` 在 `agy -p` 下**完全不會被載入**——CLI 不做任何工作區客製化探索，
+  只讀 `~/.gemini/config/rules/*.md`（需 `trigger: always_on` frontmatter）與
+  `~/.gemini/GEMINI.md`。Antigravity **IDE** 則會載入開啟層的上述路徑。
+  因此交給 Agy 的專案級約束沒有技術強制力，必須逐次寫進 prompt，或改用 hook。
+  完整實測見 `程式語言/antigravity-rules-loading-findings.md`。
 - 未經使用者要求不 commit、不 push。
