@@ -2046,13 +2046,13 @@ class SessionCloseContract(unittest.TestCase):
 
     def test_rd_client_sets_authorization_header_on_reused_session(self):
         state = sd.DaemonState()
-        state.rd_token = "valid-token-123"
+        state.rd_token = "tok-xyz"
         client = sd._rd_client(state)
-        self.assertEqual(client.session.headers.get("Authorization"), "Bearer valid-token-123")
+        self.assertEqual(client.session.headers.get("Authorization"), "Bearer tok-xyz")
         # Call a second time to exercise session reuse path
         client2 = sd._rd_client(state)
         self.assertIs(client2.session, client.session)
-        self.assertEqual(client2.session.headers.get("Authorization"), "Bearer valid-token-123")
+        self.assertEqual(client2.session.headers.get("Authorization"), "Bearer tok-xyz")
 
 
 class EmitBrokenPipe(unittest.TestCase):
