@@ -47,3 +47,7 @@ Thumbs.db
 !.claude/settings.json
 !.claude/skills/
 !.claude/skills/**
+
+# Archify 本機編譯引擎
+.archify-engine/
+

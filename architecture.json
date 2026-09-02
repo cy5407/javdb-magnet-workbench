@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "JavDBMagnet 系統架構圖",
+    "output": "architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [1100, 720],
+    "views": [
+      {
+        "id": "full-arch",
+        "label": "完整系統架構",
+        "focus": ["ui_view", "ui_lib", "win_cred", "rust_commands", "rust_sidecar_mgr", "rust_secret", "py_scraper", "py_sidecar", "py_rd", "javdb_cloud", "rd_cloud", "logs_store"],
+        "note": "檢視三層式桌面應用架構：Svelte 5 前端、Tauri Rust 控制層、Python Sidecar 運算層與外部服務。"
+      },
+      {
+        "id": "scrape-path",
+        "label": "JavDB 爬取鏈路",
+        "focus": ["ui_view", "ui_lib", "rust_commands", "rust_sidecar_mgr", "py_sidecar", "py_scraper", "javdb_cloud"],
+        "note": "由 Svelte 發起抓取請求，透過 Rust Stdio 橋接至 Python curl_cffi 繞過 Cloudflare 獲取磁力資訊。"
+      },
+      {
+        "id": "rd-path",
+        "label": "Real-Debrid 轉發與直連鏈路",
+        "focus": ["ui_view", "ui_lib", "rust_sidecar_mgr", "py_sidecar", "py_rd", "rd_cloud", "logs_store"],
+        "note": "啟發式篩選高機率種子，經由 Sidecar 提交 RD 進行智慧選檔與快取判定，生成直連並寫入成效日誌。"
+      },
+      {
+        "id": "security-privacy",
+        "label": "安全與憑證防護邊界",
+        "focus": ["rust_sidecar_mgr", "rust_secret", "win_cred", "py_rd", "logs_store"],
+        "note": "Token 與 Cookie 均由 Windows Credential Manager 加密管理；日誌自動遮蔽敏感磁力 Hash。"
+      }
+    ]
+  },
+  "components": [
+    { "id": "ui_view", "type": "frontend", "label": "Svelte 5 前端介面", "sublabel": "App.svelte 單頁介面", "tag": "響應式狀態管理", "pos": [50, 140], "size": [180, 68] },
+    { "id": "ui_lib", "type": "frontend", "label": "前端業務模組庫", "sublabel": "scraper / rdSender / rdPriority", "tag": "TypeScript 邏輯封裝", "pos": [50, 350], "size": [180, 68] },
+    { "id": "win_cred", "type": "security", "label": "Windows 憑證管理員", "sublabel": "Credential Manager (DPAPI)", "tag": "RD Token & Cookies", "pos": [50, 560], "size": [180, 68] },
+
+    { "id": "rust_commands", "type": "backend", "label": "Tauri IPC 命令路由", "sublabel": "commands.rs (28 項命令)", "tag": "Tauri 2.0 / Rust", "pos": [320, 140], "size": [190, 68] },
+    { "id": "rust_sidecar_mgr", "type": "backend", "label": "Sidecar 程序調度器", "sublabel": "sidecar_manager.rs", "tag": "Stdio JSONL 通道", "pos": [320, 350], "size": [190, 68] },
+    { "id": "rust_secret", "type": "security", "label": "認證金鑰安全模組", "sublabel": "secret_store.rs (keyring)", "tag": "無明文落地", "pos": [320, 560], "size": [190, 68] },
+
+    { "id": "py_scraper", "type": "backend", "label": "JavDB 爬蟲解析核心", "sublabel": "javdb_scraper.py (curl_cffi)", "tag": "Chrome TLS 偽裝", "pos": [590, 140], "size": [190, 68] },
+    { "id": "py_sidecar", "type": "backend", "label": "Python Sidecar 守護進程", "sublabel": "sidecar.py (Handle 暫存管理)", "tag": "PyInstaller 打包", "pos": [590, 350], "size": [190, 68] },
+    { "id": "py_rd", "type": "backend", "label": "Real-Debrid 客戶端", "sublabel": "realdebrid.py (智慧選檔)", "tag": "REST API 調用", "pos": [590, 560], "size": [190, 68] },
+
+    { "id": "javdb_cloud", "type": "cloud", "label": "JavDB 影音資料庫", "sublabel": "影片頁面與磁力清單", "tag": "Cloudflare WAF", "pos": [860, 140], "size": [190, 68] },
+    { "id": "rd_cloud", "type": "cloud", "label": "Real-Debrid 雲端快取", "sublabel": "Torrent 下載與直連解鎖", "tag": "OAuth / API", "pos": [860, 350], "size": [190, 68] },
+    { "id": "logs_store", "type": "database", "label": "LOCALAPPDATA Logs 目錄", "sublabel": "%LOCALAPPDATA%\\logs", "tag": "rd_outcomes / debug.log", "pos": [860, 560], "size": [190, 68] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "前端表現與憑證儲存", "wraps": ["ui_view", "ui_lib", "win_cred"] },
+    { "kind": "security-group", "label": "後端核心控制層 (Rust Tauri Backend)", "wraps": ["rust_commands", "rust_sidecar_mgr", "rust_secret"] },
+    { "kind": "region", "label": "資料處理與爬蟲層 (Python Sidecar Daemon)", "wraps": ["py_scraper", "py_sidecar", "py_rd"] },
+    { "kind": "region", "label": "外部雲端服務與持久化日誌", "wraps": ["javdb_cloud", "rd_cloud", "logs_store"] }
+  ],
+  "connections": [
+    { "id": "conn_ui_to_lib", "from": "ui_view", "to": "ui_lib", "variant": "default" },
+    { "id": "conn_ui_to_rust", "from": "ui_view", "to": "rust_commands", "label": "invoke()", "variant": "emphasis" },
+    { "id": "conn_lib_to_rust_mgr", "from": "ui_lib", "to": "rust_sidecar_mgr", "label": "非同步調度", "variant": "default" },
+    { "id": "conn_rust_to_sidecar_mgr", "from": "rust_commands", "to": "rust_sidecar_mgr", "variant": "default" },
+    { "id": "conn_rust_mgr_to_secret", "from": "rust_sidecar_mgr", "to": "rust_secret", "variant": "security" },
+    { "id": "conn_secret_to_cred", "from": "rust_secret", "to": "win_cred", "label": "DPAPI 加密保存", "variant": "security" },
+    { "id": "conn_sidecar_mgr_to_py", "from": "rust_sidecar_mgr", "to": "py_sidecar", "label": "Stdio JSONL", "variant": "emphasis" },
+    { "id": "conn_py_to_scraper", "from": "py_sidecar", "to": "py_scraper", "variant": "default" },
+    { "id": "conn_scraper_to_javdb", "from": "py_scraper", "to": "javdb_cloud", "label": "HTTPS 網頁請求", "variant": "emphasis" },
+    { "id": "conn_py_to_rd", "from": "py_sidecar", "to": "py_rd", "variant": "default" },
+    { "id": "conn_rd_to_cloud", "from": "py_rd", "to": "rd_cloud", "label": "REST API 調用", "variant": "emphasis", "fromSide": "top", "toSide": "left" },
+    { "id": "conn_py_rd_to_logs", "from": "py_rd", "to": "logs_store", "label": "寫入日誌", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "三層架構與程序隔離",
+      "items": [
+        "Svelte 5 前端透過 WebView2 提供即時響應式桌面體驗",
+        "Rust Tauri 核心控管系統權限、安全金鑰與通道調度",
+        "PyInstaller 打包之 Python Sidecar 負責 HTTP 抓取與 RD API 交互"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "安全與隱私防護",
+      "items": [
+        "RD Token 與 JavDB Cookies 儲存於 Windows Credential Manager，無明文落地",
+        "磁力連結經 Handle ID 封裝，不直接傳遞原始 Magnet 網址",
+        "系統日誌全數過濾完整 Hash，僅保留 8 碼前綴確保除錯同時保護隱私"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "高效外部交互",
+      "items": [
+        "curl_cffi 偽裝 Chrome-124 TLS 指紋，穩定通過 Cloudflare WAF 驗證",
+        "智慧啟發式快取優先級分析，提前辨識秒回種子並自動選取高品質影片檔"
+      ]
+    }
+  ]
+}

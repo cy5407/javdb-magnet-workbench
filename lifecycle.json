@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "JavDBMagnet 任務生命週期與狀態機",
+    "output": "lifecycle.html",
+    "viewBox": [980, 660],
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "main-lifecycle",
+        "label": "主生命週期軌道",
+        "focus": ["queued", "scraping", "submitting", "checking", "unrestricted"],
+        "note": "正常情境下的五大階段：任務排入、抓取封裝、RD 提交選檔、快取判定與直連解鎖。"
+      },
+      {
+        "id": "human-and-waits",
+        "label": "暫停與未快取等待",
+        "focus": ["submitting", "low_prob_wait", "checking", "pending_wait"],
+        "note": "檢視低機率提示的人工確認，以及未秒回時落入 pending 的等待狀態。"
+      },
+      {
+        "id": "recovery-and-terminal",
+        "label": "佇列重試與終止出口",
+        "focus": ["submitting", "pending_retry", "pending_wait", "waf_blocked", "auth_failed"],
+        "note": "區分可重試的佇列輪詢閉環與 WAF 阻擋、Token 失效等終止出口。"
+      }
+    ]
+  },
+  "lanes": [
+    { "id": "main", "label": "主生命週期階段" },
+    { "id": "waiting", "label": "暫停與人機確認" },
+    { "id": "exceptions", "label": "待處理佇列重試" },
+    { "id": "terminal", "label": "異常終止與出口" }
+  ],
+  "states": [
+    { "id": "queued", "type": "start", "label": "任務排入", "sublabel": "網址 / 磁力輸入", "lane": "main", "col": 0, "step": "01", "tag": "輸入" },
+    { "id": "scraping", "type": "active", "label": "抓取與封裝", "sublabel": "Handle 記憶體註冊", "lane": "main", "col": 1, "step": "02", "tag": "隔離" },
+    { "id": "submitting", "type": "active", "label": "RD 提交選檔", "sublabel": "智慧選檔策略", "lane": "main", "col": 2, "step": "03", "tag": "API" },
+    { "id": "checking", "type": "decision", "label": "快取判定", "sublabel": "秒回 100% 偵測", "lane": "main", "col": 3, "step": "04", "tag": "檢查" },
+    { "id": "unrestricted", "type": "success", "label": "直連解鎖", "sublabel": "HTTPS 鏈接就緒", "lane": "main", "col": 4, "step": "05", "tag": "完成" },
+
+    { "id": "low_prob_wait", "type": "waiting", "label": "低機率確認", "sublabel": "人工確認送出", "lane": "waiting", "col": 0, "tag": "暫停" },
+    { "id": "pending_wait", "type": "waiting", "label": "未快取等待", "sublabel": "等待 RD 雲端下載", "lane": "waiting", "col": 1, "tag": "等待" },
+
+    { "id": "pending_retry", "type": "failure", "label": "佇列重試", "sublabel": "rd_check_pending", "lane": "exceptions", "col": 0, "yOffset": 78, "tag": "可重試" },
+
+    { "id": "waf_blocked", "type": "failure", "label": "WAF 阻擋", "sublabel": "Cookies 過期", "lane": "terminal", "col": 0, "tag": "終止" },
+    { "id": "auth_failed", "type": "failure", "label": "認證失敗", "sublabel": "Token 無效 (401)", "lane": "terminal", "col": 1, "tag": "終止" }
+  ],
+  "transitions": [
+    { "id": "t_low_prob", "from": "submitting", "to": "low_prob_wait", "variant": "security", "fromSide": "bottom", "toSide": "top", "route": "straight" },
+    { "id": "t_pending", "from": "checking", "to": "pending_wait", "variant": "default", "route": "drop" },
+    { "id": "t_retry_trigger", "from": "submitting", "to": "pending_retry", "variant": "security", "fromSide": "left", "toSide": "left", "via": [[320, 157], [320, 385]] },
+    { "id": "t_retry_loop", "from": "pending_retry", "to": "submitting", "variant": "emphasis", "fromSide": "left", "toSide": "top", "via": [[20, 385], [20, 80], [402, 80]] },
+    { "id": "t_auth_error", "from": "pending_wait", "to": "auth_failed", "variant": "security", "fromSide": "bottom", "toSide": "top", "route": "straight" },
+    { "id": "t_waf_exit", "from": "low_prob_wait", "to": "waf_blocked", "variant": "security", "fromSide": "bottom", "toSide": "top", "via": [[480, 336], [480, 432], [402, 432]] }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "主路徑五大階段",
+      "items": [
+        "任務排入後即刻經由 Sidecar 註冊 Handle 實現安全隔離",
+        "以單一主軌道推進選檔與快取判定，秒回後解鎖直連完成任務"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "等待與人機決策",
+      "items": [
+        "低機率候選彈窗暫停發送，待人工確認後放行",
+        "未快取項目維持非終止等待狀態，不阻塞其他批次作業"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "重試循環與終止出口",
+      "items": [
+        "佇列重試在重試額度內循環回送，直到下載完成",
+        "WAF 阻擋與 Token 認證失敗為明確終止出口，不再回流"
+      ]
+    }
+  ]
+}
