@@ -56,3 +56,8 @@ description: JavDB 網頁爬取、TLS 偽裝、Sidecar RPC 通信與 Real-Debrid
 - **核心錯誤碼**：`bad_request`, `network`, `cloudflare_block`（僅 403 觸發）, `unknown_handle`, `rd_token_missing`, `rd_token_invalid`, `rd_permission_denied`, `rd_api_error`, `internal`。
 - **429 速率限制**：單次退避上限為 10 秒，最多重試 3 次，且必須受 `deadline`（`monotonic() + cache_wait + 75.0`）預算約束。
 - **隱私安全**：日誌嚴禁記錄完整 Magnet URI 或 Token，一律經 `redact_magnet()` 或保留 8 碼 BTIH 前綴。
+
+### 4.6 連線池、並行與測試樁契約
+- **Session 連線復用**：Sidecar `DaemonState` 維護常駐 `rd_session`。`_rd_client` 必須採屬性賦值（`client.session = session`）注入，嚴禁更改建構子強制簽名，以防破壞測試樁（`_FakeClient`）。
+- **多檔 Unrestrict 保序並行**：`_collect_links` 使用 `ThreadPoolExecutor` 時必須使用 `executor.map` 維護原種子檔案順序，嚴禁使用無序的 `as_completed`。
+- **前端預設序向門禁**：`sendBatch` 預設並行度必須保持 `concurrency: 1`，避免測試環境 mock 閉包競爭。

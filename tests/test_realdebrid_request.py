@@ -458,6 +458,18 @@ class CollectLinks(unittest.TestCase):
         self.assertEqual(out[1]["streamable"], 0)
         self.assertIn("503", out[1]["error"])
 
+    def test_multiple_links_unrestricted_in_parallel_preserving_order(self):
+        links = [f"https://l/{i}" for i in range(5)]
+        def fake_unrestrict(link):
+            return {"download": f"https://dl/{link.split('/')[-1]}", "filename": f"f_{link.split('/')[-1]}.mp4", "filesize": 100, "streamable": 1}
+        with mock.patch.object(self.rd, "unrestrict_link", side_effect=fake_unrestrict) as mock_un:
+            out = self.rd._collect_links({"links": links})
+        self.assertEqual(len(out), 5)
+        for i in range(5):
+            self.assertEqual(out[i]["original"], f"https://l/{i}")
+            self.assertEqual(out[i]["download"], f"https://dl/{i}")
+        self.assertEqual(mock_un.call_count, 5)
+
 
 # ---------------------------------------------------------------------------
 # process_magnet branches

@@ -41,7 +41,7 @@
   MIN_RD_CACHE_WAIT_SECS = 5
   MAX_RD_CACHE_WAIT_SECS = 300
   ```
-- `cmd_rd_send_magnet` 內部計算 deadline（`sidecar/sidecar.py:1088`）：
+- `cmd_rd_send_magnet` 內部計算 deadline（`sidecar/sidecar.py:1109`）：
   ```python
   deadline = time.monotonic() + cache_wait + 75.0
   ```

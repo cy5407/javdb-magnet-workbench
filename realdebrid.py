@@ -25,16 +25,28 @@ class RealDebridError(Exception):
 
 
 class RealDebrid:
-    def __init__(self, token: str, min_size_mb: int = 500, deadline: Optional[float] = None):
+    def __init__(
+        self,
+        token: str,
+        min_size_mb: int = 500,
+        deadline: Optional[float] = None,
+        session: Optional[requests.Session] = None,
+    ):
         if not token:
             raise RealDebridError("RD_API_TOKEN 未設定，請編輯 .env 檔案貼上 token")
-        self.session = requests.Session()
+        if session is not None:
+            self.session = session
+            self._shared_session = True
+        else:
+            self.session = requests.Session()
+            self._shared_session = False
         self.session.headers["Authorization"] = f"Bearer {token}"
         self.min_size_mb = min_size_mb
         self.deadline = deadline
 
     def close(self):
-        self.session.close()
+        if not getattr(self, "_shared_session", False):
+            self.session.close()
 
     def user(self) -> dict:
         """取得使用者帳號資訊"""
@@ -344,6 +356,7 @@ class RealDebrid:
         files_selected = False
         last_status = ""
         last_progress = 0
+        poll_count = 0
 
         while time.time() < deadline:
             info = self.torrent_info(torrent_id)
@@ -369,7 +382,9 @@ class RealDebrid:
                     "links": results,
                 }
 
-            time.sleep(3)
+            poll_count += 1
+            wait_s = 0.8 if poll_count == 1 else (1.5 if poll_count == 2 else 3.0)
+            time.sleep(wait_s)
 
         return self._build_pending_result(
             info, torrent_id, last_status, last_progress,
@@ -493,29 +508,37 @@ class RealDebrid:
 
     def _collect_links(self, info: dict) -> list[dict]:
         """從 torrent info 取得所有 unrestrict 後的下載連結"""
+        import concurrent.futures
+
         links = info.get("links", [])
         if not links:
             return []
-        results = []
-        for link in links:
+
+        def _unrestrict_one(link: str) -> dict:
             try:
                 unrestricted = self.unrestrict_link(link)
-                results.append({
+                logger.info(f"  ✓ {unrestricted.get('filename', '')} ({unrestricted.get('filesize', 0)} bytes)")
+                return {
                     "original": link,
                     "download": unrestricted.get("download", ""),
                     "filename": unrestricted.get("filename", ""),
                     "filesize": unrestricted.get("filesize", 0),
                     "streamable": unrestricted.get("streamable", 0),
-                })
-                logger.info(f"  ✓ {unrestricted.get('filename', '')} ({unrestricted.get('filesize', 0)} bytes)")
+                }
             except RealDebridError as e:
                 logger.warning(f"  ✗ unrestrict 失敗: {link} - {e}")
-                results.append({
+                return {
                     "original": link,
                     "download": "",
                     "filename": "",
                     "filesize": 0,
                     "streamable": 0,
                     "error": str(e),
-                })
-        return results
+                }
+
+        if len(links) == 1:
+            return [_unrestrict_one(links[0])]
+
+        max_workers = min(4, len(links))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            return list(executor.map(_unrestrict_one, links))

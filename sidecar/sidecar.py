@@ -213,6 +213,7 @@ class DaemonState:
         # stay distinguishable in the log.
         self.fetch_seq = 0
         self.start_time = time.time()
+        self.rd_session = None
 
 
 # ---------------------------------------------------------------------------
@@ -912,9 +913,22 @@ def _rd_client(state: DaemonState, token_override: str | None = None,
         )
         if min_size_mb is None:
             min_size_mb = 500
+
+    session = None
+    if token_override is None and state.rd_token:
+        if getattr(state, "rd_session", None) is None:
+            import requests
+            state.rd_session = requests.Session()
+        session = state.rd_session
+
     if deadline is not None:
-        return RealDebrid(token, min_size_mb=min_size_mb, deadline=deadline)
-    return RealDebrid(token, min_size_mb=min_size_mb)
+        client = RealDebrid(token, min_size_mb=min_size_mb, deadline=deadline)
+    else:
+        client = RealDebrid(token, min_size_mb=min_size_mb)
+    if session is not None and hasattr(client, "session"):
+        client.session = session
+        client._shared_session = True
+    return client
 
 
 def _resolve_strategy(state: DaemonState, override: str | None) -> str:
@@ -1027,6 +1041,13 @@ def cmd_rd_set_token(state: DaemonState, req: dict) -> dict:
         return _ok(req, {"set": False})
     if not _is_valid_rd_token(token):
         return _err(req, "bad_request", "rd_token_format_invalid")
+    if state.rd_token != token:
+        if getattr(state, "rd_session", None) is not None:
+            try:
+                state.rd_session.close()
+            except Exception:
+                pass
+            state.rd_session = None
     state.rd_token = token
     return _ok(req, {"set": True})
 
@@ -1221,6 +1242,12 @@ def cmd_rd_check_pending(state: DaemonState, req: dict) -> dict:
 
 
 def cmd_shutdown(state: DaemonState, req: dict) -> dict:
+    if getattr(state, "rd_session", None) is not None:
+        try:
+            state.rd_session.close()
+        except Exception:
+            pass
+        state.rd_session = None
     return _ok(req)
 
 

@@ -176,6 +176,23 @@ describe("sendBatch", () => {
     expect(events).toEqual([]);
     expect(fetcher).not.toHaveBeenCalled();
   });
+
+  it("supports concurrent execution when concurrency >= 2", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const fetcher = vi.fn(async (h: string) => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, 10));
+      active--;
+      return ok(h);
+    });
+    const items = [item(1), item(2), item(3), item(4)];
+    const out = await sendBatch(items, () => {}, { fetcher, concurrency: 2 });
+    expect(out).toHaveLength(4);
+    expect(maxActive).toBe(2);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
 });
 
 describe("sortCompletedRowsByCompletionTime", () => {

@@ -122,7 +122,7 @@ pub fn save(data_dir: &Path, entries: &[PendingEntry]) -> Result<(), String> {
             .map_err(|e| format!("create {}: {e}", tmp.display()))?;
         f.write_all(body.as_bytes())
             .map_err(|e| format!("write {}: {e}", tmp.display()))?;
-        f.sync_all().ok();
+        f.sync_data().ok();
     }
     fs::rename(&tmp, &path)
         .map_err(|e| format!("rename {} -> {}: {e}", tmp.display(), path.display()))?;

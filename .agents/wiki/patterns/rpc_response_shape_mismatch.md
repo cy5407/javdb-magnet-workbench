@@ -41,7 +41,7 @@
   })
   ```
   `magnets_out` 陣列中每筆項目包含 `handle_id`, `name`, `size`, `tags`, `date`, `magnet_redacted`。
-- **`cmd_rd_user`**（`sidecar/sidecar.py:974-981`）：
+- **`cmd_rd_user`**（`sidecar/sidecar.py:988-995`）：
   ```python
   return _ok(req, {
       "user": {
@@ -54,7 +54,7 @@
   ```
 
 ### 3.3 平鋪結構命令 (`rd_send_magnet`, `resolve_magnet` 等)
-- **`cmd_rd_send_magnet`**（`sidecar/sidecar.py:1125-1148`）：
+- **`cmd_rd_send_magnet`**（`sidecar/sidecar.py:1146-1169`）：
   - `status="completed"` 時回傳：`{"ok": true, "request_id": ..., "status": "completed", "torrent_id": ..., "name": ..., "links": [...]}`
   - `status="pending"` 時回傳：`{"ok": true, "request_id": ..., "status": "pending", "torrent_id": ..., "name": ..., "rd_status": ..., "progress": ..., "files_selected": bool, "strategy": ...}`
 - **`cmd_resolve_magnet`**（`sidecar/sidecar.py:617`）：回傳 `{"ok": true, "request_id": ..., "magnet": full_uri}`。
