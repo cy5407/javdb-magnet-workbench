@@ -54,3 +54,20 @@
   - 嚴禁在 `_collect_links` 使用無序並行（如 `as_completed`），必須以 `executor.map` 確保回傳連結順序與原種子檔案完全一致。
   - 嚴禁在前端 `sendBatch` 將預設並行數調大為 $>1$，必須保持預設 `concurrency: 1` 確保 UI 整合測試共享 mock 閉包正確解析。
   - 嚴禁在 `pending.rs` 移除原子寫入與暫存檔機制；僅允許將物理硬碟 `sync_all` 優化為數據刷新 `sync_data`。
+
+### Iteration 5: Session Header Synchronization, Test Fixture Allowlisting & Release Pipeline Invariants
+- **Target Skill**: `javdb-scraper`
+- **Action**: `patch`
+- **Proposal Rationale**: 修復連線池共享 Session 賦值替換時遺失 `Authorization` 標頭致使 401 假失效之缺陷；同時沉澱測試夾具 Bearer 標籤掃描白名單與 Windows PE 執行期進程檔案鎖門禁規範。
+- **Validation Command**:
+  - Python: `.venv\Scripts\python.exe -m pytest tests/ -q` (428 passed, 6 subtests in 9.00s)
+  - Release Scanner Red Tests: `pwsh -NoProfile -File scripts/test-release-scan.ps1` (76 passed, 0 failed)
+  - Release Audit: `pwsh -File scripts/build-release.ps1 -AuditOnly` (PASS, 0 leaks)
+  - Full Release Build: `pwsh -File scripts/build-release.ps1` (Exit 0, 100% clean snapshot `3cb31c1`)
+  - Citation Checker: `.venv\Scripts\python.exe scripts/verify_wiki_citations.py` (6 patterns, 0 findings)
+- **Validation Outcome**: `ACCEPTED`
+- **Negative Constraints**:
+  - 嚴禁在替換 `client.session` 後遺漏同步賦予 `Authorization` 標頭；共享 Session 必須在被任何 API 呼叫前保有當前有效 Token。
+  - 嚴禁在測試代碼中使用隨意自創之 `Bearer <token>` 格式字串，凡涉及認證模擬一律使用 `scripts/release-scan-allowlist.txt` 登記之標籤（如 `tok-xyz`），以防觸發 release-scan 安全拒絕。
+  - 嚴禁在背景進程（`javdbmagnet.exe` / `sidecar.exe`）執行鎖定狀態下啟動 `build-release.ps1`，必須先中止所有鎖定進程再執行 staging 清理。
+

@@ -57,7 +57,9 @@ description: JavDB 網頁爬取、TLS 偽裝、Sidecar RPC 通信與 Real-Debrid
 - **429 速率限制**：單次退避上限為 10 秒，最多重試 3 次，且必須受 `deadline`（`monotonic() + cache_wait + 75.0`）預算約束。
 - **隱私安全**：日誌嚴禁記錄完整 Magnet URI 或 Token，一律經 `redact_magnet()` 或保留 8 碼 BTIH 前綴。
 
-### 4.6 連線池、並行與測試樁契約
-- **Session 連線復用**：Sidecar `DaemonState` 維護常駐 `rd_session`。`_rd_client` 必須採屬性賦值（`client.session = session`）注入，嚴禁更改建構子強制簽名，以防破壞測試樁（`_FakeClient`）。
+### 4.6 連線池、並行與發布門禁契約
+- **Session 連線復用與標頭同步**：Sidecar `DaemonState` 維護常駐 `rd_session`。`_rd_client` 必須採屬性賦值（`client.session = session`）注入並立即同步 `client.session.headers["Authorization"] = f"Bearer {token}"`，嚴禁更改建構子強制簽名（破壞 `_FakeClient` 測試樁），嚴禁遺漏授權標頭（導致 401 假失效）。
 - **多檔 Unrestrict 保序並行**：`_collect_links` 使用 `ThreadPoolExecutor` 時必須使用 `executor.map` 維護原種子檔案順序，嚴禁使用無序的 `as_completed`。
 - **前端預設序向門禁**：`sendBatch` 預設並行度必須保持 `concurrency: 1`，避免測試環境 mock 閉包競爭。
+- **測試 Token 安全白名單**：測試碼凡涉及 `Bearer` 標頭之模擬 token，必須採用 `scripts/release-scan-allowlist.txt` 登記之標籤（如 `tok-xyz`），嚴禁使用隨機字串觸發源碼機密掃描攔截。
+- **發布管線進程防護**：執行發布建置（`scripts/build-release.ps1`）前，必須先確保關閉既有 `javdbmagnet.exe` 與 `sidecar.exe` 實例，避免 Windows PE 執行期鎖定致 staging 清理失敗。
