@@ -6,6 +6,7 @@ handlers are attached and %LOCALAPPDATA% is not touched.
 """
 
 import importlib.util
+import inspect
 import io
 import json
 import sys
@@ -1539,6 +1540,24 @@ class RdCheckPending(unittest.TestCase):
 
 
 class RdDispatchRegistration(unittest.TestCase):
+    def test_dispatch_surface_and_handshake_guards_match_contract(self):
+        expected_commands = {
+            "hello", "handshake", "ping", "fetch_javdb", "resolve_magnet",
+            "resolve_magnets", "forget_magnets", "register_magnets",
+            "update_settings", "set_cookies", "cancel", "shutdown", "rd_user",
+            "rd_set_token", "rd_send_magnet", "rd_check_pending",
+        }
+        expected_guarded = {
+            "fetch_javdb", "set_cookies", "rd_user", "rd_set_token",
+            "rd_send_magnet", "rd_check_pending",
+        }
+        self.assertEqual(set(sd.DISPATCH), expected_commands)
+        guarded = {
+            command for command, handler in sd.DISPATCH.items()
+            if "if not state.handshake_done:" in inspect.getsource(handler)
+        }
+        self.assertEqual(guarded, expected_guarded)
+
     def test_all_rd_commands_dispatchable(self):
         for cmd in ("rd_user", "rd_set_token", "rd_send_magnet", "rd_check_pending"):
             self.assertIn(cmd, sd.DISPATCH, f"{cmd} missing from DISPATCH")

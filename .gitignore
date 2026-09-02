@@ -42,5 +42,8 @@ release/
 Thumbs.db
 .DS_Store
 
-# Claude Code workspace（可選保留）
-.claude/
+# Claude Code workspace（僅提交可攜的專案規則與技能）
+.claude/*
+!.claude/settings.json
+!.claude/skills/
+!.claude/skills/**
