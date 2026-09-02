@@ -1,4 +1,4 @@
-﻿# Pattern: Sidecar HTTP Pooling & Concurrency Invariants
+# Pattern: Sidecar HTTP Pooling & Concurrency Invariants
 
 ## 1. Description & Context
 專案在處理 Real-Debrid API 呼叫、多連結 Unrestrict 解析、以及前端表格過濾計算時面臨以下效能瓶頸：
@@ -15,10 +15,11 @@
 ## 3. Verbatim Code Evidence
 
 ### 3.1 屬性注入保留測試相容性
-- 位於 `sidecar/sidecar.py:928-931`：
+- 位於 `sidecar/sidecar.py:928-932`：
   ```python
   if session is not None and hasattr(client, "session"):
       client.session = session
+      client.session.headers["Authorization"] = f"Bearer {token}"
       client._shared_session = True
   return client
   ```

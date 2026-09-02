@@ -927,6 +927,7 @@ def _rd_client(state: DaemonState, token_override: str | None = None,
         client = RealDebrid(token, min_size_mb=min_size_mb)
     if session is not None and hasattr(client, "session"):
         client.session = session
+        client.session.headers["Authorization"] = f"Bearer {token}"
         client._shared_session = True
     return client
 
