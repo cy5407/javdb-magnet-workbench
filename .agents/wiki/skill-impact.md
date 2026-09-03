@@ -71,3 +71,21 @@
   - 嚴禁在測試代碼中使用隨意自創之 `Bearer <token>` 格式字串，凡涉及認證模擬一律使用 `scripts/release-scan-allowlist.txt` 登記之標籤（如 `tok-xyz`），以防觸發 release-scan 安全拒絕。
   - 嚴禁在背景進程（`javdbmagnet.exe` / `sidecar.exe`）執行鎖定狀態下啟動 `build-release.ps1`，必須先中止所有鎖定進程再執行 staging 清理。
 
+### Iteration 6: Central Catalog, Profile Assembly & 3-Way Preflight Deployment Gate
+- **Target Skill**: `wiki-distiller`
+- **Action**: `patch`
+- **Proposal Rationale**: 引入 `my-codex-guides` 作為跨專案（javdb-magnet-workbench、pornactressdb-rust）與跨工具（Codex、Claude Code、Gemini CLI）的中央資產庫。透過宣告式 Profile、3-way 比對部署閘門（Catalog 期望樹 vs 專案端現況 vs `.deploy-state` 基準線）杜絕盲目覆寫，並將破壞性指令攔截抽離至 `.agent-hooks/`。
+- **Validation Command**:
+  - Preflight Self-Test: `node scripts/preflight-deploy.mjs --self-test` (PASS: 12 個判定案例)
+  - Layout Verification: `node scripts/validate-layout.mjs` (PASS: 14 skills, 5 rules, 4 profiles)
+  - Assemble & Deploy: `node scripts/assemble.mjs --profile javdb-magnet-workbench --out-dir ..\爬蟲` (CLEAR, 19 files)
+  - Drift Check: `node scripts/check-deployment-drift.mjs --profile javdb-magnet-workbench` (PASS: 0 drift)
+  - Python: `.venv\Scripts\python.exe -m pytest tests/ -q` (428 passed, 6 subtests in 8.71s)
+  - Citation Checker: `.venv\Scripts\python.exe scripts/verify_wiki_citations.py` (7 patterns, 0 findings)
+- **Validation Outcome**: `ACCEPTED`
+- **Negative Constraints**:
+  - 嚴禁繞過 `preflight-deploy.mjs` 三方閘門直接進行跨專案檔案複製（`cp` / `rsync`）；遇 `local-edit`、`conflict`、`untracked` 必須 Fail-Closed 中止。
+  - 嚴禁在部署至專案端後遺漏執行 `--record`；基準線未更新會導致下一次部署無法識別單邊更新。
+  - 專案端產生之規則或技能修訂，在向其他專案分發前必須先執行 `harvest.mjs` 採收回中央庫。
+
+

@@ -10,3 +10,5 @@
 - [rpc_response_shape_mismatch](patterns/rpc_response_shape_mismatch.md): 跨層調度解析 Sidecar RPC 回應出現欄位缺失或 KeyError + 遺漏 _ok/_err 信封或混淆雙層巢狀 (fetch_javdb, rd_user) 與平鋪命令 + 嚴格遵循 sidecar.py 原始信封契約與 6 個 handshake 守衛命令規範。
 - [rate_limit_backoff_deadlock](patterns/rate_limit_backoff_deadlock.md): Real-Debrid API 頻繁請求觸發 HTTP 429 導致主程序超時死鎖 + 無界等待累積超過 Rust 調度預算 (cache_wait + 90s) + 限制單次退避上限 10 秒、最多重試 3 次，並結合 deadline 預算檢查與 pending 佇列異步輪詢。
 - [sidecar_http_pooling_and_concurrency_invariants](patterns/sidecar_http_pooling_and_concurrency_invariants.md): HTTP 短連線開銷高且 Session 復用易遺失授權標頭 + 測試樁契約衝突、並行閉包競爭與發布門禁攔截 + 採屬性注入與標頭同步、_collect_links 線程池保序、白名單測試標籤與進程解鎖。
+- [central_catalog_and_preflight_deployment](patterns/central_catalog_and_preflight_deployment.md): 跨專案規範孤島、工具目錄分岔與盲目覆寫未回寫代碼 + 缺乏三方基準線比對與執行期硬性攔截 + 採 catalog 中央資產庫、preflight 三方部署閘門與 .agent-hooks 程式化護欄。
+
