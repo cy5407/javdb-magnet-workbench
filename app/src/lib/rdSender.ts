@@ -50,6 +50,8 @@ export interface RdSendBatchOptions {
   defaults?: RdSendOptions;
   /** Test seam — replace the Tauri invoke for unit tests. */
   fetcher?: (handle_id: string, opts: RdSendOptions) => Promise<RdSendOutcome>;
+  /** Concurrency limit (defaults to 1 for sequential; set >= 2 for parallel pool). */
+  concurrency?: number;
 }
 
 /**
@@ -161,8 +163,8 @@ export async function sendBatch(
     error_code: null,
   }));
 
-  for (let i = 0; i < items.length; i++) {
-    if (opts.signal?.aborted) break;
+  async function processOne(i: number) {
+    if (opts.signal?.aborted) return;
     const item = items[i];
 
     rows[i] = { ...rows[i], status: "sending" };
@@ -204,6 +206,25 @@ export async function sendBatch(
 
     rows[i] = next;
     onProgress({ index: i + 1, total: items.length, item: next });
+  }
+
+  const concurrency = Math.max(1, opts.concurrency ?? 1);
+  if (concurrency <= 1) {
+    for (let i = 0; i < items.length; i++) {
+      if (opts.signal?.aborted) break;
+      await processOne(i);
+    }
+  } else {
+    let nextIndex = 0;
+    const workerCount = Math.min(concurrency, items.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        if (opts.signal?.aborted) break;
+        const i = nextIndex++;
+        await processOne(i);
+      }
+    });
+    await Promise.all(workers);
   }
 
   return rows;

@@ -566,8 +566,16 @@
   }
 
   // ---- M4b: filter / sort / group helpers ----------------------------
+  let groupProcessedRowsMap = $derived.by(() => {
+    const map = new Map<string, MagnetRow[]>();
+    for (const g of groups) {
+      map.set(g.url, processGroupRows(g, filter, sortColumn, sortDirection));
+    }
+    return map;
+  });
+
   function processedRows(g: ScrapedGroup): MagnetRow[] {
-    return processGroupRows(g, filter, sortColumn, sortDirection);
+    return groupProcessedRowsMap.get(g.url) ?? processGroupRows(g, filter, sortColumn, sortDirection);
   }
 
   /**
@@ -1070,7 +1078,10 @@
         (ev: RdSendBatchEvent) => {
           rdSendProgress[ev.index - 1] = ev.item;
           if (ev.item.status !== "sending") {
-            rdSendDone = { done: ev.index, total: ev.total };
+            const settled = rdSendProgress.filter(
+              (r) => r.status !== "sending" && r.status !== "pending",
+            ).length;
+            rdSendDone = { done: settled, total: ev.total };
           }
         },
         {

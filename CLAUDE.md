@@ -18,7 +18,7 @@
 
 | Gate | 結果 |
 |---|---|
-| `pytest tests/ -q` | 415 passed, 6 subtests |
+| `pytest tests/ -q` | 426 passed, 6 subtests |
 | `npx vitest run` | 9 files / 255 tests |
 | `npm run check` | 189 files, 0 errors 0 warnings |
 | Linux `TAURI_CONFIG='{"bundle":{"externalBin":[]}}' cargo test --lib` | 81 passed（需可用 D-Bus keyring） |
@@ -129,3 +129,27 @@
   因此交給 Agy 的專案級約束沒有技術強制力，必須逐次寫進 prompt，或改用 hook。
   完整實測見 `程式語言/antigravity-rules-loading-findings.md`。
 - 未經使用者要求不 commit、不 push。
+
+## Wiki 知識沉澱與經驗蒸餾規範 (WikiSkill Distillation)
+
+> **核心原理（WikiSkill 論文 arXiv:2608.27454）**：將 Agent 執行經驗編譯為結構化、永不回滾的持久知識庫（Wiki Layer），與可逆的程序性技能（Skills Layer）解耦共演化。
+
+### 開工前讀取（強制）
+- 每次開始實作、除錯、架構或跨層契約工作前，先讀 `.agents/wiki/index.md`。
+- 索引命中任務主題時，先讀對應 pattern；其中的 `Actionable Fix` 是動手前約束，原始碼與權威契約仍為最終真實來源。
+- 提交前執行 `.venv/Scripts/python.exe scripts/verify_wiki_citations.py`；引用失真時，先修 Wiki 或程式碼，不能略過校驗。
+
+### 1. 語意觸發與自動蒸餾
+- 當使用者對話提及**「蒸餾」**、**「提煉」**、**「Wiki」**、**「沉澱知識」**、**「記錄踩坑經驗」**，或當 Session 完成重大除錯/架構修正時：
+- 必須**主動判斷語意為「將 Session 內的錯誤原因、失敗嘗試、成功策略編譯為持久 Wiki 知識」**，依據 `wiki-distiller` Skill 執行結構化沉澱。
+
+### 2. 專案 Wiki 維護規範
+- **模式沉澱（`.agents/wiki/patterns/<name>.md`）**：必須包含 Description、Root Cause (WHY)、Verbatim Code 證據與 Actionable Fix。
+- **目錄索引（`.agents/wiki/index.md`）**：格式嚴格為 `- [name](patterns/name.md): PROBLEM + ROOT CAUSE + FIX`（一至兩句話）。
+- **審計與負向約束（`.agents/wiki/skill-impact.md`）**：
+  - 記錄提案、驗證命令、結果與成敗狀態（`ACCEPTED` / `REJECTED`）。**永不回滾**。
+  - 被否決的方案作為負向記憶（Negative Constraints），防止後續 Agent 重複嘗試已失敗路徑。
+
+### 3. 可執行技能（`.agents/skills/`）更新守則
+- **保持精簡**：`SKILL.md` 僅保留 SOP、關鍵常數與檢查清單（數十行內），嚴禁塞入流水帳。
+- **測試門控**：修訂 `SKILL.md` 必須跑通過 Gate 測試（`pytest tests/ -q`），未通過則回滾 Skill（Wiki 保持累積）。

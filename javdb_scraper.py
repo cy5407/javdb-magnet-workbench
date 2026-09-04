@@ -82,7 +82,8 @@ def fetch_magnets(url: str, session, cookies: dict) -> dict:
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    title_tag = soup.select_one("h2.title.is-4 .current-title")
+    title_h2 = soup.find("h2", class_="title")
+    title_tag = title_h2.find(class_="current-title") if title_h2 else None
     title = title_tag.get_text(strip=True) if title_tag is not None else "未知"
 
     code_tag = soup.select_one(".panel-block .value a")
@@ -92,22 +93,26 @@ def fetch_magnets(url: str, session, cookies: dict) -> dict:
         code = parent.get_text(strip=True) if parent else code_tag.text.strip()
 
     magnets = []
-    for item in soup.select("#magnets-content .item"):
-        link_tag = item.select_one(".magnet-name a")
+    magnets_content = soup.find(id="magnets-content")
+    items = magnets_content.find_all(class_="item") if magnets_content else []
+    for item in items:
+        magnet_name = item.find(class_="magnet-name")
+        link_tag = magnet_name.find("a") if magnet_name else None
         if not link_tag:
             continue
         magnet_url = link_tag.get("href", "")
         name = ""
-        name_tag = link_tag.select_one(".name")
+        name_tag = link_tag.find(class_="name")
         if name_tag:
             name = name_tag.text.strip()
         meta = ""
-        meta_tag = link_tag.select_one(".meta")
+        meta_tag = link_tag.find(class_="meta")
         if meta_tag:
             meta = meta_tag.text.strip()
-        tags = [t.text.strip() for t in link_tag.select(".tag")]
+        tags = [t.text.strip() for t in link_tag.find_all(class_="tag")]
         date = ""
-        date_tag = item.select_one(".date .time")
+        date_div = item.find(class_="date")
+        date_tag = date_div.find(class_="time") if date_div else None
         if date_tag:
             date = date_tag.text.strip()
         magnets.append({"name": name, "size": meta, "tags": tags, "date": date, "magnet": magnet_url})

@@ -1,0 +1,112 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "JavDBMagnet 端到端資料流與跨邊界調度工作流",
+    "output": "workflow.html",
+    "animation": "trace",
+    "visual_preset": "signal-flow",
+    "quality_profile": "showcase",
+    "legend": { "mode": "hidden" },
+    "views": [
+      {
+        "id": "happy-path",
+        "label": "主流程：網址擷取至直連秒回",
+        "focus": ["user_input", "batch_scheduler", "rust_ipc", "sidecar_bridge", "javdb_scraper", "handle_mgr", "rd_triage", "rd_client", "cache_judge", "unrestrict_out"],
+        "note": "追蹤使用者貼上網址，經過 TLS 爬蟲、Handle 抽象、RD 智慧選檔與快取秒回生成直連的完整路徑。"
+      },
+      {
+        "id": "pending-retry",
+        "label": "未快取佇列與重試閉環",
+        "focus": ["cache_judge", "pending_queue", "batch_scheduler", "rust_ipc", "rd_client"],
+        "note": "檢視未快取種子落入 pending_torrents.json 佇列並經由手動/批次重試重新輪詢的閉環。"
+      },
+      {
+        "id": "security-audit",
+        "label": "安全憑證與脫敏審計",
+        "focus": ["win_cred", "rd_client", "outcome_log", "handle_mgr"],
+        "note": "檢視 DPAPI 加密憑證讀取、Handle ID 隔離與 8 碼 Hash 脫敏成效日誌。"
+      }
+    ]
+  },
+  "lanes": [
+    { "id": "ui", "label": "前端表現層 (Svelte 5)" },
+    { "id": "ipc", "label": "後端控制層 (Rust Tauri)" },
+    { "id": "scraper", "label": "爬蟲與資料層 (Python Sidecar)" },
+    { "id": "rd", "label": "雲端加速服務 (Real-Debrid API)" },
+    { "id": "storage", "label": "本機儲存與安全憑證庫" }
+  ],
+  "phases": [
+    { "id": "intake", "label": "輸入與排程", "fromCol": 0, "toCol": 1 },
+    { "id": "scraping", "label": "抓取與 Handle 封裝", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "execution", "label": "RD 執行與成果產出", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "groups": [
+    { "id": "frontend_intake", "label": "前端排程與分流", "lane": "ui", "fromCol": 0, "toCol": 1, "variant": "emphasis" },
+    { "id": "sidecar_core", "label": "Sidecar 爬蟲與 Handle 反查", "lane": "scraper", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "rd_execution", "label": "雲端快取與選檔", "lane": "rd", "fromCol": 4, "toCol": 5, "variant": "security" },
+    { "id": "persistence", "label": "憑證與日誌儲存", "lane": "storage", "fromCol": 0, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["user_input", "batch_scheduler", "rust_ipc", "sidecar_bridge", "javdb_scraper", "handle_mgr", "rd_triage", "rd_client", "cache_judge", "unrestrict_out"],
+  "nodes": [
+    { "id": "user_input", "lane": "ui", "col": 0, "type": "frontend", "label": "網址/磁力輸入", "sublabel": "URL / Magnet 貼上", "tag": "batch_id 標識", "width": 140 },
+    { "id": "win_cred", "lane": "storage", "col": 0, "type": "security", "label": "Windows 憑證庫", "sublabel": "Credential Manager", "tag": "DPAPI 加密", "width": 140 },
+
+    { "id": "batch_scheduler", "lane": "ui", "col": 1, "type": "frontend", "label": "批次排程管理器", "sublabel": "scraper.ts / rdSender.ts", "tag": "AbortSignal", "width": 140 },
+    { "id": "rust_ipc", "lane": "ipc", "col": 1, "type": "backend", "label": "Tauri IPC 命令路由", "sublabel": "commands.rs (28 項命令)", "tag": "Tauri 2.0", "width": 140 },
+
+    { "id": "sidecar_bridge", "lane": "ipc", "col": 2, "type": "backend", "label": "Sidecar 程序調度", "sublabel": "sidecar_manager.rs", "tag": "Stdio JSONL", "width": 140 },
+    { "id": "javdb_scraper", "lane": "scraper", "col": 2, "type": "backend", "label": "JavDB 爬蟲核心", "sublabel": "javdb_scraper.py", "tag": "Chrome-124 偽裝", "width": 140 },
+
+    { "id": "handle_mgr", "lane": "scraper", "col": 3, "type": "backend", "label": "Handle 記憶體反查表", "sublabel": "sidecar.py (去重映射)", "tag": "BTIH 歸一化", "width": 140 },
+    { "id": "rd_triage", "lane": "ui", "col": 3, "type": "backend", "label": "RD 啟發式評估", "sublabel": "rdPriority.ts", "tag": "轉載站前綴/HD", "width": 140 },
+
+    { "id": "rd_client", "lane": "rd", "col": 4, "type": "cloud", "label": "RD API 智慧選檔", "sublabel": "realdebrid.py", "tag": "addMagnet & select", "width": 140 },
+    { "id": "cache_judge", "lane": "rd", "col": 5, "type": "database", "label": "快取秒回判定", "sublabel": "100% downloaded 偵測", "tag": "等待秒數控制", "width": 140 },
+
+    { "id": "unrestrict_out", "lane": "ui", "col": 5, "type": "frontend", "label": "HTTPS 直連生成", "sublabel": "一鍵/個別直連複製", "tag": "剪貼簿匯出", "width": 140 },
+    { "id": "pending_queue", "lane": "storage", "col": 4, "type": "database", "label": "待處理佇列", "sublabel": "pending_torrents.json", "tag": "重試輪詢", "width": 140 },
+    { "id": "outcome_log", "lane": "storage", "col": 5, "type": "database", "label": "成效審計日誌", "sublabel": "rd_outcomes.jsonl", "tag": "8 碼 Hash 脫敏", "width": 140 }
+  ],
+  "edges": [
+    { "id": "e_input_to_batch", "from": "user_input", "to": "batch_scheduler", "label": "網址清單", "variant": "default" },
+    { "id": "e_batch_to_ipc", "from": "batch_scheduler", "to": "rust_ipc", "label": "invoke()", "variant": "emphasis" },
+    { "id": "e_ipc_to_bridge", "from": "rust_ipc", "to": "sidecar_bridge", "label": "命令轉發", "variant": "default" },
+    { "id": "e_bridge_to_scraper", "from": "sidecar_bridge", "to": "javdb_scraper", "label": "fetch_javdb", "variant": "emphasis" },
+    { "id": "e_scraper_to_handle", "from": "javdb_scraper", "to": "handle_mgr", "label": "註冊 Magnet", "variant": "emphasis" },
+    { "id": "e_handle_to_triage", "from": "handle_mgr", "to": "rd_triage", "label": "元數據回傳", "variant": "default" },
+    { "id": "e_triage_to_rd", "from": "rd_triage", "to": "rd_client", "label": "高優先候選", "variant": "emphasis" },
+    { "id": "e_cred_to_rd", "from": "win_cred", "to": "rd_client", "label": "Token 授權", "variant": "security" },
+    { "id": "e_rd_to_judge", "from": "rd_client", "to": "cache_judge", "label": "種子狀態", "variant": "default" },
+    { "id": "e_judge_to_unrestrict", "from": "cache_judge", "to": "unrestrict_out", "label": "快取秒回", "variant": "emphasis", "role": "return" },
+    { "id": "e_judge_to_pending", "from": "cache_judge", "to": "pending_queue", "label": "未快取", "variant": "dashed", "role": "branch" },
+    { "id": "e_judge_to_outcome", "from": "cache_judge", "to": "outcome_log", "label": "記錄結果", "variant": "dashed", "role": "branch" },
+    { "id": "e_pending_to_batch", "from": "pending_queue", "to": "batch_scheduler", "label": "重試輪詢", "variant": "dashed", "role": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "跨邊界資料調度",
+      "items": [
+        "Svelte 前端透過 IPC 將任務交由 Rust，再經 Stdio JSONL 調度 Python Sidecar",
+        "全程透過 Handle ID 引用磁力，杜絕明文 Magnet 在前端與日誌暴露"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "智慧選檔與快取判定",
+      "items": [
+        "前端啟發式評估轉載站前綴與 HD 標籤，收斂發送批次",
+        "Real-Debrid 執行 smart 智慧選檔，判定 100% 快取秒回生成下載直連"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "佇列容錯與脫敏審計",
+      "items": [
+        "未快取項目儲存至待處理佇列，支援背景或定時重試輪詢",
+        "日誌輸出自動過濾並保留 8 碼 Hash 前綴，兼顧除錯與隱私防護"
+      ]
+    }
+  ]
+}

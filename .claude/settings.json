@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -Command \"Get-Content -Raw (Join-Path $env:CLAUDE_PROJECT_DIR '.agents/wiki/index.md')\""
+          }
+        ]
+      }
+    ]
+  }
+}
