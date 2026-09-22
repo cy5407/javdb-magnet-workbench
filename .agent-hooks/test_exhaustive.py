@@ -170,6 +170,18 @@ def run_exhaustive_tests():
         ("git worktree remove path", True),
         ("git worktree remove --force path", True),
         ("git worktree remove -f ../wt-branch", True),
+        # 例外只豁免它自己那一段，不豁免整條命令列。
+        #
+        # 2026-09-23 之前是整行早退：命令文字裡任何地方出現「git worktree
+        # remove」，整段複合指令就提前獲准。最嚴重的一條是最後那個——
+        # 在後面接一句例外，就能遞迴刪除任何路徑。
+        ("git reset --hard; git worktree remove unused", False),
+        ("git worktree remove unused; git reset --hard", False),
+        ("echo git worktree remove; git reset --hard", False),
+        ("git reset --hard # git worktree remove", False),
+        ("git worktree remove unused && git clean -fd", False),
+        ("git worktree remove unused || git restore .", False),
+        ("git worktree remove unused | xargs rm -rf", False),
         # 唯讀 / 安全 Git 放行
         ("git status", True),
         ("git diff", True),

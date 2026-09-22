@@ -209,14 +209,31 @@ def check_command(command_line, cwd=None):
     if not command_line:
         return False, "指令字串為空，無法判定是否為遞迴刪除。"
 
-    if EXEMPT_REGEX.search(command_line):
-        return True, ""
+    # 例外只豁免「它自己那一段」，不豁免整條命令列。
+    #
+    # 原本是 `if EXEMPT_REGEX.search(command_line): return True`——只要命令文字
+    # 裡任何地方出現「git worktree remove」，整段複合指令就提前獲准。實測
+    # （2026-09-23，Codex 在覆核中發現、本機逐條重現）：
+    #
+    #   git reset --hard; git worktree remove unused        -> allowed
+    #   echo git worktree remove; git reset --hard          -> allowed
+    #   git reset --hard # git worktree remove              -> allowed
+    #   rm -rf /etc && git worktree remove unused           -> allowed
+    #
+    # 最後一條是完全繞過：只要在後面接一句例外，遞迴刪除任何路徑都會放行。
+    #
+    # 改成先把例外段落從文字裡拿掉，再拿剩下的去比對。用空白取代而不是刪空，
+    # 是為了不讓兩側的 token 黏在一起——例外的樣式本身含一個前導邊界字元
+    # （`[\s;&|]`），整段拿掉會把那個分隔符一併帶走。
+    #
+    # 這不是 shell 剖析，是保守的減法：只會移除文字，不會生出新的放行條件。
+    remainder = EXEMPT_REGEX.sub(" ", command_line)
 
-    if OTHER_REGEX.search(command_line) or PIPELINE_REGEX.search(command_line):
+    if OTHER_REGEX.search(remainder) or PIPELINE_REGEX.search(remainder):
         return False, _blocked_reason(command_line, "")
 
-    if FS_REGEX.search(command_line):
-        detail = disposable_target_reason(command_line, cwd)
+    if FS_REGEX.search(remainder):
+        detail = disposable_target_reason(remainder, cwd)
         if detail is None:
             return True, ""
         return False, _blocked_reason(command_line, detail)
