@@ -10,14 +10,16 @@
 ## 3. Evidence & Ground Truth Code
 
 ### 3.1 基礎回應信封（Envelope）
-- 位於 `sidecar/sidecar.py:222-234`：
+- 成功信封，位於 `sidecar/sidecar.py:223-227`：
   ```python
   def _ok(req: dict, extra: dict | None = None) -> dict:
       out = {"ok": True, "request_id": req.get("request_id")}
       if extra:
           out.update(extra)
       return out
-
+  ```
+- 錯誤信封，位於 `sidecar/sidecar.py:230-235`：
+  ```python
   def _err(req: dict, code: str, message: str, internal: str = "") -> dict:
       return {
           "ok": False,
@@ -27,7 +29,7 @@
   ```
 
 ### 3.2 巢狀結構命令 (`fetch_javdb` 與 `rd_user`)
-- **`cmd_fetch_javdb`**（`sidecar/sidecar.py:595-604`）：
+- **`cmd_fetch_javdb`**（`sidecar/sidecar.py:596-605`）：
   ```python
   return _ok(req, {
       "result": {
@@ -41,7 +43,7 @@
   })
   ```
   `magnets_out` 陣列中每筆項目包含 `handle_id`, `name`, `size`, `tags`, `date`, `magnet_redacted`。
-- **`cmd_rd_user`**（`sidecar/sidecar.py:988-995`）：
+- **`cmd_rd_user`**（`sidecar/sidecar.py:989-996`）：
   ```python
   return _ok(req, {
       "user": {

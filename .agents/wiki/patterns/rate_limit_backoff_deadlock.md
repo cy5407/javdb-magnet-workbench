@@ -10,29 +10,26 @@
 ## 3. Evidence & Ground Truth Code
 
 ### 3.1 429 退避限制與重試預算（Verbatim Code）
-- 位於 `realdebrid.py:20` 與 `realdebrid.py:106-124`：
+- 上限常數，位於 `realdebrid.py:20`：
   ```python
   MAX_RETRY_AFTER_SECONDS = 10
-
-  def _retry_after_rate_limit(self, resp, method: str, path: str, retry_count: int, kwargs: dict, deadline: Optional[float] = None):
-      """429 自動重試（最多 3 次）"""
-      if retry_count >= 3:
-          logger.error("429 重試 3 次仍失敗")
-          raise RealDebridError("HTTP 429: 請求頻率過高，請稍後再試")
-      dl = deadline if deadline is not None else self.deadline
-      parsed = self._parse_retry_after(resp)
-      wait = min(max(parsed, 0.0), float(MAX_RETRY_AFTER_SECONDS))
-      if dl is not None:
-          remaining = dl - time.monotonic()
-          if remaining <= 0:
-              raise RealDebridError("HTTP 429: 請求超過時間預算")
-          wait = min(wait, max(0.0, remaining))
-      if wait > 0:
-          logger.warning(f"429 速率限制，等待 {wait}s 後重試（第 {retry_count + 1}/3 次）")
-          time.sleep(wait)
-      else:
-          logger.warning(f"429 速率限制，立即重試（第 {retry_count + 1}/3 次）")
-      return self._request(method, path, _retry_count=retry_count + 1, deadline=dl, **kwargs)
+  ```
+- 重試與截止時間的交互，位於 `realdebrid.py:118-131`：
+  ```python
+      def _retry_after_rate_limit(self, resp, method: str, path: str, retry_count: int, kwargs: dict, deadline: Optional[float] = None):
+          """429 自動重試（最多 3 次）"""
+          if retry_count >= 3:
+              logger.error("429 重試 3 次仍失敗")
+              raise RealDebridError("HTTP 429: 請求頻率過高，請稍後再試")
+          dl = deadline if deadline is not None else self.deadline
+          parsed = self._parse_retry_after(resp)
+          wait = min(max(parsed, 0.0), float(MAX_RETRY_AFTER_SECONDS))
+          if dl is not None:
+              remaining = dl - time.monotonic()
+              if remaining <= 0:
+                  raise RealDebridError("HTTP 429: 請求超過時間預算")
+              wait = min(wait, max(0.0, remaining))
+          if wait > 0:
   ```
 
 ### 3.2 邊界常數定義

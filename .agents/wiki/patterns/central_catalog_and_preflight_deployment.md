@@ -16,17 +16,25 @@
 ## 3. Verbatim Code Evidence
 
 ### 3.1 執行期命令硬性阻擋護欄
-- 位於 `.agent-hooks/recursive-delete-guard.mjs:33-39`：
-  ```javascript
-  export function blockedReason(command) {
-    for (const [label, pattern] of blockedPatterns) {
-      if (pattern.test(command)) {
-        return `Blocked ${label}. Review and run the command manually if intentional.`;
-      }
-    }
-    return null;
-  }
+- 位於 `.agent-hooks/recursive_delete_guard.py:207-216`：
+  ```python
+  def check_command(command_line, cwd=None):
+      """回傳 (allowed, reason)。allowed 為 True 時 reason 為空字串。"""
+      if not command_line:
+          return False, "指令字串為空，無法判定是否為遞迴刪除。"
+  
+      if EXEMPT_REGEX.search(command_line):
+          return True, ""
+  
+      if OTHER_REGEX.search(command_line) or PIPELINE_REGEX.search(command_line):
+          return False, _blocked_reason(command_line, "")
   ```
+
+  > **SUPERSEDED（2026-09-22 標記）。** 原文引用的是 `recursive-delete-guard.mjs`
+  > 的 `blockedReason()`。那支 .mjs 已在本次移除——它一直在專案裡，但沒有任何
+  > 註冊檔載入它，防護實際是 0（形狀見 hook_deployed_but_never_registered）。
+  > 要看原文請查 commit `842538a`。現行正典是上面這支 Python，四家 runner 都有
+  > 註冊，`test_exhaustive.py` 184/184 通過。
 
 ### 3.2 零風險宣告禁令與標準隔離 SOP
 - 位於 `.agents/rules/no-false-zero-risk.md:8-15`：

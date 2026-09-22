@@ -1,0 +1,17 @@
+{
+  "profile-guards": {
+    "enabled": true,
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -X utf8 \"../.agent-hooks/recursive_delete_guard.py\" --runner antigravity",
+            "commandWindows": "py -3 -X utf8 \"..\\.agent-hooks\\recursive_delete_guard.py\" --runner antigravity"
+          }
+        ]
+      }
+    ]
+  }
+}

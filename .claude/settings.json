@@ -9,6 +9,20 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|PowerShell)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -X utf8 \"${CLAUDE_PROJECT_DIR}/.agent-hooks/recursive_delete_guard.py\" --runner claude",
+            "timeout": 10,
+            "statusMessage": "Checking recursive deletion policy",
+            "commandWindows": "py -3 -X utf8 \"%CLAUDE_PROJECT_DIR%\\.agent-hooks\\recursive_delete_guard.py\" --runner claude"
+          }
+        ]
+      }
     ]
   }
 }
