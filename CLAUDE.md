@@ -137,7 +137,7 @@
 ### 開工前讀取（強制）
 - 每次開始實作、除錯、架構或跨層契約工作前，先讀 `.agents/wiki/index.md`。
 - 索引命中任務主題時，先讀對應 pattern；其中的 `Actionable Fix` 是動手前約束，原始碼與權威契約仍為最終真實來源。
-- 提交前執行 `.venv/Scripts/python.exe scripts/verify_wiki_citations.py`；引用失真時，先修 Wiki 或程式碼，不能略過校驗。
+- 提交前執行引用閘門（Linux／macOS：`.venv/bin/python scripts/verify_wiki_citations.py`；Windows：`.venv\Scripts\python.exe scripts\verify_wiki_citations.py`）；引用失真時，先修 Wiki 或程式碼，不能略過校驗。
 
 ### 1. 語意觸發與自動蒸餾
 - 當使用者對話提及**「蒸餾」**、**「提煉」**、**「Wiki」**、**「沉澱知識」**、**「記錄踩坑經驗」**，或當 Session 完成重大除錯/架構修正時：
