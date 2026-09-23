@@ -80,8 +80,15 @@ OTHER_REGEX = re.compile('|'.join(DESTRUCTIVE_OTHER), re.IGNORECASE)
 
 # git worktree remove 刻意不列入：它是既有例外，見下方 EXEMPT_PATTERNS。
 # git 自己會拒絕移除有未提交變更的工作樹，而且目標永遠是 git 自己管理的目錄。
+#
+# 只在「一條命令的開頭」才算例外：字串開頭，或 `;`、`&`、`|`、`(`、換行之後。
+# 原本的邊界含 `\s`，於是它在別的命令的參數中間也比對得到。check_command 會把
+# 例外段落從文字裡拿掉再比對剩下的部分，兩者一組合，`git`、`worktree`、`remove`
+# 這三個 token 若是 rm 的刪除目標，就會被當成例外抹掉——只要旁邊再放一個白名單
+# 目錄，整條就放行，而 shell 實際上會把那三個目錄一起遞迴刪除（2026-09-23
+# Luna 覆核提出假說，本機以純函式重現：放行）。
 EXEMPT_PATTERNS = [
-    r'(?:^|[\s;&|])git\s+worktree\s+remove',
+    r'(?:^|[;&|(\n])\s*git\s+worktree\s+remove',
 ]
 EXEMPT_REGEX = re.compile('|'.join(EXEMPT_PATTERNS), re.IGNORECASE)
 

@@ -182,6 +182,13 @@ def run_exhaustive_tests():
         ("git worktree remove unused && git clean -fd", False),
         ("git worktree remove unused || git restore .", False),
         ("git worktree remove unused | xargs rm -rf", False),
+        # 例外只在命令開頭才算。它出現在別的命令的參數裡時，那三個字其實是
+        # 刪除目標——2026-09-23 Luna 覆核提出、本機重現：配一個白名單目錄就放行。
+        ("rm -rf build git worktree remove", False),
+        ("Remove-Item -Recurse build git worktree remove", False),
+        ("rm -rf node_modules git worktree remove", False),
+        ("cd .. && git worktree remove ../wt", True),
+        ("git status; git worktree remove ../wt", True),
         # 唯讀 / 安全 Git 放行
         ("git status", True),
         ("git diff", True),
