@@ -2,7 +2,7 @@
 """窮舉測試矩陣 (Exhaustive Guard Test Matrix)
 
 檢驗 recursive_delete_guard.py 的所有邊界值、語法變體、攻擊向量、白名單路徑與多 Runner 相容性。
-包含 176 項自動化單元與黑箱端對端測試。
+測試項數以執行輸出為準。
 """
 
 import importlib.util
@@ -113,6 +113,11 @@ def run_exhaustive_tests():
         ("rd emptyDir", True),
         ("Get-ChildItem *.tmp | Remove-Item", True),
         ("ls *.log | Remove-Item", True),
+        # H2: PowerShell 參數縮寫與冒號語法
+        ("Remove-Item -Recurse:$true src", False),
+        ("ri -Recurse:$true src", False),
+        ("Remove-Item -Recu src", False),
+        ("Remove-Item -Recurse:$false src", True),
     ]
     for cmd, expected in pwsh_cases:
         allowed, reason = guard.check_command(cmd)
@@ -203,6 +208,25 @@ def run_exhaustive_tests():
         ("git checkout main", True),
         ("git checkout -b new-branch", True),
         ("git branch -a", True),
+        # H1: git 全域選項
+        ("git -C /tmp/repo clean -fd", False),
+        ("git -C /tmp/repo reset --hard", False),
+        ("git --git-dir=/tmp/repo/.git clean -fd", False),
+        ("git -C x restore .", False),
+        ("git --work-tree=x checkout -f", False),
+        ("git -c core.x=y reset --hard", False),
+        ("git -C x status", True),
+        ("git -C x diff", True),
+        # M1: 合法組合逐段判定
+        ("rm -rf build; git worktree remove x", True),
+        ("git worktree remove x; rm -rf build", True),
+        ("git worktree remove x; rm -rf /", False),
+        ("git worktree remove x; Remove-Item -Recu src", False),
+        # G1b: 單一 & 與防禦性補強
+        ("git worktree remove x & rm -rf src", False),
+        ("git worktree remove x &rm -rf src", False),
+        ("git worktree remove x > /dev/null & rm -rf src", False),
+        ("git worktree remove ../wt &", True),
     ]
     for cmd, expected in git_cases:
         allowed, reason = guard.check_command(cmd)
@@ -225,6 +249,10 @@ def run_exhaustive_tests():
         ("robocopy src dst /MIR", False),
         ("robocopy src dst /PURGE", False),
         ("robocopy.exe src dst /mir", False),
+        # H3: list 形式的 argv
+        ("subprocess.run(['rm','-rf','src'])", False),
+        ("subprocess.run(['rm', '-rf', 'src'])", False),
+        ("subprocess.run([\"rm\", \"-rf\", \"src\"])", False),
     ]
     for cmd, expected in system_cases:
         allowed, reason = guard.check_command(cmd)

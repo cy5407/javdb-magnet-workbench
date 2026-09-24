@@ -37,11 +37,23 @@ STDIN_TIMEOUT_SECONDS = 5
 # 破壞性 git 與鏡像清空的「目標」不是一個可解析的路徑，放行條件無從判定，
 # 因此一律 deny。
 
+_GIT_VAL = r'(?:"[^"]*"|\'[^\']*\'|[^\s;&|()]+)'
+_GIT_GLOBAL_OPT = (
+    r'(?:'
+    r'-[Cc](?:\s+' + _GIT_VAL + r'|\S+)'
+    r'|--git-dir(?:=' + _GIT_VAL + r'|\s+' + _GIT_VAL + r')'
+    r'|--work-tree(?:=' + _GIT_VAL + r'|\s+' + _GIT_VAL + r')'
+    r'|--no-pager'
+    r'|--bare'
+    r')'
+)
+_GIT_CMD_PREFIX = r'(?:^|[\s;&|("`\'$])git(?:\s+' + _GIT_GLOBAL_OPT + r')*\s+'
+
 FILESYSTEM_RECURSIVE = [
     # POSIX rm / trash：支援可選絕對路徑（如 /bin/rm）、-r、-R、--recursive 或複合旗標
     r'(?:^|[\s;&|("`\'$])(?:[\w./\\-]+[/\\])?(?:rm|trash)(?:\.exe)?\s+(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?:\s|$)',
-    # PowerShell Remove-Item / rm / del / rd / ri / rmdir / erase 帶 -Recurse（含縮寫）
-    r'(?:^|[\s;&|("`\'$])(?:Remove-Item|rm|del|rd|ri|rmdir|erase)\s+.*-(?:r|rec|recur|recurse)(?:\s|$)',
+    # PowerShell Remove-Item / rm / del / rd / ri / rmdir / erase 帶 -Recurse（含縮寫與 :$true，排除 :$false）
+    r'(?:^|[\s;&|("`\'$])(?:Remove-Item|rm|del|rd|ri|rmdir|erase)\s+.*-[rR](?:ecurse|ecurs|ecur|ecu|ec|e)?(?::(?!\$false\b|0\b)\S*|(?:\s|$))',
     # CMD rmdir / rd / del / erase 帶 /s
     r'(?:^|[\s;&|("`\'$])(?:[\w./\\-]+[/\\])?(?:rmdir|rd|del|erase)(?:\.exe)?\s+.*\/[sS](?:\s|$)',
 ]
@@ -49,20 +61,22 @@ FILESYSTEM_RECURSIVE = [
 # 上游 -Recurse 列舉再接刪除：Get-ChildItem -Recurse | Remove-Item。
 # 目標藏在 pipeline 上游，抽不出單一路徑，所以不適用白名單。
 PIPELINE_RECURSIVE = [
-    r'-[rR](?:ecurse|ecurs|ecur|ecu|ec|e)?\b[^|]*\|\s*(?:Remove-Item|rm|del|ri|rmdir|rd)\b',
+    r'-[rR](?:ecurse|ecurs|ecur|ecu|ec|e)?(?::(?!\$false\b|0\b)\S*|\b)[^|]*\|\s*(?:Remove-Item|rm|del|ri|rmdir|rd)\b',
 ]
 
 DESTRUCTIVE_OTHER = [
-    # git 遞迴刪除
-    r'(?:^|[\s;&|("`\'$])git\s+rm\s+.*-[a-zA-Z]*[rR]',
+    # git 遞迴刪除（支援全域選項如 -C、-c、--git-dir 等）
+    _GIT_CMD_PREFIX + r'rm\s+.*-[a-zA-Z]*[rR]',
     # git clean 帶 -f / -d / --force / --directories（負向後行斷言避免誤殺 --dry-run）
-    r'(?:^|[\s;&|("`\'$])git\s+clean\s+.*(?:(?<!-)-[a-zA-Z]*[fFdD][a-zA-Z]*\b|--force\b|--directories\b)',
+    _GIT_CMD_PREFIX + r'clean\s+.*(?:(?<!-)-[a-zA-Z]*[fFdD][a-zA-Z]*\b|--force\b|--directories\b)',
     # git reset --hard
-    r'(?:^|[\s;&|("`\'$])git\s+reset\s+.*--hard\b',
+    _GIT_CMD_PREFIX + r'reset\s+.*--hard\b',
     # git restore . / *（單檔如 git restore file.txt 放行）
-    r'(?:^|[\s;&|("`\'$])git\s+restore\s+(?:.*?\s)?(?:\.|\*)(?:\s|$)',
+    _GIT_CMD_PREFIX + r'restore\s+(?:.*?\s)?(?:\.|\*)(?:\s|$)',
     # git checkout -f / git checkout -- .
-    r'(?:^|[\s;&|("`\'$])git\s+checkout\s+.*(?:-[a-zA-Z]*[fF]\b|--\s+\.)',
+    _GIT_CMD_PREFIX + r'checkout\s+.*(?:-[a-zA-Z]*[fF]\b|--\s+\.)',
+    # list 形式 argv 的遞迴 rm（例如 subprocess.run(['rm', '-rf', 'src'])）
+    r'[\'"](?:[^\s\'"]*[/\\])?(?:rm|trash)(?:\.exe)?[\'"](?:\s*,\s*[\'"][^\'"]*[\'"])*\s*,\s*[\'"](?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)[\'"]',
     # find ... -delete / -exec rm
     r'(?:^|[\s;&|("`\'$])find\s+.*(?:-delete|-exec\s+rm)',
     # 程式庫單行遞迴刪除
@@ -81,16 +95,15 @@ OTHER_REGEX = re.compile('|'.join(DESTRUCTIVE_OTHER), re.IGNORECASE)
 # git worktree remove 刻意不列入：它是既有例外，見下方 EXEMPT_PATTERNS。
 # git 自己會拒絕移除有未提交變更的工作樹，而且目標永遠是 git 自己管理的目錄。
 #
-# 只在「一條命令的開頭」才算例外：字串開頭，或 `;`、`&`、`|`、`(`、換行之後。
-# 原本的邊界含 `\s`，於是它在別的命令的參數中間也比對得到。check_command 會把
-# 例外段落從文字裡拿掉再比對剩下的部分，兩者一組合，`git`、`worktree`、`remove`
-# 這三個 token 若是 rm 的刪除目標，就會被當成例外抹掉——只要旁邊再放一個白名單
-# 目錄，整條就放行，而 shell 實際上會把那三個目錄一起遞迴刪除（2026-09-23
-# Luna 覆核提出假說，本機以純函式重現：放行）。
+# 改為逐段判定：一段命令的開頭為 git worktree remove 時視為豁免段落略過。
 EXEMPT_PATTERNS = [
-    r'(?:^|[;&|(\n])\s*git\s+worktree\s+remove',
+    r'^\s*(?:\(\s*)?git(?:\s+' + _GIT_GLOBAL_OPT + r')*\s+worktree\s+remove\b',
 ]
 EXEMPT_REGEX = re.compile('|'.join(EXEMPT_PATTERNS), re.IGNORECASE)
+
+# 防禦性補強：豁免段落不得包含其他 shell 控制字元
+SHELL_CONTROL_CHARS = re.compile(r'[&;|`()<>\r\n]|\$\(')
+
 
 # 允許遞迴刪除的目錄名（必須是解析後路徑的最後一段）
 DISPOSABLE_DIR_NAMES = {
@@ -211,39 +224,123 @@ def disposable_target_reason(command_line, cwd=None):
     return None
 
 
+def split_command_segments(command_line: str) -> list[str]:
+    """以 ;、&&、&、||、|、換行把命令切段，引號內的分隔符不算。"""
+    segments = []
+    current = []
+    i = 0
+    n = len(command_line)
+    in_quote = None  # None, "'", '"', '`'
+
+    while i < n:
+        ch = command_line[i]
+
+        if in_quote is not None:
+            current.append(ch)
+            if ch == "\\" and in_quote == '"' and i + 1 < n:
+                i += 1
+                current.append(command_line[i])
+            elif ch == in_quote:
+                in_quote = None
+            i += 1
+            continue
+
+        if ch in ("'", '"', '`'):
+            in_quote = ch
+            current.append(ch)
+            i += 1
+            continue
+
+        if ch == "\\" and i + 1 < n:
+            current.append(ch)
+            i += 1
+            current.append(command_line[i])
+            i += 1
+            continue
+
+        if ch in ("\r", "\n", ";"):
+            seg = "".join(current).strip()
+            if seg:
+                segments.append(seg)
+            current = []
+            i += 1
+            continue
+
+        if ch == "&":
+            if i + 1 < n and command_line[i + 1] == "&":
+                seg = "".join(current).strip()
+                if seg:
+                    segments.append(seg)
+                current = []
+                i += 2
+                continue
+            # 排除重定向如 2>&1、cmd >&2、cmd <&3
+            if i > 0 and command_line[i - 1] in (">", "<"):
+                current.append(ch)
+                i += 1
+                continue
+            seg = "".join(current).strip()
+            if seg:
+                segments.append(seg)
+            current = []
+            i += 1
+            continue
+
+        if ch == "|" and i + 1 < n and command_line[i + 1] == "|":
+            seg = "".join(current).strip()
+            if seg:
+                segments.append(seg)
+            current = []
+            i += 2
+            continue
+
+        if ch == "|":
+            seg = "".join(current).strip()
+            if seg:
+                segments.append(seg)
+            current = []
+            i += 1
+            continue
+
+        current.append(ch)
+        i += 1
+
+    seg = "".join(current).strip()
+    if seg:
+        segments.append(seg)
+    return segments
+
+
 def check_command(command_line, cwd=None):
-    """回傳 (allowed, reason)。allowed 為 True 時 reason 為空字串。"""
+    """回傳 (allowed, reason)。allowed 為 True 時 reason 為空字串。
+
+    採用逐段判定：以 ;、&&、&、||、|、換行切段（引號內不算），
+    開頭是 git worktree remove 且無其他 shell 控制字元的段落略過，
+    其餘每一段各自走判定，任一段擋就擋。
+    """
     if not command_line:
         return False, "指令字串為空，無法判定是否為遞迴刪除。"
 
-    # 例外只豁免「它自己那一段」，不豁免整條命令列。
-    #
-    # 原本是 `if EXEMPT_REGEX.search(command_line): return True`——只要命令文字
-    # 裡任何地方出現「git worktree remove」，整段複合指令就提前獲准。實測
-    # （2026-09-23，Codex 在覆核中發現、本機逐條重現）：
-    #
-    #   git reset --hard; git worktree remove unused        -> allowed
-    #   echo git worktree remove; git reset --hard          -> allowed
-    #   git reset --hard # git worktree remove              -> allowed
-    #   rm -rf /etc && git worktree remove unused           -> allowed
-    #
-    # 最後一條是完全繞過：只要在後面接一句例外，遞迴刪除任何路徑都會放行。
-    #
-    # 改成先把例外段落從文字裡拿掉，再拿剩下的去比對。用空白取代而不是刪空，
-    # 是為了不讓兩側的 token 黏在一起——例外的樣式本身含一個前導邊界字元
-    # （`[\s;&|]`），整段拿掉會把那個分隔符一併帶走。
-    #
-    # 這不是 shell 剖析，是保守的減法：只會移除文字，不會生出新的放行條件。
-    remainder = EXEMPT_REGEX.sub(" ", command_line)
-
-    if OTHER_REGEX.search(remainder) or PIPELINE_REGEX.search(remainder):
+    # 跨 segment 的 pipeline 遞迴刪除守衛（如 Get-ChildItem -Recurse | Remove-Item）
+    if PIPELINE_REGEX.search(command_line):
         return False, _blocked_reason(command_line, "")
 
-    if FS_REGEX.search(remainder):
-        detail = disposable_target_reason(remainder, cwd)
-        if detail is None:
-            return True, ""
-        return False, _blocked_reason(command_line, detail)
+    segments = split_command_segments(command_line)
+    if not segments:
+        return False, "指令字串為空，無法判定是否為遞迴刪除。"
+
+    for seg in segments:
+        # 開頭是 git worktree remove 且無其他 shell 控制字元的段落略過
+        if EXEMPT_REGEX.search(seg) and not SHELL_CONTROL_CHARS.search(seg):
+            continue
+
+        if OTHER_REGEX.search(seg) or PIPELINE_REGEX.search(seg):
+            return False, _blocked_reason(command_line, "")
+
+        if FS_REGEX.search(seg):
+            detail = disposable_target_reason(seg, cwd)
+            if detail is not None:
+                return False, _blocked_reason(command_line, detail)
 
     return True, ""
 
