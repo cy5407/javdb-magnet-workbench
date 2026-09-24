@@ -17,17 +17,18 @@
 
   Before implementing, debugging, or changing an architecture or cross-layer contract, read `.agents/wiki/index.md`. When an entry matches the task, read its linked pattern before editing; treat its actionable fix as a pre-edit constraint, while live source code and `docs/architecture/contracts/` remain authoritative.
 
-  After changing source referenced by a Wiki pattern, run `.venv/Scripts/python.exe scripts/verify_wiki_citations.py` and correct any drift before finishing.
+  After changing source referenced by a Wiki pattern, run the citation gate (`.venv/bin/python scripts/verify_wiki_citations.py` on Linux/macOS, `.venv\Scripts\python.exe scripts\verify_wiki_citations.py` on Windows) and correct any drift before finishing.
   ```
-- citation checker 的引用語法位於 `scripts/verify_wiki_citations.py:30-35`：
+- citation checker 的引用語法位於 `.agent-hooks/verify_wiki_citations.py:49-50`：
   ```python
-  # `path:12` 或 `path:12-34`；副檔名白名單避免把 `rd_send_magnet:pending` 這類
-  # 非路徑字串誤判為引用。
-  CITATION_RE = re.compile(
-      r"`([\w./\\-]+\.(?:py|rs|ts|tsx|svelte|md|toml|json)):(\d+)(?:-(\d+))?`"
-  )
-  FENCE_RE = re.compile(r"^\s*```")
+  CITATION_RE = re.compile(rf"`([^`\n]+\.{_EXT}):(\d+)(?:-(\d+))?`")
+  LINK_CITATION_RE = re.compile(rf"\]\((?!https?:)([^)\s]+\.{_EXT}):(\d+)(?:-(\d+))?\)")
   ```
+
+  > 2026-09-22 起 `scripts/verify_wiki_citations.py` 只是薄殼，正典由中央庫
+  > 部署到 `.agent-hooks/`。原文引用的是殼被建立前那份 185 行的舊副本，
+  > 它只認反引號一種寫法；正典另外認 markdown 連結式與 `repo@commit:path:12`
+  > 的跨庫引用。舊副本對同一份 wiki 回報「0 個問題」，正典回報 5 個。
 
 ## 4. Actionable Fix
 

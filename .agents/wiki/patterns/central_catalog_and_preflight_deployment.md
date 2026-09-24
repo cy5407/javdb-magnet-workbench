@@ -16,17 +16,28 @@
 ## 3. Verbatim Code Evidence
 
 ### 3.1 執行期命令硬性阻擋護欄
-- 位於 `.agent-hooks/recursive-delete-guard.mjs:33-39`：
-  ```javascript
-  export function blockedReason(command) {
-    for (const [label, pattern] of blockedPatterns) {
-      if (pattern.test(command)) {
-        return `Blocked ${label}. Review and run the command manually if intentional.`;
-      }
-    }
-    return null;
-  }
+- 切段後逐段判定，空命令直接拒絕，位於 `.agent-hooks/recursive_delete_guard.py:328-330`：
+  ```python
+      segments = split_command_segments(command_line)
+      if not segments:
+          return False, "指令字串為空，無法判定是否為遞迴刪除。"
   ```
+- 以 `git worktree remove` 開頭、且不含其他 shell 控制字元的段落才略過，其餘每段照常判定，位於 `.agent-hooks/recursive_delete_guard.py:332-338`：
+  ```python
+      for seg in segments:
+          # 開頭是 git worktree remove 且無其他 shell 控制字元的段落略過
+          if EXEMPT_REGEX.search(seg) and not SHELL_CONTROL_CHARS.search(seg):
+              continue
+
+          if OTHER_REGEX.search(seg) or PIPELINE_REGEX.search(seg):
+              return False, _blocked_reason(command_line, "")
+  ```
+
+  > **SUPERSEDED（2026-09-22 標記）。** 原文引用的是 `recursive-delete-guard.mjs`
+  > 的 `blockedReason()`。那支 .mjs 已在本次移除——它一直在專案裡，但沒有任何
+  > 註冊檔載入它，防護實際是 0（形狀見 hook_deployed_but_never_registered）。
+  > 要看原文請查 commit `842538a`。現行正典是上面這支 Python，四家 runner 都有
+  > 註冊，`test_exhaustive.py` 219/219 通過（2026-09-24 改為逐段判定後）。
 
 ### 3.2 零風險宣告禁令與標準隔離 SOP
 - 位於 `.agents/rules/no-false-zero-risk.md:8-15`：
