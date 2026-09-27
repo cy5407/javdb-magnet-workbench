@@ -122,7 +122,7 @@
   在 (b) 未實測確認之前，不要把 permissions 層當成 `--dangerously-skip-permissions`
   之下仍然成立的技術護欄。
 - **本專案目錄下的規則檔對 `agy` CLI 一律無效**（2026-08-30 指紋探針實測，
-  agy 1.1.22）：`爬蟲/GEMINI.md`、`AGENTS.md`、`.agents/rules/`、`.agent/rules/`、
+  agy 1.1.22）：`javdb-magnet-workbench/GEMINI.md`、`AGENTS.md`、`.agents/rules/`、`.agent/rules/`、
   `.agents/skills/` 在 `agy -p` 下**完全不會被載入**——CLI 不做任何工作區客製化探索，
   只讀 `~/.gemini/config/rules/*.md`（需 `trigger: always_on` frontmatter）與
   `~/.gemini/GEMINI.md`。Antigravity **IDE** 則會載入開啟層的上述路徑。
