@@ -116,6 +116,22 @@ Get-WinEvent -LogName 'Microsoft-Windows-CodeIntegrity/Operational' -MaxEvents 2
 若不願關閉，替代方案是改在 CI（GitHub Actions `windows-latest`）上建置——
 runner 預設不啟用 SAC。repo 目前只有 `sonarcloud.yml`，需要另外新增 workflow。
 
+### 5. Windows PowerShell 5.1 讀不懂沒有 BOM 的 UTF-8（2026-10-15 實遇）
+
+`npm run release`／`release:test`／`release:audit` 呼叫的是 `powershell`
+（Windows PowerShell 5.1），不是 pwsh 7。5.1 讀取**沒有 BOM** 的腳本或用
+`Get-Content` 讀檔（沒給 `-Encoding`）時，用的是系統 ANSI 編碼（這台是 cp950）。
+中文註解與字串因此被讀壞：
+
+- `test-release-scan.ps1`、`verify-windows-build.ps1` 直接 `ParserError`（5 與 20 個），
+  在 pwsh 上卻完全正常——只在 pwsh 驗證的人看不到。
+- `test-release-scan.ps1` 讀 `commands.rs` 時沒給 `-Encoding`，`COOKIES_TEMPLATE`
+  被讀成亂碼，5.1 下多出兩個 binary allowlist 失敗。
+
+規則：含非 ASCII 的 `.ps1` 一律存成 **UTF-8 with BOM**（`tests/test_ps1_encoding.py`
+會擋）；`Get-Content` 讀任何可能含非 ASCII 的檔案都要寫 `-Encoding utf8`。
+`verify-windows-build.ps1` 會在兩個 host 各跑一次 release-scan 測試，兩邊都要過。
+
 ---
 
 ## repo 內那三個 .exe 是舊的

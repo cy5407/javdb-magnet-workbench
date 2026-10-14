@@ -1,4 +1,4 @@
-# verify-windows-build.ps1 — Windows 建置前後的驗證關卡
+﻿# verify-windows-build.ps1 — Windows 建置前後的驗證關卡
 #
 # 這支腳本**不打包**。打包是 scripts\build-release.ps1 的工作，那條 pipeline
 # 已經完整。這支補的是它沒做、而從 Linux 移植過來時最容易出事的部分：

@@ -1,4 +1,4 @@
-# build-release.ps1 — portable release pipeline
+﻿# build-release.ps1 — portable release pipeline
 #
 # Produces a portable ZIP that ships javdbmagnet.exe + sidecar.exe in a
 # single folder. End-users extract the zip and double-click the exe —
@@ -97,7 +97,7 @@ $SidecarSource = Join-Path $BinariesDir "sidecar-x86_64-pc-windows-msvc.exe"
 
 # Read version straight from app/package.json so the zip name follows it.
 $PkgJsonPath = Join-Path $AppDir "package.json"
-$pkgJson = Get-Content $PkgJsonPath -Raw | ConvertFrom-Json
+$pkgJson = Get-Content $PkgJsonPath -Raw -Encoding utf8 | ConvertFrom-Json
 $Version = $pkgJson.version
 $PortableFolderName = "JavDBMagnet"
 $StagingDir = Join-Path $ReleaseOutDir $PortableFolderName
