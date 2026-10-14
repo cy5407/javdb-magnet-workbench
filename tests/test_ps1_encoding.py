@@ -34,9 +34,11 @@ class Ps1Encoding(unittest.TestCase):
         self.assertEqual(missing, [], "含非 ASCII 卻沒有 UTF-8 BOM，Windows PowerShell 5.1 會讀壞")
 
     def test_release_scripts_are_covered(self):
-        # npm run release / release:test / release:audit 跑的兩支一定要在掃描範圍內。
+        # npm run release / release:test / release:audit 跑的兩支，加上會用 5.1
+        # 再跑一次 release-scan 測試的 verify 腳本，一定要在掃描範圍內。
         names = {p.name for p in _ps1_files()}
-        self.assertTrue({"build-release.ps1", "test-release-scan.ps1"} <= names, names)
+        required = {"build-release.ps1", "test-release-scan.ps1", "verify-windows-build.ps1"}
+        self.assertTrue(required <= names, sorted(required - names))
 
 
 if __name__ == "__main__":
