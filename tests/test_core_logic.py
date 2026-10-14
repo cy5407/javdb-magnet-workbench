@@ -311,6 +311,26 @@ class TestCiDependencySync(unittest.TestCase):
         self.assertEqual(len(actual), len(set(actual)), f"sonarcloud.yml 有重複的釘選：{actual}")
         self.assertEqual(sorted(actual), sorted(expected))
 
+    def test_workflow_pip_installs_refuse_sdists(self):
+        """每個 workflow 的 `pip install` 都要帶 `--only-binary :all:`。
+
+        2026-10-15 PR #7 的 SonarCloud 品質閘門因此失敗（Security Rating on
+        New Code = C）：沒有這個旗標，pip 遇到 sdist 會在 runner 上執行套件的
+        setup script。旗標要寫在同一行，與 Sonar 規則的判斷方式相同。
+        """
+        workflows = sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
+        self.assertTrue(workflows, "找不到 workflow，檢查不能把空集合當成通過")
+        installs = [
+            (wf.name, n, line.strip())
+            for wf in workflows
+            for n, line in enumerate(wf.read_text(encoding="utf-8").splitlines(), 1)
+            if re.search(r"\bpip\s+install\b", line) and not line.lstrip().startswith("#")
+        ]
+        self.assertTrue(installs, "workflow 裡沒有 pip install，這個檢查已失去對象")
+        missing = [f"{name}:{n}: {line}" for name, n, line in installs
+                   if "--only-binary :all:" not in line]
+        self.assertEqual(missing, [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
