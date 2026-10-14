@@ -11,6 +11,7 @@
     python -m unittest discover -s tests -v
 """
 
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -286,28 +287,29 @@ class PickFilesSmart(unittest.TestCase):
 
 
 class TestCiDependencySync(unittest.TestCase):
-    """Ensure .github/workflows/sonarcloud.yml inline pip pins stay in sync
-    with requirements-sidecar.txt and requirements-ci.txt."""
+    """sonarcloud.yml 的 inline pip 釘選必須與兩份 requirements 檔完全一致。
+
+    雙向比對：requirements 有而 workflow 沒有（漏升級），以及 workflow 有而
+    requirements 沒有、或同一套件釘了兩次（殘留舊版），都要紅。`pip==` 是
+    安裝器自己的升級，不屬於專案依賴，不列入比對。
+    """
+
+    PIN_RE = re.compile(r"'([A-Za-z0-9_.\-]+==[^'\s]+)'")
 
     def test_sonarcloud_workflow_pins_match_requirements_files(self):
-        root = Path(__file__).resolve().parent.parent
-        workflow = (root / ".github" / "workflows" / "sonarcloud.yml").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github" / "workflows" / "sonarcloud.yml").read_text(encoding="utf-8")
 
-        expected_pins: list[str] = []
+        expected: list[str] = []
         for req_name in ("requirements-sidecar.txt", "requirements-ci.txt"):
-            for raw_line in (root / req_name).read_text(encoding="utf-8").splitlines():
-                line = raw_line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                expected_pins.append(line)
+            for raw_line in (ROOT / req_name).read_text(encoding="utf-8").splitlines():
+                line = raw_line.split("#", 1)[0].strip()
+                if line:
+                    expected.append(line)
+        actual = [p for p in self.PIN_RE.findall(workflow) if not p.lower().startswith("pip==")]
 
-        self.assertGreater(len(expected_pins), 0)
-        for pin in expected_pins:
-            self.assertIn(
-                f"'{pin}'",
-                workflow,
-                f"Pin {pin!r} from requirements files is missing or out of sync in sonarcloud.yml",
-            )
+        self.assertGreater(len(expected), 0)
+        self.assertEqual(len(actual), len(set(actual)), f"sonarcloud.yml 有重複的釘選：{actual}")
+        self.assertEqual(sorted(actual), sorted(expected))
 
 
 if __name__ == "__main__":

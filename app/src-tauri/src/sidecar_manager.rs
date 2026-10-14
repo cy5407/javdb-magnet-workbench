@@ -142,8 +142,9 @@ const LOG_DIR_ENV: &str = "JAVDB_LOG_DIR";
 /// Linux fell back to console-only.
 ///
 /// A missing, non-string or whitespace-only `log_dir` yields no entry, so the
-/// sidecar keeps its own fallback chain. The value is passed through
-/// untrimmed: it is a filesystem path, and surrounding spaces are part of it.
+/// sidecar keeps its own fallback chain. Otherwise the value is forwarded
+/// as-is: `app_logging` already `.strip()`s `JAVDB_LOG_DIR`, and keeping that
+/// rule on one side avoids two copies drifting apart.
 fn sidecar_env(paths: &Value) -> Vec<(&'static str, String)> {
     paths
         .get("log_dir")
@@ -440,8 +441,10 @@ mod tests {
         );
     }
 
+    // Trimming belongs to app_logging (it strips JAVDB_LOG_DIR); Rust must
+    // not grow a second, divergent copy of that rule.
     #[test]
-    fn sidecar_env_passes_log_dir_through_untrimmed() {
+    fn sidecar_env_leaves_trimming_to_the_sidecar() {
         let paths = json!({"log_dir": " /tmp/logs "});
         assert_eq!(
             sidecar_env(&paths),
