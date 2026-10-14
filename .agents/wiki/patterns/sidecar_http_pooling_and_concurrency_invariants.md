@@ -7,7 +7,7 @@
 3. **前端反覆計算**：Svelte 5 響應系統在每次局部重繪時反覆對所有群組呼叫 `processGroupRows`。
 4. **測試 Fake 契約衝突**：若直接在 `RealDebrid.__init__` 強制要求 `session` 參數，會使既有單元測試（如 `test_sidecar_settings.py` 中簽名為 `_FakeClient(token, min_size_mb, deadline)` 的測試樁）引發 `TypeError`。
 5. **連線池標頭遺失**：連線池復用時以 `client.session = session` 替換 session，但 `state.rd_session` 未預置 `Authorization` 標頭，造成帶 Token override 的單次測試成功（走獨立 session），但常規查詢（`rd_check_user` 走 shared session）因遺失驗證標頭回傳 HTTP 401（`rd_token_invalid`），UI 顯示「Token 無效或已過期」。
-6. **發布門禁之機密掃描與進程鎖定**：測試碼中若使用隨機假字串如 `Bearer valid-token-123` 會觸發發布管線之源碼機密掃描（`test-release-scan.ps1` 失敗）；且若先前測試執行之 `javdbmagnet.exe` 未關閉，Windows 檔案鎖會使 `build-release.ps1` 在清理 staging 目錄時報 `Access denied`。
+6. **發布門禁之機密掃描與進程鎖定**：測試碼中若使用未列入白名單的隨機 `Bearer` 假字串（而非已登記的 `Bearer tok-xyz`）會觸發發布管線之源碼機密掃描（`test-release-scan.ps1` 失敗）；且若先前測試執行之 `javdbmagnet.exe` 未關閉，Windows 檔案鎖會使 `build-release.ps1` 在清理 staging 目錄時報 `Access denied`。
 
 ## 2. Root Cause
 - **連線未復用**：Sidecar 雖然是常駐行程（Daemon），但客戶端工廠函式 `_rd_client` 缺乏跨請求之 `requests.Session` 儲存機制。

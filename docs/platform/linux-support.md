@@ -14,7 +14,7 @@
 |---|---|---|---|
 | 1 | `Cargo.toml` 的 keyring features | ~~編譯直接失敗~~ **已修（2026-08-01）** | ✅ 完成 |
 | 2 | Linux sidecar binary 不存在 | build script 失敗 | **阻斷** |
-| 3 | `JAVDB_LOG_DIR` 從未被設定 | 所有 Python 日誌靜默消失 | **功能失效** |
+| 3 | `JAVDB_LOG_DIR` 從未被設定 | ~~所有 Python 日誌靜默消失~~ **已修**（spawn 時由 `sidecar_manager.rs` 注入） | ✅ 完成 |
 | 4 | 「打開資料夾」只實作 Windows | 回錯誤訊息，不崩 | 功能退化 |
 | 5 | 憑證儲存需要 keyring daemon | 無頭環境會失敗 | 環境相依 |
 | 6 | 打包腳本寫死 Windows | 無法產出 Linux 安裝檔 | 建置流程 |
@@ -98,7 +98,22 @@ python -m PyInstaller --onefile --name sidecar-x86_64-unknown-linux-gnu \
 `sidecar-x86_64-pc-windows-msvc.spec`，`build_sidecar.py` 也以該 triple 為前提；
 要正式支援得讓 triple 可參數化。
 
-## 3. `JAVDB_LOG_DIR` 從未被設定（功能失效）
+## 3. `JAVDB_LOG_DIR` 從未被設定（✅ 已於 2026-10-14 修正）
+
+> **狀態更新**：`sidecar_manager.rs` 的 `sidecar_command`（`spawn_and_handshake`
+> 用它建 command）以 `.envs(sidecar_env(&paths))` 把 `paths.log_dir` 當成
+> `JAVDB_LOG_DIR` 傳給 sidecar；`log_dir` 缺漏、非字串或全空白時不設，交回
+> sidecar 自己的候選順序。
+> 驗證（2026-10-14，WSL Ubuntu，webkit2gtk-4.1 2.52.3）：
+> `cargo test --no-fail-fast --lib --test sidecar_command` 中 `sidecar_env_*` 與
+> 整合測試 `tests/sidecar_command.rs` 全過；拿掉 `.envs(...)` 時
+> `sidecar_command_carries_javdb_log_dir` 變紅。同一環境沒有 Secret Service，
+> 12 個 `tests_cookies_e2e` 在 master 與本分支同樣失敗。
+> 下方的 sidecar 實測已在同一環境重現（無候選 → console-only；有
+> `JAVDB_LOG_DIR` → `debug.log` 與 `rd_outcomes.jsonl`），對應的自動化測試是
+> `tests/test_rd_outcome_log_e2e.py`（含 `E2EConsoleOnlyFallback`），Linux 上
+> pytest 429 passed。**沒有把 GUI 開起來確認 `debug.log` 落點。**
+> 本節以下保留原始診斷，行號是當時的位置。
 
 **這是最容易被忽略、但實際影響最大的一項。**
 
@@ -179,5 +194,5 @@ Tauri v2 在 Linux 需要 WebKitGTK。本次驗證機器上皆已具備：
 
 1. 第 1 項已完成；Linux 開發機可用文件開頭列出的 `TAURI_CONFIG=... cargo test --lib`
    執行 Rust lib gate。
-2. 先修第 3 項（`JAVDB_LOG_DIR`）——它同時改善 Windows 的正確性，且與平台移植無關。
+2. 第 3 項（`JAVDB_LOG_DIR`）已完成；剩下的是在 Linux 上重跑第 3 節的實測。
 3. 第 2、4、5、6 項屬於「真的要出 Linux 版」才需要，不必為了開發便利而做。

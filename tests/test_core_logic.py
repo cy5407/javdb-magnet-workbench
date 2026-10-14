@@ -11,6 +11,7 @@
     python -m unittest discover -s tests -v
 """
 
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -283,6 +284,54 @@ class PickFilesSmart(unittest.TestCase):
     def test_smart_empty_files(self):
         rd = make_rd()
         self.assertEqual(rd.pick_files([], strategy="smart"), [])
+
+
+class TestCiDependencySync(unittest.TestCase):
+    """sonarcloud.yml 的 inline pip 釘選必須與兩份 requirements 檔完全一致。
+
+    雙向比對：requirements 有而 workflow 沒有（漏升級），以及 workflow 有而
+    requirements 沒有、或同一套件釘了兩次（殘留舊版），都要紅。`pip==` 是
+    安裝器自己的升級，不屬於專案依賴，不列入比對。
+    """
+
+    PIN_RE = re.compile(r"'([A-Za-z0-9_.\-]+==[^'\s]+)'")
+
+    def test_sonarcloud_workflow_pins_match_requirements_files(self):
+        workflow = (ROOT / ".github" / "workflows" / "sonarcloud.yml").read_text(encoding="utf-8")
+
+        expected: list[str] = []
+        for req_name in ("requirements-sidecar.txt", "requirements-ci.txt"):
+            for raw_line in (ROOT / req_name).read_text(encoding="utf-8").splitlines():
+                line = raw_line.split("#", 1)[0].strip()
+                if line:
+                    expected.append(line)
+        actual = [p for p in self.PIN_RE.findall(workflow) if not p.lower().startswith("pip==")]
+
+        self.assertGreater(len(expected), 0)
+        self.assertEqual(len(actual), len(set(actual)), f"sonarcloud.yml 有重複的釘選：{actual}")
+        self.assertEqual(sorted(actual), sorted(expected))
+
+    def test_workflow_pip_installs_refuse_sdists(self):
+        """每個 workflow 的 `pip install` 都要帶 `--only-binary :all:`。
+
+        2026-10-15 PR #7 的 SonarCloud 品質閘門因此失敗（Security Rating on
+        New Code = C）：沒有這個旗標，pip 遇到 sdist 會在 runner 上執行套件的
+        setup script。旗標要寫在同一行，與 Sonar 規則的判斷方式相同。
+        """
+        workflows = sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
+        self.assertTrue(workflows, "找不到 workflow，檢查不能把空集合當成通過")
+        installs = [
+            (wf.name, n, line.strip())
+            for wf in workflows
+            for n, line in enumerate(wf.read_text(encoding="utf-8").splitlines(), 1)
+            # pip、pip3、pip3.12 與 `python -m pip` 都算
+            if re.search(r"\bpip(?:3(?:\.\d+)?)?\s+install\b", line)
+            and not line.lstrip().startswith("#")
+        ]
+        self.assertTrue(installs, "workflow 裡沒有 pip install，這個檢查已失去對象")
+        missing = [f"{name}:{n}: {line}" for name, n, line in installs
+                   if "--only-binary :all:" not in line]
+        self.assertEqual(missing, [])
 
 
 if __name__ == "__main__":

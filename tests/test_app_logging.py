@@ -200,10 +200,25 @@ class JavdbGuiImportSideEffects(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.mkdtemp()
         os.environ["JAVDB_LOG_DIR"] = self._tmp
+        self._stubbed_tk = False
+        if importlib.util.find_spec("tkinter") is None:
+            import types
+            tk_stub = types.ModuleType("tkinter")
+            tk_stub.Tk = type("Tk", (), {})
+            tk_stub.Toplevel = type("Toplevel", (), {})
+            tk_stub.ttk = types.ModuleType("tkinter.ttk")
+            tk_stub.messagebox = types.ModuleType("tkinter.messagebox")
+            sys.modules["tkinter"] = tk_stub
+            sys.modules["tkinter.ttk"] = tk_stub.ttk
+            sys.modules["tkinter.messagebox"] = tk_stub.messagebox
+            self._stubbed_tk = True
 
     def tearDown(self):
         os.environ.pop("JAVDB_LOG_DIR", None)
         _detach_file_handlers()
+        if getattr(self, "_stubbed_tk", False):
+            for mod in ("tkinter", "tkinter.ttk", "tkinter.messagebox", "legacy.javdb_magnet_gui"):
+                sys.modules.pop(mod, None)
         import shutil
         shutil.rmtree(self._tmp, ignore_errors=True)
 

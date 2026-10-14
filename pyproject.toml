@@ -1,3 +1,14 @@
+[tool.pytest.ini_options]
+# Leaked files, sockets and child-process pipes fail the run instead of
+# scrolling past as warnings. A leaked handle surfaces from __del__, which
+# pytest reports as PytestUnraisableExceptionWarning, so both are errors.
+# 2026-10-14: master had 17 such warnings (Windows and Linux); on Windows an
+# open RotatingFileHandler also blocks TemporaryDirectory cleanup.
+filterwarnings = [
+    "error::ResourceWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
+]
+
 [tool.coverage.run]
 # One-shot audit verify scripts are not application code; nothing imports
 # them, so they always show 0% coverage and skew the project metric on

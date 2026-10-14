@@ -43,6 +43,13 @@ keyring = { version = "3", features = ["apple-native"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["linux-native-sync-persistent", "crypto-rust"] }
 
+# tauri's `test` feature (MockRuntime) is `test = []` in tauri's manifest: no
+# extra crates. tests/sidecar_command.rs uses it to build the real sidecar
+# Command without spawning. On Windows that test exe needs the Common Controls
+# v6 manifest; build.rs embeds it into test targets only.
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

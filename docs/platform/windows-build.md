@@ -28,7 +28,8 @@ pwsh -File scripts\build-release.ps1
 腳本的，在那裡執行會無限遞迴。
 
 `verify-windows-build.ps1` 不打包，它只做驗證：環境齊全性 → 三個既有 gate →
-`cargo test --lib` → 重建 sidecar 並用真的 JSON-lines 協定跟它對話。
+`cargo test --no-fail-fast --tests`（lib、bin 與 `tests/` 整合測試，不含 doc tests）→ 重建 sidecar 並用真的
+JSON-lines 協定跟它對話。
 
 ---
 
@@ -73,15 +74,24 @@ keyring = { version = "3", features = ["windows-native", "apple-native", "linux-
 需要 `pip install -r requirements-sidecar.txt`（PyInstaller / curl_cffi /
 requests / beautifulsoup4，皆已釘版本）。
 
-### 3. 日誌目錄靠環境變數巧合
+### 3. 日誌目錄（已由 `sidecar_manager.rs` 顯式注入 `JAVDB_LOG_DIR`）
 
 `app_logging.py` 的候選順序是 `%JAVDB_LOG_DIR%` → `%LOCALAPPDATA%\JavDBMagnet\logs`
-→ console-only。而 **Rust 端從未設定 `JAVDB_LOG_DIR`**（`sidecar_manager.rs` 的
-spawn 沒有 `.env(...)`），Windows 純粹靠繼承的 `%LOCALAPPDATA%` 恰好等於
-`PathManager.log_dir` 才會動。
+→ console-only。先前 Rust 端未設定 `JAVDB_LOG_DIR`，僅靠繼承 `%LOCALAPPDATA%` 巧合運作；
+現已於 `sidecar_manager.rs` 的 `sidecar_command` 以 `.envs(sidecar_env(&paths))`
+在 spawn 子行程時顯式帶入 `JAVDB_LOG_DIR`（值為 `PathManager.log_dir`）。
 
-實務上 Windows 會動，但這是巧合不是契約。若使用者回報「logs 目錄空的」，
-先查 `%LOCALAPPDATA%` 是否存在。長期修法見 `linux-support.md` 第 3 節。
+守住這條接線的測試在 `app/src-tauri/tests/sidecar_command.rs`（整合測試，
+`cargo test --test sidecar_command`），它要建 mock App。mock App 會連結 comctl32
+的 `TaskDialogIndirect`（只有 Common Controls v6 有），而 tauri-build 只替正式
+執行檔嵌入 v6 manifest；沒有 manifest 的測試執行檔載入時會以
+`STATUS_ENTRYPOINT_NOT_FOUND`（0xC0000139）失敗。`build.rs` 因此以
+`cargo:rustc-link-arg-tests` 只替測試目標嵌入 v6 manifest，正式執行檔不受影響。
+Cargo 在 package 沒有任何測試目標時會以 `invalid instruction` 拒絕這個參數，
+所以 `build.rs` 只在 `tests/` 底下有 `*.rs` 或 `*/main.rs` 時才輸出它。這個判斷放在
+`app/src-tauri/build_support.rs`，lib 單元測試會一併編譯並測它（`build_support::tests`）。
+同一個原因，這類測試不能放在 lib 單元測試裡：`-tests` 連結參數不作用於
+`cargo test --lib` 的執行檔。
 
 ### 4. Smart App Control 會擋掉 cargo 的 build script（2026-08-02 實遇）
 

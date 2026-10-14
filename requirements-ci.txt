@@ -1,9 +1,9 @@
 # Pinned Python tools used only by CI (SonarCloud workflow).
 #
 # Kept separate from requirements-sidecar.txt so the sidecar bundle
-# stays free of test-only dependencies. Installed by
-# .github/workflows/sonarcloud.yml via `pip install -r` so that no
-# bare, unpinned packages appear on the pip command line.
+# stays free of test-only dependencies. Mirrored as inline `==` pins in
+# .github/workflows/sonarcloud.yml (Sonar's GHA rule treats `-r` as
+# unbounded) and verified by tests/test_core_logic.py.
 # pytest 9.0.3 picks up CVE-2025-71176 (tmpdir handling). Exact pin to
 # mirror requirements-sidecar.txt's reproducibility convention.
 pytest==9.0.3

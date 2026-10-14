@@ -26,8 +26,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tauri::{async_runtime::Mutex, AppHandle};
-use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+use tauri::{async_runtime::Mutex, AppHandle, Runtime};
+use tauri_plugin_shell::process::{Command, CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use tokio::sync::mpsc;
 
@@ -129,6 +129,46 @@ fn timeout_for(cmd: &str, body: &Value) -> Result<u64, String> {
     Ok(cache_wait + RD_SEND_TIMEOUT_SLACK_SECS)
 }
 
+/// Env var `app_logging._candidate_log_dirs()` reads first. Must stay
+/// byte-identical to the Python side.
+const LOG_DIR_ENV: &str = "JAVDB_LOG_DIR";
+
+/// Environment for the spawned sidecar, derived from the handshake `paths`.
+///
+/// The sidecar configures logging before it reads the handshake (see the
+/// sidecar.py module docstring), so `paths.log_dir` only reaches
+/// `app_logging` through `JAVDB_LOG_DIR`. Without it, Windows worked only
+/// because `%LOCALAPPDATA%` happened to equal `PathManager.log_dir`, and
+/// Linux fell back to console-only.
+///
+/// A missing, non-string or whitespace-only `log_dir` yields no entry, so the
+/// sidecar keeps its own fallback chain. Otherwise the value is forwarded
+/// as-is: `app_logging` already `.strip()`s `JAVDB_LOG_DIR`, and keeping that
+/// rule on one side avoids two copies drifting apart.
+fn sidecar_env(paths: &Value) -> Vec<(&'static str, String)> {
+    paths
+        .get("log_dir")
+        .and_then(Value::as_str)
+        .filter(|dir| !dir.trim().is_empty())
+        .map(|dir| vec![(LOG_DIR_ENV, dir.to_string())])
+        .unwrap_or_default()
+}
+
+/// Resolve the bundled sidecar and attach its environment. Kept apart from
+/// `spawn_and_handshake` so tests can inspect the exact command that would be
+/// spawned without spawning it. `pub` only so tests/sidecar_command.rs can
+/// reach it (re-exported `#[doc(hidden)]` from lib.rs); see the note there.
+pub fn sidecar_command<R: Runtime>(
+    app: &AppHandle<R>,
+    paths: &Value,
+) -> Result<Command, String> {
+    Ok(app
+        .shell()
+        .sidecar("sidecar")
+        .map_err(|e| format!("sidecar resolve failed: {e}"))?
+        .envs(sidecar_env(paths)))
+}
+
 /// Drain one `\n`-terminated line from `buffer`, stripping the trailing
 /// `\n` and any preceding `\r`. Returns `None` when no newline is present.
 fn drain_line(buffer: &mut Vec<u8>) -> Option<String> {
@@ -151,10 +191,7 @@ impl SidecarManager {
         settings: Value,
         paths: Value,
     ) -> Result<Self, String> {
-        let (mut rx, child) = app
-            .shell()
-            .sidecar("sidecar")
-            .map_err(|e| format!("sidecar resolve failed: {e}"))?
+        let (mut rx, child) = sidecar_command(app, &paths)?
             .spawn()
             .map_err(|e| format!("sidecar spawn failed: {e}"))?;
 
@@ -403,4 +440,45 @@ mod tests {
         assert!(err.contains("4"), "got: {err}");
         assert!(err.contains("floor"), "got: {err}");
     }
+
+    // The env name is spelled out instead of using LOG_DIR_ENV so a typo in
+    // the constant fails here rather than silently sending logs nowhere.
+    #[test]
+    fn sidecar_env_forwards_log_dir_as_javdb_log_dir() {
+        let paths = json!({"data_dir": "/tmp/data", "log_dir": "/tmp/logs"});
+        assert_eq!(
+            sidecar_env(&paths),
+            vec![("JAVDB_LOG_DIR", "/tmp/logs".to_string())],
+        );
+    }
+
+    // Trimming belongs to app_logging (it strips JAVDB_LOG_DIR); Rust must
+    // not grow a second, divergent copy of that rule.
+    #[test]
+    fn sidecar_env_leaves_trimming_to_the_sidecar() {
+        let paths = json!({"log_dir": " /tmp/logs "});
+        assert_eq!(
+            sidecar_env(&paths),
+            vec![("JAVDB_LOG_DIR", " /tmp/logs ".to_string())],
+        );
+    }
+
+    #[test]
+    fn sidecar_env_is_empty_without_a_usable_log_dir() {
+        for paths in [
+            Value::Null,
+            json!({}),
+            json!({"data_dir": "/tmp/data"}),
+            json!({"log_dir": ""}),
+            json!({"log_dir": "   "}),
+            json!({"log_dir": 123}),
+            json!({"log_dir": null}),
+        ] {
+            assert!(sidecar_env(&paths).is_empty(), "for {paths}");
+        }
+    }
+
+    // sidecar_command's wiring tests live in tests/sidecar_command.rs: they
+    // build a mock App, which needs the Common Controls v6 manifest that only
+    // integration-test executables get (see build.rs).
 }

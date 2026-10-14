@@ -5,7 +5,8 @@
 #
 #   1. 環境是否齊全（Python / Node / Rust / venv），缺什麼直接講清楚
 #   2. 三個既有 gate 是否通過
-#   3. **cargo test --lib** —— 2026-08-01 把 Cargo.toml 的 keyring 相依按平台
+#   3. **cargo test --tests**（lib、bin 與 tests/ 整合測試）—— 2026-08-01 把
+#      Cargo.toml 的 keyring 相依按平台
 #      拆開了。該改動已於 2026-08-02 在 Windows 上實測通過（81 passed），
 #      這一關現在是回歸偵測而非首次驗證。若仍失敗，把該檔的三段
 #      `[target.'cfg(...)'.dependencies]` 還原成原本的單行 keyring 即可，
@@ -149,7 +150,7 @@ try {
 if ($SkipSlow) {
     Warn "-SkipSlow：略過 cargo test 與 sidecar 重建（release-scan 測試仍會執行）"
 } else {
-    Step "Gate: cargo test --lib  (驗 2026-08-01 的 keyring 平台拆分)"
+    Step "Gate: cargo test --tests  (lib、bin 與整合測試；含 2026-08-01 的 keyring 平台拆分)"
     if (-not (Test-Path $SidecarExe)) {
         Warn "binaries\sidecar-*.exe 尚不存在；Tauri build script 需要它，先跑 sidecar 建置"
         Push-Location $AppDir
@@ -160,10 +161,10 @@ if ($SkipSlow) {
     }
     Push-Location $TauriSrcDir
     try {
-        & cargo test --lib
+        & cargo test --no-fail-fast --tests
         if ($LASTEXITCODE -ne 0) {
             Bad @"
-cargo test --lib 失敗。
+cargo test --tests 失敗。
 先看錯誤內容分辨是哪一類：
 
 (a) 「應用程式控制原則已封鎖此檔案 (os error 4551)」——這是 Windows 的
@@ -178,8 +179,13 @@ cargo test --lib 失敗。
       keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-async-persistent"] }
     其餘所有變更與此無關，不必回退。
     細節見 docs/platform/linux-support.md 第 1 節。
+
+(c) 整合測試執行檔一啟動就以 0xC0000139（STATUS_ENTRYPOINT_NOT_FOUND）
+    結束——測試執行檔缺 Common Controls v6 manifest。app/src-tauri/build.rs
+    只在 tests/ 有 .rs 時才替測試目標嵌入；細節見
+    docs/platform/windows-build.md 第 3 節。
 "@
-        } else { Ok "cargo test --lib 通過" }
+        } else { Ok "cargo test --tests 通過" }
     } finally { Pop-Location }
 }
 

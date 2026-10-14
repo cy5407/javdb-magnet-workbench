@@ -286,17 +286,22 @@ class DisabledAndFailureTest(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             rd_outcome_log.reset_for_tests()
-            rd_outcome_log.configure(Path(d))
-            import logging
-            lg = logging.getLogger("rd_outcomes")
+            try:
+                rd_outcome_log.configure(Path(d))
+                import logging
+                lg = logging.getLogger("rd_outcomes")
 
-            class _Boom(logging.Handler):
-                def emit(self, record):
-                    raise OSError("disk full")
+                class _Boom(logging.Handler):
+                    def emit(self, record):
+                        raise OSError("disk full")
 
-            lg.handlers.clear()
-            lg.addHandler(_Boom())
-            rd_outcome_log.log_send(outcome="completed", elapsed_ms=1)   # 不得丟例外
+                for h in list(lg.handlers):
+                    lg.removeHandler(h)
+                    h.close()
+                lg.addHandler(_Boom())
+                rd_outcome_log.log_send(outcome="completed", elapsed_ms=1)   # 不得丟例外
+            finally:
+                rd_outcome_log.reset_for_tests()
 
 
 class StatusTrailTest(TempLogMixin, unittest.TestCase):

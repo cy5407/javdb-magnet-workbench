@@ -7,11 +7,23 @@ mod secret_store;
 mod settings;
 mod sidecar_manager;
 
+// build.rs logic, compiled here only so its tests run with `cargo test`.
+#[cfg(test)]
+#[path = "../build_support.rs"]
+mod build_support;
+
 use serde_json::{json, Value};
 use tauri::Manager;
 
 use path_manager::PathManager;
 use sidecar_manager::SidecarManager;
+
+// Public only so tests/sidecar_command.rs can reach it. `#[doc(hidden)]` keeps
+// it out of the docs but not out of the Rust API: any crate depending on
+// javdbmagnet_lib could call it. Nothing does today (main.rs uses `run()`).
+// It is generic, so it adds no symbol to the cdylib/staticlib C ABI.
+#[doc(hidden)]
+pub use sidecar_manager::sidecar_command;
 
 const STORE_FILE: &str = "settings.json";
 

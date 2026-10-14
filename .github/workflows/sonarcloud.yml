@@ -43,19 +43,21 @@ jobs:
         # Inline pins instead of `-r <file>`: Sonar's GHA rule cannot
         # introspect requirements files and treats `-r` as unbounded.
         # Versions must mirror requirements-sidecar.txt / requirements-ci.txt.
+        # --only-binary :all: refuses sdists, so no package's setup script runs
+        # on the runner (Sonar GHA rule); every pin here ships a cp312 wheel.
         run: |
-          python -m pip install --upgrade 'pip==25.0.1'
-          python -m pip install \
+          python -m pip install --only-binary :all: --upgrade 'pip==25.0.1'
+          python -m pip install --only-binary :all: \
             'pyinstaller==6.19.0' \
-            'curl_cffi==0.14.0' \
-            'requests==2.32.5' \
+            'curl_cffi==0.15.0' \
+            'requests==2.34.2' \
             'beautifulsoup4==4.14.3' \
-            'urllib3==2.6.3' \
+            'urllib3==2.7.0' \
             'charset-normalizer==3.4.4' \
-            'idna==3.11' \
+            'idna==3.15' \
             'certifi==2026.1.4' \
             'chardet==5.2.0' \
-            'pytest==8.3.4' \
+            'pytest==9.0.3' \
             'coverage==7.6.10'
 
       - name: Run frontend coverage
