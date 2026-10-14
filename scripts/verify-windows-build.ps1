@@ -150,7 +150,7 @@ try {
 if ($SkipSlow) {
     Warn "-SkipSlow：略過 cargo test 與 sidecar 重建（release-scan 測試仍會執行）"
 } else {
-    Step "Gate: cargo test --tests  (lib＋整合測試；含 2026-08-01 的 keyring 平台拆分)"
+    Step "Gate: cargo test --tests  (lib、bin 與整合測試；含 2026-08-01 的 keyring 平台拆分)"
     if (-not (Test-Path $SidecarExe)) {
         Warn "binaries\sidecar-*.exe 尚不存在；Tauri build script 需要它，先跑 sidecar 建置"
         Push-Location $AppDir

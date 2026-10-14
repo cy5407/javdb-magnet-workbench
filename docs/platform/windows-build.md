@@ -28,7 +28,7 @@ pwsh -File scripts\build-release.ps1
 腳本的，在那裡執行會無限遞迴。
 
 `verify-windows-build.ps1` 不打包，它只做驗證：環境齊全性 → 三個既有 gate →
-`cargo test --no-fail-fast --tests`（lib＋`tests/` 整合測試）→ 重建 sidecar 並用真的
+`cargo test --no-fail-fast --tests`（lib、bin 與 `tests/` 整合測試，不含 doc tests）→ 重建 sidecar 並用真的
 JSON-lines 協定跟它對話。
 
 ---

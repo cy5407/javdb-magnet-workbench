@@ -23,6 +23,9 @@ fn main() {
 }
 
 /// Mirrors Cargo's test-target auto-discovery: `tests/*.rs` or `tests/*/main.rs`.
+/// A build script cannot see the resolved target list, so this assumes the
+/// manifest keeps auto-discovery (no `autotests = false`, no `[[test]]` with a
+/// path outside tests/). Change either and this check must change with it.
 fn has_integration_tests() -> bool {
     let Ok(entries) = std::fs::read_dir("tests") else {
         return false;
