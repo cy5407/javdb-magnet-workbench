@@ -129,15 +129,28 @@ fn timeout_for(cmd: &str, body: &Value) -> Result<u64, String> {
     Ok(cache_wait + RD_SEND_TIMEOUT_SLACK_SECS)
 }
 
-/// Extract a non-empty `log_dir` string from the handshake `paths` object so
-/// the spawned Python sidecar receives `JAVDB_LOG_DIR` explicitly in its
-/// process environment instead of relying on `%LOCALAPPDATA%` coincidence.
-fn extract_log_dir(paths: &Value) -> Option<&str> {
+/// Env var `app_logging._candidate_log_dirs()` reads first. Must stay
+/// byte-identical to the Python side.
+const LOG_DIR_ENV: &str = "JAVDB_LOG_DIR";
+
+/// Environment for the spawned sidecar, derived from the handshake `paths`.
+///
+/// The sidecar configures logging before it reads the handshake (see the
+/// sidecar.py module docstring), so `paths.log_dir` only reaches
+/// `app_logging` through `JAVDB_LOG_DIR`. Without it, Windows worked only
+/// because `%LOCALAPPDATA%` happened to equal `PathManager.log_dir`, and
+/// Linux fell back to console-only.
+///
+/// A missing, non-string or whitespace-only `log_dir` yields no entry, so the
+/// sidecar keeps its own fallback chain. The value is passed through
+/// untrimmed: it is a filesystem path, and surrounding spaces are part of it.
+fn sidecar_env(paths: &Value) -> Vec<(&'static str, String)> {
     paths
         .get("log_dir")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
+        .and_then(Value::as_str)
+        .filter(|dir| !dir.trim().is_empty())
+        .map(|dir| vec![(LOG_DIR_ENV, dir.to_string())])
+        .unwrap_or_default()
 }
 
 /// Drain one `\n`-terminated line from `buffer`, stripping the trailing
@@ -162,14 +175,11 @@ impl SidecarManager {
         settings: Value,
         paths: Value,
     ) -> Result<Self, String> {
-        let mut sidecar_cmd = app
+        let (mut rx, child) = app
             .shell()
             .sidecar("sidecar")
-            .map_err(|e| format!("sidecar resolve failed: {e}"))?;
-        if let Some(log_dir) = extract_log_dir(&paths) {
-            sidecar_cmd = sidecar_cmd.env("JAVDB_LOG_DIR", log_dir);
-        }
-        let (mut rx, child) = sidecar_cmd
+            .map_err(|e| format!("sidecar resolve failed: {e}"))?
+            .envs(sidecar_env(&paths))
             .spawn()
             .map_err(|e| format!("sidecar spawn failed: {e}"))?;
 
@@ -419,21 +429,38 @@ mod tests {
         assert!(err.contains("floor"), "got: {err}");
     }
 
+    // The env name is spelled out instead of using LOG_DIR_ENV so a typo in
+    // the constant fails here rather than silently sending logs nowhere.
     #[test]
-    fn extract_log_dir_returns_trimmed_non_empty_path() {
-        let paths = json!({
-            "data_dir": "/tmp/data",
-            "log_dir": "  /tmp/logs  "
-        });
-        assert_eq!(extract_log_dir(&paths), Some("/tmp/logs"));
+    fn sidecar_env_forwards_log_dir_as_javdb_log_dir() {
+        let paths = json!({"data_dir": "/tmp/data", "log_dir": "/tmp/logs"});
+        assert_eq!(
+            sidecar_env(&paths),
+            vec![("JAVDB_LOG_DIR", "/tmp/logs".to_string())],
+        );
     }
 
     #[test]
-    fn extract_log_dir_ignores_missing_blank_or_non_string() {
-        assert_eq!(extract_log_dir(&Value::Null), None);
-        assert_eq!(extract_log_dir(&json!({})), None);
-        assert_eq!(extract_log_dir(&json!({"log_dir": ""})), None);
-        assert_eq!(extract_log_dir(&json!({"log_dir": "   "})), None);
-        assert_eq!(extract_log_dir(&json!({"log_dir": 123})), None);
+    fn sidecar_env_passes_log_dir_through_untrimmed() {
+        let paths = json!({"log_dir": " /tmp/logs "});
+        assert_eq!(
+            sidecar_env(&paths),
+            vec![("JAVDB_LOG_DIR", " /tmp/logs ".to_string())],
+        );
+    }
+
+    #[test]
+    fn sidecar_env_is_empty_without_a_usable_log_dir() {
+        for paths in [
+            Value::Null,
+            json!({}),
+            json!({"data_dir": "/tmp/data"}),
+            json!({"log_dir": ""}),
+            json!({"log_dir": "   "}),
+            json!({"log_dir": 123}),
+            json!({"log_dir": null}),
+        ] {
+            assert!(sidecar_env(&paths).is_empty(), "for {paths}");
+        }
     }
 }

@@ -77,8 +77,8 @@ requests / beautifulsoup4，皆已釘版本）。
 
 `app_logging.py` 的候選順序是 `%JAVDB_LOG_DIR%` → `%LOCALAPPDATA%\JavDBMagnet\logs`
 → console-only。先前 Rust 端未設定 `JAVDB_LOG_DIR`，僅靠繼承 `%LOCALAPPDATA%` 巧合運作；
-現已於 `sidecar_manager.rs` 的 `spawn_and_handshake` 透過 `extract_log_dir(&paths)`
-在 spawn 子行程時顯式帶入 `.env("JAVDB_LOG_DIR", log_dir)`。
+現已於 `sidecar_manager.rs` 的 `spawn_and_handshake` 以 `.envs(sidecar_env(&paths))`
+在 spawn 子行程時顯式帶入 `JAVDB_LOG_DIR`（值為 `PathManager.log_dir`）。
 
 ### 4. Smart App Control 會擋掉 cargo 的 build script（2026-08-02 實遇）
 

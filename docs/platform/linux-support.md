@@ -98,7 +98,14 @@ python -m PyInstaller --onefile --name sidecar-x86_64-unknown-linux-gnu \
 `sidecar-x86_64-pc-windows-msvc.spec`，`build_sidecar.py` 也以該 triple 為前提；
 要正式支援得讓 triple 可參數化。
 
-## 3. `JAVDB_LOG_DIR` 從未被設定（功能失效）
+## 3. `JAVDB_LOG_DIR` 從未被設定（✅ 已於 2026-10-14 修正）
+
+> **狀態更新**：`sidecar_manager.rs` 的 `spawn_and_handshake` 現在以
+> `.envs(sidecar_env(&paths))` 把 `paths.log_dir` 當成 `JAVDB_LOG_DIR` 傳給
+> sidecar；`log_dir` 缺漏、非字串或全空白時不設，交回 sidecar 自己的候選順序。
+> 驗證範圍：`sidecar_env` 的 Rust 單元測試（Windows 上 `cargo test --lib`）。
+> **未在 Linux 上重跑下方的實測**，也沒有把 GUI 開起來確認 `debug.log` 落點。
+> 本節以下保留原始診斷，行號是當時的位置。
 
 **這是最容易被忽略、但實際影響最大的一項。**
 
@@ -179,5 +186,5 @@ Tauri v2 在 Linux 需要 WebKitGTK。本次驗證機器上皆已具備：
 
 1. 第 1 項已完成；Linux 開發機可用文件開頭列出的 `TAURI_CONFIG=... cargo test --lib`
    執行 Rust lib gate。
-2. 先修第 3 項（`JAVDB_LOG_DIR`）——它同時改善 Windows 的正確性，且與平台移植無關。
+2. 第 3 項（`JAVDB_LOG_DIR`）已完成；剩下的是在 Linux 上重跑第 3 節的實測。
 3. 第 2、4、5、6 項屬於「真的要出 Linux 版」才需要，不必為了開發便利而做。

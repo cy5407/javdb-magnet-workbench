@@ -389,6 +389,9 @@ class E2EConsoleOnlyFallback(unittest.TestCase):
                     proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+                    proc.wait(timeout=5)
+                proc.stdout.close()
+                proc.stderr.close()
 
             # 送出仍必須可用，只是不留紀錄；而工作目錄必須乾乾淨淨
             self.assertEqual(sorted(p.name for p in work.iterdir()), [],
