@@ -1,4 +1,4 @@
-# test-release-scan.ps1 — Red tests for the release source-secret scan.
+﻿# test-release-scan.ps1 — Red tests for the release source-secret scan.
 #
 # Why this exists: two release-breaking bugs shipped in a row because the scan
 # was only ever reasoned about, never executed —
@@ -202,7 +202,7 @@ Write-Output "== 5d. Binary scan: the app's own template must not fail it =="
 # that is precisely where the last release blocker hid: the exe embeds
 # COOKIES_TEMPLATE, and a value class that ran past whitespace turned the app's
 # own help text into a non-allowlistable match, failing every release.
-$tplSrc = Get-Content -LiteralPath (Join-Path $RepoRoot "app/src-tauri/src/commands.rs") -Raw
+$tplSrc = Get-Content -LiteralPath (Join-Path $RepoRoot "app/src-tauri/src/commands.rs") -Raw -Encoding utf8
 $m = [regex]::Match($tplSrc, 'const COOKIES_TEMPLATE: &str = "(.*?)";', 'Singleline')
 Check "found COOKIES_TEMPLATE in commands.rs" ($m.Success) "constant not found; update this test"
 if ($m.Success) {

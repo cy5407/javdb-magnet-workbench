@@ -1,4 +1,4 @@
-# build-release.ps1 — portable release pipeline
+﻿# build-release.ps1 — portable release pipeline
 #
 # Produces a portable ZIP that ships javdbmagnet.exe + sidecar.exe in a
 # single folder. End-users extract the zip and double-click the exe —
