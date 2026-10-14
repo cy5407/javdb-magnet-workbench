@@ -324,7 +324,9 @@ class TestCiDependencySync(unittest.TestCase):
             (wf.name, n, line.strip())
             for wf in workflows
             for n, line in enumerate(wf.read_text(encoding="utf-8").splitlines(), 1)
-            if re.search(r"\bpip\s+install\b", line) and not line.lstrip().startswith("#")
+            # pip、pip3、pip3.12 與 `python -m pip` 都算
+            if re.search(r"\bpip(?:3(?:\.\d+)?)?\s+install\b", line)
+            and not line.lstrip().startswith("#")
         ]
         self.assertTrue(installs, "workflow 裡沒有 pip install，這個檢查已失去對象")
         missing = [f"{name}:{n}: {line}" for name, n, line in installs
