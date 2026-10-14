@@ -5,7 +5,7 @@
 #
 #   1. 環境是否齊全（Python / Node / Rust / venv），缺什麼直接講清楚
 #   2. 三個既有 gate 是否通過
-#   3. **cargo test --tests**（lib 單元測試＋tests/ 整合測試）—— 2026-08-01 把
+#   3. **cargo test --tests**（lib、bin 與 tests/ 整合測試）—— 2026-08-01 把
 #      Cargo.toml 的 keyring 相依按平台
 #      拆開了。該改動已於 2026-08-02 在 Windows 上實測通過（81 passed），
 #      這一關現在是回歸偵測而非首次驗證。若仍失敗，把該檔的三段
