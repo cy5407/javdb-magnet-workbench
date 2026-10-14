@@ -80,11 +80,14 @@ requests / beautifulsoup4，皆已釘版本）。
 現已於 `sidecar_manager.rs` 的 `sidecar_command` 以 `.envs(sidecar_env(&paths))`
 在 spawn 子行程時顯式帶入 `JAVDB_LOG_DIR`（值為 `PathManager.log_dir`）。
 
-守住這條接線的 `sidecar_command_*` 測試要建 mock App，在 Windows 上不編譯：
-mock App 會連結 comctl32 的 `TaskDialogIndirect`（只有 Common Controls v6 有），
-而 tauri-build 只替正式執行檔嵌入 v6 manifest，測試執行檔載入時會以
-`STATUS_ENTRYPOINT_NOT_FOUND`（0xC0000139）失敗。Windows 上 `cargo test --lib`
-只跑得到 `sidecar_env_*`；接線測試由 Linux gate 執行。
+守住這條接線的測試在 `app/src-tauri/tests/sidecar_command.rs`（整合測試，
+`cargo test --test sidecar_command`），它要建 mock App。mock App 會連結 comctl32
+的 `TaskDialogIndirect`（只有 Common Controls v6 有），而 tauri-build 只替正式
+執行檔嵌入 v6 manifest；沒有 manifest 的測試執行檔載入時會以
+`STATUS_ENTRYPOINT_NOT_FOUND`（0xC0000139）失敗。`build.rs` 因此以
+`cargo:rustc-link-arg-tests` 只替測試目標嵌入 v6 manifest，正式執行檔不受影響。
+同一個原因，這類測試不能放在 lib 單元測試裡：`-tests` 連結參數不作用於
+`cargo test --lib` 的執行檔。
 
 ### 4. Smart App Control 會擋掉 cargo 的 build script（2026-08-02 實遇）
 

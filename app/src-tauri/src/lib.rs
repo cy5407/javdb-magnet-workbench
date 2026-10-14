@@ -13,6 +13,10 @@ use tauri::Manager;
 use path_manager::PathManager;
 use sidecar_manager::SidecarManager;
 
+// For tests/sidecar_command.rs only.
+#[doc(hidden)]
+pub use sidecar_manager::sidecar_command;
+
 const STORE_FILE: &str = "settings.json";
 
 /// Upper bound on `cookies.txt` we'll load into memory at handshake.

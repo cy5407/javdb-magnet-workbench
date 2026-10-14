@@ -156,8 +156,12 @@ fn sidecar_env(paths: &Value) -> Vec<(&'static str, String)> {
 
 /// Resolve the bundled sidecar and attach its environment. Kept apart from
 /// `spawn_and_handshake` so tests can inspect the exact command that would be
-/// spawned without spawning it.
-fn sidecar_command<R: Runtime>(app: &AppHandle<R>, paths: &Value) -> Result<Command, String> {
+/// spawned without spawning it. `pub` only so tests/sidecar_command.rs can
+/// reach it (re-exported `#[doc(hidden)]` from lib.rs); not an API.
+pub fn sidecar_command<R: Runtime>(
+    app: &AppHandle<R>,
+    paths: &Value,
+) -> Result<Command, String> {
     Ok(app
         .shell()
         .sidecar("sidecar")
@@ -474,51 +478,7 @@ mod tests {
         }
     }
 
-    // The mock-App tests below are not compiled on Windows; see the
-    // dev-dependencies comment in Cargo.toml. The project's Rust gate runs on
-    // Linux, where they do run.
-    #[cfg(not(windows))]
-    fn mock_app_with_shell() -> tauri::App<tauri::test::MockRuntime> {
-        tauri::test::mock_builder()
-            .plugin(tauri_plugin_shell::init())
-            .build(tauri::test::mock_context(tauri::test::noop_assets()))
-            .expect("mock app")
-    }
-
-    #[cfg(not(windows))]
-    fn command_env(cmd: Command) -> Vec<(String, Option<String>)> {
-        let std_cmd: std::process::Command = cmd.into();
-        std_cmd
-            .get_envs()
-            .map(|(k, v)| {
-                (
-                    k.to_string_lossy().into_owned(),
-                    v.map(|v| v.to_string_lossy().into_owned()),
-                )
-            })
-            .collect()
-    }
-
-    // Guards the wiring, not just the helper: the command spawn_and_handshake
-    // runs must carry JAVDB_LOG_DIR. Dropping `.envs(...)` from
-    // sidecar_command turns this red.
-    #[cfg(not(windows))]
-    #[test]
-    fn sidecar_command_carries_javdb_log_dir() {
-        let app = mock_app_with_shell();
-        let cmd = sidecar_command(app.handle(), &json!({"log_dir": "/tmp/logs"}))
-            .expect("sidecar command");
-        assert_eq!(
-            command_env(cmd),
-            vec![("JAVDB_LOG_DIR".to_string(), Some("/tmp/logs".to_string()))],
-        );
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn sidecar_command_sets_no_env_without_log_dir() {
-        let app = mock_app_with_shell();
-        let cmd = sidecar_command(app.handle(), &json!({})).expect("sidecar command");
-        assert!(command_env(cmd).is_empty());
-    }
+    // sidecar_command's wiring tests live in tests/sidecar_command.rs: they
+    // build a mock App, which needs the Common Controls v6 manifest that only
+    // integration-test executables get (see build.rs).
 }
