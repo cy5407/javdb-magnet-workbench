@@ -13,7 +13,10 @@ use tauri::Manager;
 use path_manager::PathManager;
 use sidecar_manager::SidecarManager;
 
-// For tests/sidecar_command.rs only.
+// Public only so tests/sidecar_command.rs can reach it. `#[doc(hidden)]` keeps
+// it out of the docs but not out of the Rust API: any crate depending on
+// javdbmagnet_lib could call it. Nothing does today (main.rs uses `run()`).
+// It is generic, so it adds no symbol to the cdylib/staticlib C ABI.
 #[doc(hidden)]
 pub use sidecar_manager::sidecar_command;
 

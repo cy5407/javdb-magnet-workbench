@@ -157,7 +157,7 @@ fn sidecar_env(paths: &Value) -> Vec<(&'static str, String)> {
 /// Resolve the bundled sidecar and attach its environment. Kept apart from
 /// `spawn_and_handshake` so tests can inspect the exact command that would be
 /// spawned without spawning it. `pub` only so tests/sidecar_command.rs can
-/// reach it (re-exported `#[doc(hidden)]` from lib.rs); not an API.
+/// reach it (re-exported `#[doc(hidden)]` from lib.rs); see the note there.
 pub fn sidecar_command<R: Runtime>(
     app: &AppHandle<R>,
     paths: &Value,

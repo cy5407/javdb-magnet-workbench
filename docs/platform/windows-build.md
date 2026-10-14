@@ -28,7 +28,8 @@ pwsh -File scripts\build-release.ps1
 腳本的，在那裡執行會無限遞迴。
 
 `verify-windows-build.ps1` 不打包，它只做驗證：環境齊全性 → 三個既有 gate →
-`cargo test --lib` → 重建 sidecar 並用真的 JSON-lines 協定跟它對話。
+`cargo test --no-fail-fast --tests`（lib＋`tests/` 整合測試）→ 重建 sidecar 並用真的
+JSON-lines 協定跟它對話。
 
 ---
 
@@ -86,6 +87,8 @@ requests / beautifulsoup4，皆已釘版本）。
 執行檔嵌入 v6 manifest；沒有 manifest 的測試執行檔載入時會以
 `STATUS_ENTRYPOINT_NOT_FOUND`（0xC0000139）失敗。`build.rs` 因此以
 `cargo:rustc-link-arg-tests` 只替測試目標嵌入 v6 manifest，正式執行檔不受影響。
+Cargo 在 package 沒有任何測試目標時會以 `invalid instruction` 拒絕這個參數，
+所以 `build.rs` 只在 `tests/` 底下有 `*.rs` 或 `*/main.rs` 時才輸出它。
 同一個原因，這類測試不能放在 lib 單元測試裡：`-tests` 連結參數不作用於
 `cargo test --lib` 的執行檔。
 
