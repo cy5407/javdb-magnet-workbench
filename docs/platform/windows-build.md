@@ -144,16 +144,17 @@ runner 預設不啟用 SAC。repo 目前只有 `sonarcloud.yml`，需要另外�
 
 ---
 
-## repo 內那三個 .exe 是舊的
+## repo 內的 .exe 對應哪一版
 
 | 檔案 | 狀態 |
 |---|---|
-| `javdbmagnet.exe`（root，有進 git） | 2026-07-27 建的，**沒有任何 08-01 的功能** |
-| `sidecar.exe`（root，有進 git） | 同上，落後約 800 行 Python 變更 |
-| `app/src-tauri/binaries/sidecar-*.exe` | 未進 git，需重建 |
+| `javdbmagnet.exe`（root，有進 git） | 0.3.1，`build-release.ps1` 從 `b6857c6` 建出（2026-10-15） |
+| `sidecar.exe`（root，有進 git） | 同一次建置的 release sidecar（24.8 MB）。之前那份 60.8 MB 是 2026-06 的 spike 建置，落後約 1000 行 Python 變更 |
+| `app/src-tauri/binaries/sidecar-*.exe` | 未進 git，建置時重建 |
 
-**不要直接雙擊 repo 裡的 `javdbmagnet.exe` 來測試新功能**——那是舊版。
-一定要重新建置。
+這兩個 exe 只是「上一次發布」的快照：root 下的版本對應 commit 寫在同一個 commit
+的訊息裡，正式產物以 `release\release-manifest.json` 的 `git_commit` 為準。
+程式碼在那之後若有改動，**不要直接雙擊 repo 裡的 exe 測試新功能**——先重新建置。
 
 ---
 
