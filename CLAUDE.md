@@ -6,7 +6,7 @@
 - 前端：`cd app && npx vitest run`
 - 型別：`cd app && npm run check`（svelte-check，0 errors 0 warnings 才算過）
 - Rust（Linux lib gate）：在 `app/src-tauri` 執行
-  `TAURI_CONFIG='{"bundle":{"externalBin":[]}}' cargo test --lib`。覆寫只讓 lib
+  `TAURI_CONFIG='{"bundle":{"externalBin":[]}}' cargo test --no-fail-fast --tests`（lib unit tests ＋ `tests/` 整合測試）。覆寫只讓 lib
   unit tests 不受 Tauri 打包期的 externalBin 存在檢查阻擋；正式 build 仍必須提供
   Linux sidecar（見 [`docs/platform/linux-support.md`](docs/platform/linux-support.md) §2）。
   keyring 測試需要可用的使用者 D-Bus／Secret Service。2026-08-01 實測
