@@ -43,6 +43,15 @@ keyring = { version = "3", features = ["apple-native"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["linux-native-sync-persistent", "crypto-rust"] }
 
+# tauri's `test` feature (MockRuntime) is `test = []` in tauri's manifest: no
+# extra crates. Tests use it to build the real sidecar Command without spawning.
+# Not on Windows: building a mock App links comctl32's TaskDialogIndirect, which
+# only exists in Common Controls v6. tauri-build embeds the v6 manifest into the
+# app binary but not into test executables, so the lib test exe dies at load
+# with STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139) before any test runs.
+[target.'cfg(not(windows))'.dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

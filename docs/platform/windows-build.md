@@ -77,8 +77,14 @@ requests / beautifulsoup4，皆已釘版本）。
 
 `app_logging.py` 的候選順序是 `%JAVDB_LOG_DIR%` → `%LOCALAPPDATA%\JavDBMagnet\logs`
 → console-only。先前 Rust 端未設定 `JAVDB_LOG_DIR`，僅靠繼承 `%LOCALAPPDATA%` 巧合運作；
-現已於 `sidecar_manager.rs` 的 `spawn_and_handshake` 以 `.envs(sidecar_env(&paths))`
+現已於 `sidecar_manager.rs` 的 `sidecar_command` 以 `.envs(sidecar_env(&paths))`
 在 spawn 子行程時顯式帶入 `JAVDB_LOG_DIR`（值為 `PathManager.log_dir`）。
+
+守住這條接線的 `sidecar_command_*` 測試要建 mock App，在 Windows 上不編譯：
+mock App 會連結 comctl32 的 `TaskDialogIndirect`（只有 Common Controls v6 有），
+而 tauri-build 只替正式執行檔嵌入 v6 manifest，測試執行檔載入時會以
+`STATUS_ENTRYPOINT_NOT_FOUND`（0xC0000139）失敗。Windows 上 `cargo test --lib`
+只跑得到 `sidecar_env_*`；接線測試由 Linux gate 執行。
 
 ### 4. Smart App Control 會擋掉 cargo 的 build script（2026-08-02 實遇）
 

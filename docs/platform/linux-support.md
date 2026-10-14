@@ -100,11 +100,15 @@ python -m PyInstaller --onefile --name sidecar-x86_64-unknown-linux-gnu \
 
 ## 3. `JAVDB_LOG_DIR` 從未被設定（✅ 已於 2026-10-14 修正）
 
-> **狀態更新**：`sidecar_manager.rs` 的 `spawn_and_handshake` 現在以
-> `.envs(sidecar_env(&paths))` 把 `paths.log_dir` 當成 `JAVDB_LOG_DIR` 傳給
-> sidecar；`log_dir` 缺漏、非字串或全空白時不設，交回 sidecar 自己的候選順序。
-> 驗證範圍：`sidecar_env` 的 Rust 單元測試（Windows 上 `cargo test --lib`）。
-> **未在 Linux 上重跑下方的實測**，也沒有把 GUI 開起來確認 `debug.log` 落點。
+> **狀態更新**：`sidecar_manager.rs` 的 `sidecar_command`（`spawn_and_handshake`
+> 用它建 command）以 `.envs(sidecar_env(&paths))` 把 `paths.log_dir` 當成
+> `JAVDB_LOG_DIR` 傳給 sidecar；`log_dir` 缺漏、非字串或全空白時不設，交回
+> sidecar 自己的候選順序。
+> 驗證：Linux（WSL Ubuntu，webkit2gtk-4.1 2.52.3）`cargo test --lib` 中
+> `sidecar_env_*` 與 `sidecar_command_*` 全過；拿掉 `.envs(...)` 時
+> `sidecar_command_carries_javdb_log_dir` 變紅。同一環境沒有 Secret Service，
+> 12 個 `tests_cookies_e2e` 在 master 與本分支同樣失敗。
+> **未在 Linux 上重跑下方的 sidecar 實測**，也沒有把 GUI 開起來確認 `debug.log` 落點。
 > 本節以下保留原始診斷，行號是當時的位置。
 
 **這是最容易被忽略、但實際影響最大的一項。**

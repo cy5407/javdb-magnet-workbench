@@ -26,8 +26,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tauri::{async_runtime::Mutex, AppHandle};
-use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+use tauri::{async_runtime::Mutex, AppHandle, Runtime};
+use tauri_plugin_shell::process::{Command, CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use tokio::sync::mpsc;
 
@@ -154,6 +154,17 @@ fn sidecar_env(paths: &Value) -> Vec<(&'static str, String)> {
         .unwrap_or_default()
 }
 
+/// Resolve the bundled sidecar and attach its environment. Kept apart from
+/// `spawn_and_handshake` so tests can inspect the exact command that would be
+/// spawned without spawning it.
+fn sidecar_command<R: Runtime>(app: &AppHandle<R>, paths: &Value) -> Result<Command, String> {
+    Ok(app
+        .shell()
+        .sidecar("sidecar")
+        .map_err(|e| format!("sidecar resolve failed: {e}"))?
+        .envs(sidecar_env(paths)))
+}
+
 /// Drain one `\n`-terminated line from `buffer`, stripping the trailing
 /// `\n` and any preceding `\r`. Returns `None` when no newline is present.
 fn drain_line(buffer: &mut Vec<u8>) -> Option<String> {
@@ -176,11 +187,7 @@ impl SidecarManager {
         settings: Value,
         paths: Value,
     ) -> Result<Self, String> {
-        let (mut rx, child) = app
-            .shell()
-            .sidecar("sidecar")
-            .map_err(|e| format!("sidecar resolve failed: {e}"))?
-            .envs(sidecar_env(&paths))
+        let (mut rx, child) = sidecar_command(app, &paths)?
             .spawn()
             .map_err(|e| format!("sidecar spawn failed: {e}"))?;
 
@@ -465,5 +472,53 @@ mod tests {
         ] {
             assert!(sidecar_env(&paths).is_empty(), "for {paths}");
         }
+    }
+
+    // The mock-App tests below are not compiled on Windows; see the
+    // dev-dependencies comment in Cargo.toml. The project's Rust gate runs on
+    // Linux, where they do run.
+    #[cfg(not(windows))]
+    fn mock_app_with_shell() -> tauri::App<tauri::test::MockRuntime> {
+        tauri::test::mock_builder()
+            .plugin(tauri_plugin_shell::init())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app")
+    }
+
+    #[cfg(not(windows))]
+    fn command_env(cmd: Command) -> Vec<(String, Option<String>)> {
+        let std_cmd: std::process::Command = cmd.into();
+        std_cmd
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect()
+    }
+
+    // Guards the wiring, not just the helper: the command spawn_and_handshake
+    // runs must carry JAVDB_LOG_DIR. Dropping `.envs(...)` from
+    // sidecar_command turns this red.
+    #[cfg(not(windows))]
+    #[test]
+    fn sidecar_command_carries_javdb_log_dir() {
+        let app = mock_app_with_shell();
+        let cmd = sidecar_command(app.handle(), &json!({"log_dir": "/tmp/logs"}))
+            .expect("sidecar command");
+        assert_eq!(
+            command_env(cmd),
+            vec![("JAVDB_LOG_DIR".to_string(), Some("/tmp/logs".to_string()))],
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn sidecar_command_sets_no_env_without_log_dir() {
+        let app = mock_app_with_shell();
+        let cmd = sidecar_command(app.handle(), &json!({})).expect("sidecar command");
+        assert!(command_env(cmd).is_empty());
     }
 }
