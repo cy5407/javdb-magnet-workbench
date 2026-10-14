@@ -88,7 +88,8 @@ requests / beautifulsoup4，皆已釘版本）。
 `STATUS_ENTRYPOINT_NOT_FOUND`（0xC0000139）失敗。`build.rs` 因此以
 `cargo:rustc-link-arg-tests` 只替測試目標嵌入 v6 manifest，正式執行檔不受影響。
 Cargo 在 package 沒有任何測試目標時會以 `invalid instruction` 拒絕這個參數，
-所以 `build.rs` 只在 `tests/` 底下有 `*.rs` 或 `*/main.rs` 時才輸出它。
+所以 `build.rs` 只在 `tests/` 底下有 `*.rs` 或 `*/main.rs` 時才輸出它。這個判斷放在
+`app/src-tauri/build_support.rs`，lib 單元測試會一併編譯並測它（`build_support::tests`）。
 同一個原因，這類測試不能放在 lib 單元測試裡：`-tests` 連結參數不作用於
 `cargo test --lib` 的執行檔。
 

@@ -7,6 +7,11 @@ mod secret_store;
 mod settings;
 mod sidecar_manager;
 
+// build.rs logic, compiled here only so its tests run with `cargo test`.
+#[cfg(test)]
+#[path = "../build_support.rs"]
+mod build_support;
+
 use serde_json::{json, Value};
 use tauri::Manager;
 

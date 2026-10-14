@@ -1,3 +1,5 @@
+mod build_support;
+
 fn main() {
     tauri_build::build();
 
@@ -10,9 +12,13 @@ fn main() {
     //
     // Cargo rejects `rustc-link-arg-tests` outright ("invalid instruction")
     // when the package has no test target, so emit it only while tests/
-    // actually holds one.
+    // actually holds one. The detection lives in build_support.rs, which the
+    // lib unit tests also compile and test.
     println!("cargo:rerun-if-changed=tests");
-    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") && has_integration_tests() {
+    println!("cargo:rerun-if-changed=build_support.rs");
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+        && build_support::has_integration_tests(std::path::Path::new("tests"))
+    {
         println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
         println!(
             "cargo:rustc-link-arg-tests=/MANIFESTDEPENDENCY:type='win32' \
@@ -20,22 +26,4 @@ fn main() {
              processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
         );
     }
-}
-
-/// Mirrors Cargo's test-target auto-discovery: `tests/*.rs` or `tests/*/main.rs`.
-/// A build script cannot see the resolved target list, so this assumes the
-/// manifest keeps auto-discovery (no `autotests = false`, no `[[test]]` with a
-/// path outside tests/). Change either and this check must change with it.
-fn has_integration_tests() -> bool {
-    let Ok(entries) = std::fs::read_dir("tests") else {
-        return false;
-    };
-    entries.flatten().any(|entry| {
-        let path = entry.path();
-        if path.is_dir() {
-            path.join("main.rs").is_file()
-        } else {
-            path.extension().is_some_and(|ext| ext == "rs")
-        }
-    })
 }
