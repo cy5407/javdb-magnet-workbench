@@ -129,6 +129,17 @@ fn timeout_for(cmd: &str, body: &Value) -> Result<u64, String> {
     Ok(cache_wait + RD_SEND_TIMEOUT_SLACK_SECS)
 }
 
+/// Extract a non-empty `log_dir` string from the handshake `paths` object so
+/// the spawned Python sidecar receives `JAVDB_LOG_DIR` explicitly in its
+/// process environment instead of relying on `%LOCALAPPDATA%` coincidence.
+fn extract_log_dir(paths: &Value) -> Option<&str> {
+    paths
+        .get("log_dir")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
 /// Drain one `\n`-terminated line from `buffer`, stripping the trailing
 /// `\n` and any preceding `\r`. Returns `None` when no newline is present.
 fn drain_line(buffer: &mut Vec<u8>) -> Option<String> {
@@ -151,10 +162,14 @@ impl SidecarManager {
         settings: Value,
         paths: Value,
     ) -> Result<Self, String> {
-        let (mut rx, child) = app
+        let mut sidecar_cmd = app
             .shell()
             .sidecar("sidecar")
-            .map_err(|e| format!("sidecar resolve failed: {e}"))?
+            .map_err(|e| format!("sidecar resolve failed: {e}"))?;
+        if let Some(log_dir) = extract_log_dir(&paths) {
+            sidecar_cmd = sidecar_cmd.env("JAVDB_LOG_DIR", log_dir);
+        }
+        let (mut rx, child) = sidecar_cmd
             .spawn()
             .map_err(|e| format!("sidecar spawn failed: {e}"))?;
 
@@ -402,5 +417,23 @@ mod tests {
         let err = timeout_for("rd_send_magnet", &json!({"cache_wait": 4})).unwrap_err();
         assert!(err.contains("4"), "got: {err}");
         assert!(err.contains("floor"), "got: {err}");
+    }
+
+    #[test]
+    fn extract_log_dir_returns_trimmed_non_empty_path() {
+        let paths = json!({
+            "data_dir": "/tmp/data",
+            "log_dir": "  /tmp/logs  "
+        });
+        assert_eq!(extract_log_dir(&paths), Some("/tmp/logs"));
+    }
+
+    #[test]
+    fn extract_log_dir_ignores_missing_blank_or_non_string() {
+        assert_eq!(extract_log_dir(&Value::Null), None);
+        assert_eq!(extract_log_dir(&json!({})), None);
+        assert_eq!(extract_log_dir(&json!({"log_dir": ""})), None);
+        assert_eq!(extract_log_dir(&json!({"log_dir": "   "})), None);
+        assert_eq!(extract_log_dir(&json!({"log_dir": 123})), None);
     }
 }

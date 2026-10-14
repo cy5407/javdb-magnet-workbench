@@ -150,6 +150,13 @@ class _Sidecar:
             self.proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             self.proc.kill()
+            self.proc.wait(timeout=5)
+        for stream in (self.proc.stdout, self.proc.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
         self._sitedir.cleanup()
 
 

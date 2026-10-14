@@ -285,5 +285,30 @@ class PickFilesSmart(unittest.TestCase):
         self.assertEqual(rd.pick_files([], strategy="smart"), [])
 
 
+class TestCiDependencySync(unittest.TestCase):
+    """Ensure .github/workflows/sonarcloud.yml inline pip pins stay in sync
+    with requirements-sidecar.txt and requirements-ci.txt."""
+
+    def test_sonarcloud_workflow_pins_match_requirements_files(self):
+        root = Path(__file__).resolve().parent.parent
+        workflow = (root / ".github" / "workflows" / "sonarcloud.yml").read_text(encoding="utf-8")
+
+        expected_pins: list[str] = []
+        for req_name in ("requirements-sidecar.txt", "requirements-ci.txt"):
+            for raw_line in (root / req_name).read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                expected_pins.append(line)
+
+        self.assertGreater(len(expected_pins), 0)
+        for pin in expected_pins:
+            self.assertIn(
+                f"'{pin}'",
+                workflow,
+                f"Pin {pin!r} from requirements files is missing or out of sync in sonarcloud.yml",
+            )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

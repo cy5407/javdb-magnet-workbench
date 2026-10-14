@@ -14,7 +14,7 @@
 |---|---|---|---|
 | 1 | `Cargo.toml` 的 keyring features | ~~編譯直接失敗~~ **已修（2026-08-01）** | ✅ 完成 |
 | 2 | Linux sidecar binary 不存在 | build script 失敗 | **阻斷** |
-| 3 | `JAVDB_LOG_DIR` 從未被設定 | 所有 Python 日誌靜默消失 | **功能失效** |
+| 3 | `JAVDB_LOG_DIR` 從未被設定 | ~~所有 Python 日誌靜默消失~~ **已修**（spawn 時由 `sidecar_manager.rs` 注入） | ✅ 完成 |
 | 4 | 「打開資料夾」只實作 Windows | 回錯誤訊息，不崩 | 功能退化 |
 | 5 | 憑證儲存需要 keyring daemon | 無頭環境會失敗 | 環境相依 |
 | 6 | 打包腳本寫死 Windows | 無法產出 Linux 安裝檔 | 建置流程 |

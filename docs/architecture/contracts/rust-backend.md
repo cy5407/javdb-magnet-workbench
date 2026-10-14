@@ -1462,7 +1462,7 @@ Private. `child.write(...)` is the stdin sender. `line_rx` is the receiving end 
   - `paths: Value` — `{"data_dir": ..., "log_dir": ...}` JSON.
 - Returns: `Ok(SidecarManager)` once both `hello` (with `{"protocol_version": 1}`) and `handshake` returned `ok: true`.
 - Side effects:
-  - Spawns a child process via `tauri-plugin-shell`.
+  - Spawns a child process via `tauri-plugin-shell`, passing `JAVDB_LOG_DIR` (extracted via `extract_log_dir(&paths)`) in the child environment when `paths.log_dir` is a non-empty string.
   - Spawns a tokio task that lives until the child terminates: parses CommandEvent::Stdout chunks into lines (trims `\n` and `\r`) and pushes to the unbounded channel. `CommandEvent::Stderr` is **silently dropped** ([sidecar_manager.rs:71-75](app/src-tauri/src/sidecar_manager.rs:71)); the comment explains M6 will wire stderr to the log file.
   - Writes 2 JSON lines on stdin during construction.
 - Errors:

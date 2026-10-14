@@ -73,15 +73,12 @@ keyring = { version = "3", features = ["windows-native", "apple-native", "linux-
 需要 `pip install -r requirements-sidecar.txt`（PyInstaller / curl_cffi /
 requests / beautifulsoup4，皆已釘版本）。
 
-### 3. 日誌目錄靠環境變數巧合
+### 3. 日誌目錄（已由 `sidecar_manager.rs` 顯式注入 `JAVDB_LOG_DIR`）
 
 `app_logging.py` 的候選順序是 `%JAVDB_LOG_DIR%` → `%LOCALAPPDATA%\JavDBMagnet\logs`
-→ console-only。而 **Rust 端從未設定 `JAVDB_LOG_DIR`**（`sidecar_manager.rs` 的
-spawn 沒有 `.env(...)`），Windows 純粹靠繼承的 `%LOCALAPPDATA%` 恰好等於
-`PathManager.log_dir` 才會動。
-
-實務上 Windows 會動，但這是巧合不是契約。若使用者回報「logs 目錄空的」，
-先查 `%LOCALAPPDATA%` 是否存在。長期修法見 `linux-support.md` 第 3 節。
+→ console-only。先前 Rust 端未設定 `JAVDB_LOG_DIR`，僅靠繼承 `%LOCALAPPDATA%` 巧合運作；
+現已於 `sidecar_manager.rs` 的 `spawn_and_handshake` 透過 `extract_log_dir(&paths)`
+在 spawn 子行程時顯式帶入 `.env("JAVDB_LOG_DIR", log_dir)`。
 
 ### 4. Smart App Control 會擋掉 cargo 的 build script（2026-08-02 實遇）
 
