@@ -283,10 +283,10 @@ def cmd_handshake(state: DaemonState, req: dict) -> dict:
     elif isinstance(raw, str) and _is_valid_rd_token(raw):
         rd_token = raw
     else:
-        # Machine-readable so a future UI/agent can prompt the user to
-        # re-enter the token rather than silently seeing "rd_no_token".
         warnings.append(dict(_HANDSHAKE_TOKEN_WARNING))
         rd_token = ""
+    if state.rd_token != rd_token:
+        _close_rd_session(state)
     state.rd_token = rd_token
 
     settings_raw = req.get("settings")
@@ -963,16 +963,16 @@ def _resolve_int_setting(
     return default
 
 
-
 def cmd_rd_user(state: DaemonState, req: dict) -> dict:
-    """Validate token + return account snapshot. Token override allowed
-    so the settings UI can probe a candidate token before saving."""
+    """Validate token + return account snapshot (token override allowed)."""
     from realdebrid import RealDebridError
     if not state.handshake_done:
         return _err(req, "bad_request", "handshake required before rd_user")
     token_override = req.get("token")
     if token_override is not None and not isinstance(token_override, str):
         return _err(req, "bad_request", "token must be a string when provided")
+    if token_override and not _is_valid_rd_token(token_override):
+        return _err(req, "rd_token_format_invalid", "rd_token_format_invalid")
     if not token_override and not state.rd_token:
         return _err(req, _RD_ERR_NO_TOKEN, _RD_NO_TOKEN_MSG)
     try:
@@ -1032,23 +1032,23 @@ def cmd_rd_set_token(state: DaemonState, req: dict) -> dict:
         return _err(req, "bad_request", "handshake required before rd_set_token")
     token = req.get("token")
     if token is None:
+        _close_rd_session(state)
         state.rd_token = ""
         return _ok(req, {"set": False})
     if not isinstance(token, str):
         return _err(req, "bad_request", "token must be a string")
     if token == "":
         # Treat an explicit empty string like null — a clear, not a set.
+        _close_rd_session(state)
         state.rd_token = ""
         return _ok(req, {"set": False})
     if not _is_valid_rd_token(token):
         return _err(req, "bad_request", "rd_token_format_invalid")
+    # Tear down the pooled session whenever the token changes so neither its
+    # Authorization header nor keep-alive sockets outlive the old credential.
+    # _close_rd_session also runs on the clear paths above.
     if state.rd_token != token:
-        if getattr(state, "rd_session", None) is not None:
-            try:
-                state.rd_session.close()
-            except Exception:
-                pass
-            state.rd_session = None
+        _close_rd_session(state)
     state.rd_token = token
     return _ok(req, {"set": True})
 
@@ -1242,13 +1242,21 @@ def cmd_rd_check_pending(state: DaemonState, req: dict) -> dict:
     })
 
 
-def cmd_shutdown(state: DaemonState, req: dict) -> dict:
-    if getattr(state, "rd_session", None) is not None:
+def _close_rd_session(state: DaemonState) -> None:
+    session = getattr(state, "rd_session", None)
+    if session is not None:
         try:
-            state.rd_session.close()
+            headers = getattr(session, "headers", None)
+            if hasattr(headers, "pop"):
+                headers.pop("Authorization", None)
+            session.close()
         except Exception:
             pass
         state.rd_session = None
+
+
+def cmd_shutdown(state: DaemonState, req: dict) -> dict:
+    _close_rd_session(state)
     return _ok(req)
 
 
@@ -1312,41 +1320,44 @@ def run_daemon(stdin: IO[str], stdout: IO[str],
     caller treats every normal exit as success (exit code 0).
     """
     state = state or DaemonState()
-    while True:
-        line = stdin.readline()
-        if not line:
-            return
-        line = line.strip()
-        if not line:
-            continue
+    try:
+        while True:
+            line = stdin.readline()
+            if not line:
+                return
+            line = line.strip()
+            if not line:
+                continue
 
-        try:
-            req = json.loads(line)
-        except json.JSONDecodeError:
-            _emit(stdout, {
-                "ok": False,
-                "request_id": None,
-                "error": {"code": "bad_request",
-                          "message": "invalid JSON line",
-                          "internal": ""},
-            })
-            continue
+            try:
+                req = json.loads(line)
+            except json.JSONDecodeError:
+                _emit(stdout, {
+                    "ok": False,
+                    "request_id": None,
+                    "error": {"code": "bad_request",
+                              "message": "invalid JSON line",
+                              "internal": ""},
+                })
+                continue
 
-        if not isinstance(req, dict):
-            _emit(stdout, {
-                "ok": False,
-                "request_id": None,
-                "error": {"code": "bad_request",
-                          "message": "request must be a JSON object",
-                          "internal": ""},
-            })
-            continue
+            if not isinstance(req, dict):
+                _emit(stdout, {
+                    "ok": False,
+                    "request_id": None,
+                    "error": {"code": "bad_request",
+                              "message": "request must be a JSON object",
+                              "internal": ""},
+                })
+                continue
 
-        is_shutdown = req.get("cmd") == "shutdown"
-        resp = dispatch(state, req)
-        _emit(stdout, resp)
-        if is_shutdown:
-            return
+            is_shutdown = req.get("cmd") == "shutdown"
+            resp = dispatch(state, req)
+            _emit(stdout, resp)
+            if is_shutdown:
+                return
+    finally:
+        _close_rd_session(state)
 
 
 # ---------------------------------------------------------------------------

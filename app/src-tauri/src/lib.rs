@@ -50,7 +50,7 @@ fn load_handshake_inputs(path_manager: &PathManager) -> (String, Option<String>,
     let cookies = load_cookies(path_manager);
 
     let settings_path = path_manager.data_dir.join(STORE_FILE);
-    let settings_value = std::fs::read_to_string(&settings_path)
+    let mut settings_value = std::fs::read_to_string(&settings_path)
         .ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
         .and_then(|v| v.get("settings").cloned())
@@ -61,6 +61,7 @@ fn load_handshake_inputs(path_manager: &PathManager) -> (String, Option<String>,
         Ok(Some(t)) if !t.is_empty() => Some(t),
         _ => migrate_legacy_token(path_manager, &settings_value),
     };
+    commands::blank_rd_api_token(&mut settings_value);
 
     (cookies, rd_token, settings_value)
 }
@@ -350,6 +351,20 @@ mod tests {
         assert!(
             path.exists(),
             "oversized file must remain so the user can fix it"
+        );
+    }
+
+    #[test]
+    fn blank_rd_api_token_scrubs_in_memory_handshake_settings() {
+        let pm = temp_data_dir();
+        let mut settings_value = write_wrapper(&pm, "abc-123");
+        commands::blank_rd_api_token(&mut settings_value);
+        assert_eq!(
+            settings_value
+                .get("rd")
+                .and_then(|r| r.get("api_token"))
+                .and_then(|t| t.as_str()),
+            Some(""),
         );
     }
 }

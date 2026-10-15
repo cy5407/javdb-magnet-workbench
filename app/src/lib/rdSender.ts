@@ -359,6 +359,8 @@ export function rdErrorMessage(code: string): string {
   switch (code) {
     case "rd_no_token":
       return "尚未設定 Real-Debrid Token";
+    case "rd_token_format_invalid":
+      return "Real-Debrid Token 格式無效（僅限英數且長度 ≤ 255）";
     case "rd_token_invalid":
       return "Real-Debrid Token 無效或已過期";
     case "rd_premium_required":

@@ -1597,7 +1597,10 @@
       }
       if (legacyReport.env_imported) {
         try {
-          await loadAndApplySettings();
+          const updated = await loadAndApplySettings();
+          if (settingsDraft) {
+            settingsDraft = freshSettingsDraft(updated);
+          }
         } catch (e) {
           console.warn("read_settings after import failed:", e);
         }
@@ -2061,6 +2064,7 @@
               id="set-min-size"
               type="number"
               min="0"
+              max="1000000"
               step="1"
               bind:value={settingsDraft.rd.min_size_mb}
             />

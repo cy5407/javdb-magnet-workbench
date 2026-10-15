@@ -319,6 +319,9 @@ pub async fn rd_test_token(
     if token.is_empty() {
         return Err("rd_no_token".to_string());
     }
+    if !secret_store::is_valid_rd_token(&token) {
+        return Err(secret_store::RD_TOKEN_FORMAT_ERR.to_string());
+    }
     let resp = sidecar
         .request("rd_user", json!({ "token": token }))
         .await?;
@@ -687,7 +690,20 @@ async fn import_env_block(
         import_rd_token(sidecar, src, token, report).await;
     }
     if !parsed.settings_patch.is_empty() {
-        import_env_settings_patch(app, data_dir, src, &parsed.settings_patch, report);
+        if let Some(saved_settings) =
+            import_env_settings_patch(app, data_dir, src, &parsed.settings_patch, report)
+        {
+            match sidecar
+                .request("update_settings", json!({ "settings": saved_settings }))
+                .await
+            {
+                Ok(resp) if resp.get("ok").and_then(Value::as_bool).unwrap_or(false) => {}
+                Ok(resp) => report
+                    .warnings
+                    .push(format!("sidecar update_settings: {}", _err_code(&resp))),
+                Err(e) => report.warnings.push(format!("sidecar update_settings: {e}")),
+            }
+        }
     }
 }
 
@@ -760,13 +776,13 @@ fn import_env_settings_patch(
     src: &Path,
     patch: &Map<String, Value>,
     report: &mut LegacyImportReport,
-) {
+) -> Option<Value> {
     let store_path = data_dir.join(crate::STORE_FILE);
     let store = match app.store(&store_path) {
         Ok(s) => s,
         Err(e) => {
             report.warnings.push(format!("settings store: {e}"));
-            return;
+            return None;
         }
     };
     let mut base = store.get("settings").unwrap_or_else(|| {
@@ -786,22 +802,23 @@ fn import_env_settings_patch(
             base = v;
         }
     }
-    store.set("settings", base);
+    store.set("settings", base.clone());
     if let Err(e) = store.save() {
         report.warnings.push(format!("settings save: {e}"));
-        return;
+        return None;
     }
     report.env_imported = true;
     report
         .sources
         .push(format!("{}/.env (settings)", src.display()));
+    Some(base)
 }
 
 /// Force `settings.rd.api_token` to an empty string in-place, regardless
 /// of whether the field was present before. Used as a defensive sweep
 /// before we save settings.json so a future patch can never reintroduce
 /// the token into the on-disk settings.
-fn blank_rd_api_token(settings: &mut Value) {
+pub(crate) fn blank_rd_api_token(settings: &mut Value) {
     if let Some(rd) = settings.get_mut("rd").and_then(Value::as_object_mut) {
         if let Some(t) = rd.get_mut("api_token") {
             *t = Value::String(String::new());

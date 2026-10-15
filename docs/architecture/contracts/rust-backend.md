@@ -1750,7 +1750,8 @@ commands::apply_legacy_import                         (commands.rs:626)
 │       │   (fallback: serde_json::to_value(Settings::default()))
 │       ├── legacy_import::apply_settings_patch       (legacy_import.rs:364)
 │       ├── Store::set("settings", base)
-│       └── Store::save
+│       ├── Store::save
+│       └── SidecarManager::request("update_settings", ...)
 │
 ├── if cookies_present:
 │   ├── std::fs::create_dir_all
