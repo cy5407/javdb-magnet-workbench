@@ -283,6 +283,8 @@ def cmd_handshake(state: DaemonState, req: dict) -> dict:
     elif isinstance(raw, str) and _is_valid_rd_token(raw):
         rd_token = raw
     else:
+        # Machine-readable so a future UI/agent can prompt the user to
+        # re-enter the token rather than silently seeing "rd_no_token".
         warnings.append(dict(_HANDSHAKE_TOKEN_WARNING))
         rd_token = ""
     if state.rd_token != rd_token:
@@ -964,7 +966,12 @@ def _resolve_int_setting(
 
 
 def cmd_rd_user(state: DaemonState, req: dict) -> dict:
-    """Validate token + return account snapshot (token override allowed)."""
+    """Validate token + return account snapshot. Token override allowed
+    so the settings UI can probe a candidate token before saving.
+
+    A malformed override is rejected with `rd_token_format_invalid` before
+    any HTTP call: an invalid header value would otherwise surface as an
+    opaque internal error instead of a format message."""
     from realdebrid import RealDebridError
     if not state.handshake_done:
         return _err(req, "bad_request", "handshake required before rd_user")

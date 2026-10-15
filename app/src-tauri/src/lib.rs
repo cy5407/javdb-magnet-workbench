@@ -354,17 +354,28 @@ mod tests {
         );
     }
 
+    // Goes through load_handshake_inputs itself, not just the helper: the
+    // settings handed to the sidecar must not carry rd.api_token even while
+    // the legacy plaintext value is still on disk. The token is malformed on
+    // purpose, so migrate_legacy_token skips the keyring write — this test
+    // only ever reads the credential store.
     #[test]
-    fn blank_rd_api_token_scrubs_in_memory_handshake_settings() {
+    fn load_handshake_inputs_never_hands_rd_api_token_to_sidecar() {
         let pm = temp_data_dir();
-        let mut settings_value = write_wrapper(&pm, "abc-123");
-        commands::blank_rd_api_token(&mut settings_value);
+        write_wrapper(&pm, "abc-123");
+
+        let (_cookies, _token, settings) = load_handshake_inputs(&pm);
+
+        assert_eq!(settings["rd"]["api_token"], json!(""));
+        assert_eq!(settings["rd"]["file_pick"], json!("smart"));
+        assert_eq!(settings["ui"]["theme"], json!("dark"));
+        let disk: Value =
+            serde_json::from_str(&fs::read_to_string(pm.data_dir.join(STORE_FILE)).unwrap())
+                .unwrap();
         assert_eq!(
-            settings_value
-                .get("rd")
-                .and_then(|r| r.get("api_token"))
-                .and_then(|t| t.as_str()),
-            Some(""),
+            disk["settings"]["rd"]["api_token"],
+            json!("abc-123"),
+            "a malformed legacy value stays on disk so the user can fix it",
         );
     }
 }

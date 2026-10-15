@@ -309,6 +309,20 @@ pub async fn rd_has_token() -> Result<RdHasTokenResult, String> {
     Ok(RdHasTokenResult { present })
 }
 
+/// Gate a "test connection" candidate before it reaches the sidecar. Same
+/// format rule as every credential-store write path (F-04): a value that
+/// cannot be a token would otherwise go into an HTTP header and come back
+/// as an opaque internal error instead of a format message.
+fn check_candidate_token(token: &str) -> Result<(), String> {
+    if token.is_empty() {
+        return Err("rd_no_token".to_string());
+    }
+    if !secret_store::is_valid_rd_token(token) {
+        return Err(secret_store::RD_TOKEN_FORMAT_ERR.to_string());
+    }
+    Ok(())
+}
+
 /// Validate a candidate token without persisting it. Used by the settings
 /// dialog's "test connection" affordance.
 #[tauri::command]
@@ -316,12 +330,7 @@ pub async fn rd_test_token(
     sidecar: State<'_, SidecarManager>,
     token: String,
 ) -> Result<RdUserInfo, String> {
-    if token.is_empty() {
-        return Err("rd_no_token".to_string());
-    }
-    if !secret_store::is_valid_rd_token(&token) {
-        return Err(secret_store::RD_TOKEN_FORMAT_ERR.to_string());
-    }
+    check_candidate_token(&token)?;
     let resp = sidecar
         .request("rd_user", json!({ "token": token }))
         .await?;
@@ -690,20 +699,35 @@ async fn import_env_block(
         import_rd_token(sidecar, src, token, report).await;
     }
     if !parsed.settings_patch.is_empty() {
+        // Push what was saved to the running sidecar too; otherwise its
+        // in-memory settings stay stale until the next restart.
         if let Some(saved_settings) =
             import_env_settings_patch(app, data_dir, src, &parsed.settings_patch, report)
         {
-            match sidecar
-                .request("update_settings", json!({ "settings": saved_settings }))
-                .await
-            {
-                Ok(resp) if resp.get("ok").and_then(Value::as_bool).unwrap_or(false) => {}
-                Ok(resp) => report
-                    .warnings
-                    .push(format!("sidecar update_settings: {}", _err_code(&resp))),
-                Err(e) => report.warnings.push(format!("sidecar update_settings: {e}")),
+            let result = sidecar
+                .request("update_settings", settings_push_body(saved_settings))
+                .await;
+            if let Some(w) = settings_push_warning(result) {
+                report.warnings.push(w);
             }
         }
+    }
+}
+
+/// Body for pushing imported settings to the running sidecar. Blanks
+/// `rd.api_token` again, as `update_sidecar_settings` does, so this path
+/// cannot ship the token even if the importer's own sweep goes away.
+fn settings_push_body(mut settings: Value) -> Value {
+    blank_rd_api_token(&mut settings);
+    json!({ "settings": settings })
+}
+
+/// Map the sidecar's `update_settings` reply to an import warning, if any.
+fn settings_push_warning(result: Result<Value, String>) -> Option<String> {
+    match result {
+        Ok(resp) if resp.get("ok").and_then(Value::as_bool).unwrap_or(false) => None,
+        Ok(resp) => Some(format!("sidecar update_settings: {}", _err_code(&resp))),
+        Err(e) => Some(format!("sidecar update_settings: {e}")),
     }
 }
 
@@ -1254,6 +1278,44 @@ fn open_in_explorer(p: &std::path::Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests_task_contracts {
     use super::*;
+
+    #[test]
+    fn check_candidate_token_rejects_before_the_sidecar_sees_it() {
+        assert_eq!(check_candidate_token(""), Err("rd_no_token".to_string()));
+        let long = "A".repeat(256);
+        for bad in ["abc-123", "abc 123", "abc\n", "ＡＢＣ123", long.as_str()] {
+            assert_eq!(
+                check_candidate_token(bad),
+                Err("rd_token_format_invalid".to_string()),
+                "for {bad:?}",
+            );
+        }
+        assert_eq!(check_candidate_token("ABC123def456"), Ok(()));
+    }
+
+    #[test]
+    fn settings_push_body_never_carries_the_rd_token() {
+        let body = settings_push_body(json!({
+            "rd": {"api_token": "LEAKABLE", "file_pick": "smart"},
+            "ui": {"theme": "dark"},
+        }));
+        assert_eq!(body["settings"]["rd"]["api_token"], json!(""));
+        assert_eq!(body["settings"]["rd"]["file_pick"], json!("smart"));
+        assert_eq!(body["settings"]["ui"]["theme"], json!("dark"));
+    }
+
+    #[test]
+    fn settings_push_warning_reports_only_failures() {
+        assert_eq!(settings_push_warning(Ok(json!({"ok": true}))), None);
+        assert_eq!(
+            settings_push_warning(Ok(json!({"ok": false, "error": {"code": "bad_request"}}))),
+            Some("sidecar update_settings: bad_request".to_string()),
+        );
+        assert_eq!(
+            settings_push_warning(Err("sidecar is dead".to_string())),
+            Some("sidecar update_settings: sidecar is dead".to_string()),
+        );
+    }
 
     #[test]
     fn rd_link_deserializes_completed_payload_with_error_entry() {

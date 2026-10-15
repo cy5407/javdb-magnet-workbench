@@ -2093,6 +2093,27 @@ class SessionCloseContract(unittest.TestCase):
             self.assertEqual(resp["error"]["code"], "rd_token_format_invalid")
             m_client.assert_not_called()
 
+    def test_handshake_closes_pooled_session_only_when_token_changes(self):
+        def handshake(state, token):
+            return _call(state, {
+                "cmd": "handshake", "request_id": "h",
+                "cookies": "", "rd_token": token, "settings": {}, "paths": {},
+            })
+
+        state = sd.DaemonState()
+        state.rd_token = "tokOLD"
+        kept = mock.MagicMock()
+        kept.headers = {"Authorization": "Bearer tok-xyz"}
+        state.rd_session = kept
+        self.assertTrue(handshake(state, "tokOLD")["ok"])
+        self.assertIs(state.rd_session, kept, "same token must keep the pool")
+        kept.close.assert_not_called()
+
+        self.assertTrue(handshake(state, "tokNEW")["ok"])
+        self.assertIsNone(state.rd_session)
+        kept.close.assert_called_once()
+        self.assertNotIn("Authorization", kept.headers)
+
 
 class EmitBrokenPipe(unittest.TestCase):
     def test_emit_broken_pipe_exits_cleanly_sys_exit_0(self):

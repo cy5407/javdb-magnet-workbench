@@ -770,7 +770,7 @@ The 每組只留 select carries five options — 全部 (`all`), **RD 命中優�
 - Same guard / busy / error handling shape as `previewLegacyImport`.
 - After success, conditionally refreshes:
   - `rd_token_imported` → `rdHasToken = true`
-  - `env_imported` → re-`read_settings` + apply theme/scale
+  - `env_imported` → re-`read_settings` + apply theme/scale; if the settings editor is open, its `settingsDraft` is rebuilt from the freshly read settings (Rust already pushed them to the sidecar)
   - `pending_imported > 0` → re-fetch `pending_list`
   - `cookies_imported` → `refreshCookiesStatus()`
 - Writes `legacyReport`, `legacyError`, `legacyBusy`.
@@ -1013,7 +1013,8 @@ button.onclick [1191]
     ├── invoke('apply_legacy_import', { sourceDir })   → LegacyImportReport
     ├── if rd_token_imported: rdHasToken = true
     ├── if env_imported:
-    │   └── invoke('read_settings') + applyTheme + applyScale
+    │   ├── invoke('read_settings') + applyTheme + applyScale
+    │   └── if settingsDraft: settingsDraft = freshSettingsDraft(updated)
     ├── if pending_imported > 0:
     │   └── invoke('pending_list')
     └── if cookies_imported:

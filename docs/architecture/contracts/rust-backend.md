@@ -182,7 +182,7 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
 - Returns: tuple `(cookies, rd_token, settings_value)`:
   - `cookies`: trimmed contents of `<data_dir>/cookies.txt`. Empty string if missing.
   - `rd_token`: `Some(token)` if found in OS credential store, else attempted legacy migration from `settings.rd.api_token`. `None` if neither source had a value.
-  - `settings_value`: the `"settings"` object out of `<data_dir>/settings.json`. Defaults to empty JSON object on any read/parse failure.
+  - `settings_value`: the `"settings"` object out of `<data_dir>/settings.json`. Defaults to empty JSON object on any read/parse failure. `rd.api_token` is blanked (`commands::blank_rd_api_token`) after migration has read it, so the handshake never carries the legacy plaintext token into sidecar memory — even when a malformed legacy value is deliberately left on disk.
 - Side effects: file I/O on `cookies.txt` and `settings.json`. May invoke `migrate_legacy_token` which writes the keyring + rewrites the JSON wrapper.
 - Errors: no error type; all errors are swallowed into defaults. `migrate_legacy_token` writes to stderr on keyring failure.
 - Async: no.
@@ -486,11 +486,12 @@ DTO.
 
 **Contract**:
 - Params:
-  - `token` — candidate. Empty short-circuits to `Err("rd_no_token")`.
+  - `token` — candidate. Pre-checked by `check_candidate_token`: empty short-circuits to `Err("rd_no_token")`; anything failing `secret_store::is_valid_rd_token` short-circuits to `Err(RD_TOKEN_FORMAT_ERR)` before the sidecar is called (same F-04 rule as the write paths).
 - Returns: account info from RD.
 - Side effects: sidecar RPC; sidecar performs HTTP to real-debrid.com. Token does NOT touch the keyring.
 - Errors:
   - `Err("rd_no_token")` for empty input.
+  - `Err("rd_token_format_invalid")` for a malformed candidate (sidecar `cmd_rd_user` enforces the same rule).
   - `Err(<code>)` from `_err_code` for non-ok response.
   - `Err(<serde error>)` if user shape can't deserialize.
 - Async: yes.
@@ -730,7 +731,7 @@ Three-variant tag union for the retry-poll command.
 - Side effects:
   - For `.env`:
     - RD token → `secret_store::set_rd_token` + sidecar `rd_set_token`.
-    - Non-secret settings → merge into the tauri-plugin-store `settings.json`. Forces `rd.api_token` to "" with a belt-and-suspenders pass ([commands.rs:714-720](app/src-tauri/src/commands.rs:714)).
+    - Non-secret settings → merge into the tauri-plugin-store `settings.json`. Forces `rd.api_token` to "" with a belt-and-suspenders pass ([commands.rs:714-720](app/src-tauri/src/commands.rs:714)). After a successful save, pushes the saved settings to the running sidecar (`update_settings`, body from `settings_push_body`, which blanks `rd.api_token` again); a failed push becomes a `report.warnings` entry via `settings_push_warning`.
   - For `cookies.txt`: file copy into `<data_dir>/cookies.txt`. Always adds a warning instructing the user to restart for the new cookies to take effect, because the running sidecar already loaded its cookies at handshake time.
   - For `pending_torrents.json`: read source, sanitize via `legacy_import::merge_legacy_pending`, write merged list via `pending::save`.
 - Errors:
@@ -1778,7 +1779,7 @@ commands::apply_legacy_import                         (commands.rs:626)
 - **Three independent `temp_dir` test helpers** in [pending.rs:174](app/src-tauri/src/pending.rs:174), [legacy_import.rs:410](app/src-tauri/src/legacy_import.rs:410), [commands.rs:970](app/src-tauri/src/commands.rs:970) — duplicated rather than factored into a shared dev-dep or test util.
 - **`STORE_FILE` is defined twice** — `pub` in [lib.rs:15](app/src-tauri/src/lib.rs:15) and `private` in [settings.rs:12](app/src-tauri/src/settings.rs:12). `apply_legacy_import` uses `crate::STORE_FILE` while `settings.rs` uses its own. Mild duplication risk if one is changed and the other isn't.
 - **`pending::FILE_NAME` and `legacy_import::LEGACY_PENDING_FILE`** both hardcode `"pending_torrents.json"`. Similar duplication for `cookies.txt` (`commands::COOKIES_FILE_NAME` vs `legacy_import::LEGACY_COOKIES_FILE`).
-- **`update_settings` push to sidecar is not automatic**. After `write_settings`, the frontend must also call `update_sidecar_settings` for the running daemon to pick up the change. No Rust-side hook chains these.
+- **`update_settings` push to sidecar is not automatic after `write_settings`**. The frontend must also call `update_sidecar_settings` for the running daemon to pick up the change. The one Rust-side push is `apply_legacy_import`'s `.env` settings block, which calls `update_settings` itself after saving.
 - **Test at [legacy_import.rs:425](app/src-tauri/src/legacy_import.rs:425) reconstructs `"RD_API_TOKEN"`** as `["RD_API", "TOKEN"].join("_")`. Appears to be intentional — keeps the literal string out of grep-able source for auditing.
 - **`block_on` during `.setup`** ([lib.rs:109](app/src-tauri/src/lib.rs:109)). The sidecar handshake is performed on the setup thread; any slowness there delays window-open. Reasonable given the rest of the app assumes the sidecar exists.
 - **`_err_code` is named with a leading underscore** despite being widely used ([commands.rs:259](app/src-tauri/src/commands.rs:259)). Usually that convention signals "intentionally unused" — a stylistic inconsistency rather than a bug.
