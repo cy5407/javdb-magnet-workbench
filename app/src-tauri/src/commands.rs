@@ -689,7 +689,7 @@ async fn import_env_block(
     src: &Path,
     report: &mut LegacyImportReport,
 ) {
-    let raw = match std::fs::read_to_string(src.join(legacy_import::LEGACY_ENV_FILE)) {
+    let raw = match read_legacy_env(src).await {
         Ok(s) => s,
         Err(e) => {
             report.warnings.push(format!("read .env failed: {e}"));
@@ -713,6 +713,17 @@ async fn import_env_block(
             push_imported_settings(sidecar, saved_settings, report).await;
         }
     }
+}
+
+/// Read `<src>/.env` off the async runtime: a blocking read inside an async
+/// command would stall a worker thread for as long as the (user-chosen,
+/// possibly network) path takes.
+async fn read_legacy_env(src: &Path) -> Result<String, String> {
+    let env_path = src.join(legacy_import::LEGACY_ENV_FILE);
+    tauri::async_runtime::spawn_blocking(move || std::fs::read_to_string(env_path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }
 
 /// Send imported settings to the running sidecar; a failed push becomes an
@@ -1334,6 +1345,26 @@ mod tests_task_contracts {
         assert_eq!(run("abc-123"), Err("rd_token_format_invalid".to_string()));
         assert_eq!(run(""), Err("rd_no_token".to_string()));
         assert_eq!(run("ABC123def456"), Err("sidecar is dead: unit test".to_string()));
+    }
+
+    #[test]
+    fn read_legacy_env_reads_the_file_and_reports_a_missing_one() {
+        let dir = std::env::temp_dir().join(format!(
+            "javdbmagnet-read-env-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let env_file = dir.join(legacy_import::LEGACY_ENV_FILE);
+        std::fs::write(&env_file, "RD_FILE_PICK=smart\n").unwrap();
+
+        let got = tauri::async_runtime::block_on(read_legacy_env(&dir));
+        assert_eq!(got, Ok("RD_FILE_PICK=smart\n".to_string()));
+
+        std::fs::remove_file(&env_file).unwrap();
+        let missing = tauri::async_runtime::block_on(read_legacy_env(&dir));
+        assert!(missing.is_err(), "missing .env must be an error, got {missing:?}");
+        std::fs::remove_dir(&dir).unwrap();
     }
 
     #[test]
