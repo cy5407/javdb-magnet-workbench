@@ -330,6 +330,12 @@ pub async fn rd_test_token(
     sidecar: State<'_, SidecarManager>,
     token: String,
 ) -> Result<RdUserInfo, String> {
+    rd_test_token_with(&sidecar, token).await
+}
+
+/// Body of [`rd_test_token`], taking the manager directly so tests can drive
+/// it with `SidecarManager::dead_for_tests`.
+async fn rd_test_token_with(sidecar: &SidecarManager, token: String) -> Result<RdUserInfo, String> {
     check_candidate_token(&token)?;
     let resp = sidecar
         .request("rd_user", json!({ "token": token }))
@@ -704,13 +710,23 @@ async fn import_env_block(
         if let Some(saved_settings) =
             import_env_settings_patch(app, data_dir, src, &parsed.settings_patch, report)
         {
-            let result = sidecar
-                .request("update_settings", settings_push_body(saved_settings))
-                .await;
-            if let Some(w) = settings_push_warning(result) {
-                report.warnings.push(w);
-            }
+            push_imported_settings(sidecar, saved_settings, report).await;
         }
+    }
+}
+
+/// Send imported settings to the running sidecar; a failed push becomes an
+/// import warning rather than aborting the rest of the import.
+async fn push_imported_settings(
+    sidecar: &SidecarManager,
+    saved_settings: Value,
+    report: &mut LegacyImportReport,
+) {
+    let result = sidecar
+        .request("update_settings", settings_push_body(saved_settings))
+        .await;
+    if let Some(w) = settings_push_warning(result) {
+        report.warnings.push(w);
     }
 }
 
@@ -1302,6 +1318,37 @@ mod tests_task_contracts {
         assert_eq!(body["settings"]["rd"]["api_token"], json!(""));
         assert_eq!(body["settings"]["rd"]["file_pick"], json!("smart"));
         assert_eq!(body["settings"]["ui"]["theme"], json!("dark"));
+    }
+
+    // Drives the command body with a dead sidecar: a malformed token must be
+    // refused before any request, while a well-formed one does reach the
+    // sidecar (and fails there). Dropping the pre-check turns the first
+    // assertion into "sidecar is dead: ...".
+    #[test]
+    fn rd_test_token_refuses_malformed_token_before_any_request() {
+        let sidecar = SidecarManager::dead_for_tests("unit test");
+        let run = |token: &str| {
+            tauri::async_runtime::block_on(rd_test_token_with(&sidecar, token.to_string()))
+                .map(|_| ())
+        };
+        assert_eq!(run("abc-123"), Err("rd_token_format_invalid".to_string()));
+        assert_eq!(run(""), Err("rd_no_token".to_string()));
+        assert_eq!(run("ABC123def456"), Err("sidecar is dead: unit test".to_string()));
+    }
+
+    #[test]
+    fn push_imported_settings_reports_a_failed_push_as_a_warning() {
+        let sidecar = SidecarManager::dead_for_tests("unit test");
+        let mut report = LegacyImportReport::default();
+        tauri::async_runtime::block_on(push_imported_settings(
+            &sidecar,
+            json!({"rd": {"api_token": "", "file_pick": "smart"}}),
+            &mut report,
+        ));
+        assert_eq!(
+            report.warnings,
+            vec!["sidecar update_settings: sidecar is dead: unit test".to_string()],
+        );
     }
 
     #[test]

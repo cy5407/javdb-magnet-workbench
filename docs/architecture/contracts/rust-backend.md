@@ -486,7 +486,7 @@ DTO.
 
 **Contract**:
 - Params:
-  - `token` — candidate. Pre-checked by `check_candidate_token`: empty short-circuits to `Err("rd_no_token")`; anything failing `secret_store::is_valid_rd_token` short-circuits to `Err(RD_TOKEN_FORMAT_ERR)` before the sidecar is called (same F-04 rule as the write paths).
+  - `token` — candidate. The command delegates to the private `rd_test_token_with(&SidecarManager, token)` (tests drive it with `SidecarManager::dead_for_tests`). Pre-checked by `check_candidate_token`: empty short-circuits to `Err("rd_no_token")`; anything failing `secret_store::is_valid_rd_token` short-circuits to `Err(RD_TOKEN_FORMAT_ERR)` before the sidecar is called (same F-04 rule as the write paths).
 - Returns: account info from RD.
 - Side effects: sidecar RPC; sidecar performs HTTP to real-debrid.com. Token does NOT touch the keyring.
 - Errors:
@@ -731,7 +731,7 @@ Three-variant tag union for the retry-poll command.
 - Side effects:
   - For `.env`:
     - RD token → `secret_store::set_rd_token` + sidecar `rd_set_token`.
-    - Non-secret settings → merge into the tauri-plugin-store `settings.json`. Forces `rd.api_token` to "" with a belt-and-suspenders pass ([commands.rs:714-720](app/src-tauri/src/commands.rs:714)). After a successful save, pushes the saved settings to the running sidecar (`update_settings`, body from `settings_push_body`, which blanks `rd.api_token` again); a failed push becomes a `report.warnings` entry via `settings_push_warning`.
+    - Non-secret settings → merge into the tauri-plugin-store `settings.json`. Forces `rd.api_token` to "" with a belt-and-suspenders pass ([commands.rs:714-720](app/src-tauri/src/commands.rs:714)). After a successful save, `push_imported_settings` sends the saved settings to the running sidecar (`update_settings`, body from `settings_push_body`, which blanks `rd.api_token` again); a failed push becomes a `report.warnings` entry via `settings_push_warning`.
   - For `cookies.txt`: file copy into `<data_dir>/cookies.txt`. Always adds a warning instructing the user to restart for the new cookies to take effect, because the running sidecar already loaded its cookies at handshake time.
   - For `pending_torrents.json`: read source, sanitize via `legacy_import::merge_legacy_pending`, write merged list via `pending::save`.
 - Errors:
