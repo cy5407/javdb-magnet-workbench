@@ -357,8 +357,9 @@ mod tests {
     // Goes through load_handshake_inputs itself, not just the helper: the
     // settings handed to the sidecar must not carry rd.api_token even while
     // the legacy plaintext value is still on disk. The token is malformed on
-    // purpose, so migrate_legacy_token skips the keyring write — this test
-    // only ever reads the credential store.
+    // purpose: migrate_legacy_token rejects it before set_rd_token, so with
+    // this input the test only reads the credential store (a valid legacy
+    // token would be written to the keyring — do not use one here).
     #[test]
     fn load_handshake_inputs_never_hands_rd_api_token_to_sidecar() {
         let pm = temp_data_dir();

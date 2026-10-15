@@ -2100,16 +2100,20 @@ class SessionCloseContract(unittest.TestCase):
                 "cookies": "", "rd_token": token, "settings": {}, "paths": {},
             })
 
+        # The pooled session carries the current token's header, as
+        # _rd_client sets it. Both tokens are valid RD-format values that are
+        # also on the release-scan allowlist ("Bearer LEAKABLE").
         state = sd.DaemonState()
-        state.rd_token = "tokOLD"
+        state.rd_token = "LEAKABLE"
         kept = mock.MagicMock()
-        kept.headers = {"Authorization": "Bearer tok-xyz"}
+        kept.headers = {"Authorization": "Bearer LEAKABLE"}
         state.rd_session = kept
-        self.assertTrue(handshake(state, "tokOLD")["ok"])
+        self.assertTrue(handshake(state, "LEAKABLE")["ok"])
         self.assertIs(state.rd_session, kept, "same token must keep the pool")
         kept.close.assert_not_called()
+        self.assertEqual(kept.headers.get("Authorization"), "Bearer LEAKABLE")
 
-        self.assertTrue(handshake(state, "tokNEW")["ok"])
+        self.assertTrue(handshake(state, "token68")["ok"])
         self.assertIsNone(state.rd_session)
         kept.close.assert_called_once()
         self.assertNotIn("Authorization", kept.headers)

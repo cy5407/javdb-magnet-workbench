@@ -553,7 +553,7 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
 
 **Calls**: `_is_valid_rd_token`, `_close_rd_session`, `_ok`, `_err`.
 
-**Called by**: Rust `rd_save_token`, `rd_clear_token`.
+**Called by**: Rust `rd_save_token`, `rd_clear_token`, and `import_rd_token` (`apply_legacy_import`'s `.env` token step).
 
 ### `cmd_rd_send_magnet(state: DaemonState, req: dict) -> dict` ([sidecar.py:494](../../../sidecar/sidecar.py#L494))
 
