@@ -682,6 +682,12 @@ fn validate_legacy_source(source_dir: &str, data_dir: &Path) -> Result<PathBuf, 
 /// Read `.env` from `src`, parse it, then route the optional RD token to
 /// the credential store / sidecar and the non-secret settings patch to
 /// the tauri-plugin-store. All failures are appended to `report.warnings`.
+///
+/// `deny(unused_variables)`: this body needs an `AppHandle`, so no unit test
+/// reaches it. Dropping the `push_imported_settings` call leaves
+/// `saved_settings` unused, which this turns into a build error instead of a
+/// silently stale sidecar.
+#[deny(unused_variables)]
 async fn import_env_block(
     app: &AppHandle,
     data_dir: &Path,
