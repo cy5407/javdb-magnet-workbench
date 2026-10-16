@@ -19,7 +19,8 @@ metadata:
 >
 > **引擎取得**：`.archify-engine/` 已列在 `.gitignore`，不在 repo 內。缺少時執行
 > `git clone --depth 1 --branch v2.16.0 https://github.com/tt-a1i/archify .archify-engine`
-> （現有三份 HTML 由 v2.16.0 產生；3.x 目錄結構不同，`bin/` 路徑不適用）。
+> （3.x 目錄結構不同，`bin/` 路徑不適用）。產出的 `architecture.html`／`lifecycle.html`／
+> `workflow.html` 同樣列在 `.gitignore`：repo 只保存 `*.json` 規格，HTML 在本機產生後直接開啟檢視。
 
 ---
 

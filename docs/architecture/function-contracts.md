@@ -105,7 +105,7 @@ Tests assert behavior; they do not define it. Treat them as guardrails for the c
 | `build/`, `dist/`, `dist.7z`, `*.spec`, `__pycache__/`, `target/`, `node_modules/` | Generated artifacts / package caches. |
 | `release/`, `JavDBMagnet.spec` | Build output. |
 | `cookies.txt`, `pending_torrents.json`, `.env`, `magnet.txt`, `logs/` | Runtime user data, not source. |
-| `javdbmagnet.exe`, `sidecar.exe` (repo root), `architecture.*` / `lifecycle.*` / `workflow.*` (`.html` + `.json`) | Committed release binaries and generated diagrams. |
+| `javdbmagnet.exe`, `sidecar.exe` (repo root), `architecture.json` / `lifecycle.json` / `workflow.json` | Committed release binaries and archify diagram specs (the rendered `.html` is gitignored and generated locally). |
 | `vendor/wayland-scanner-0.31.10/` | Patched third-party crate wired in via `[patch.crates-io]` in `app/src-tauri/Cargo.toml`; not project logic. |
 | `.agent-hooks/`, `.agents/`, `.claude/` | Agent tooling (hooks, skills, wiki), not product code. |
 

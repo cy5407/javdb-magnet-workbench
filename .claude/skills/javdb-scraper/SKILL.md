@@ -15,7 +15,7 @@ description: JavDB 網頁爬取、TLS 偽裝、Sidecar RPC 通信與 Real-Debrid
 - Archify 架構圖引擎維護（應使用 `archify` 專用 Skill）。
 
 ## 3. Data Flow Architecture
-本專案遵循三層式架構與單向資料流（參考 `architecture.html` 與 `workflow.html`，跨層契約以 `docs/architecture/contracts/` 為唯一真實來源）：
+本專案遵循三層式架構與單向資料流（參考 `architecture.json` 與 `workflow.json`，可用 archify skill 產生 HTML 檢視，跨層契約以 `docs/architecture/contracts/` 為唯一真實來源）：
 1. **前端表現層 (Svelte 5)**：使用者輸入 URL/Magnet，由 `scraper.ts` / `rdSender.ts` / `rdPriority.ts` 發起非同步請求。
 2. **後端控制層 (Rust Tauri 2.0)**：`commands.rs` 接收 IPC 呼叫，透過 `sidecar_manager.rs` 以 Stdio JSONL 調度 Python 進程；敏感 Token 經 `secret_store.rs`（`keyring` crate）存取 OS 憑證庫（Windows Credential Manager；macOS／Linux 由 `keyring` 對應後端）。
 3. **運算與資料層 (Python Sidecar)**：
