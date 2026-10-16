@@ -27,7 +27,7 @@
   ```
 
 ### 3.2 巢狀結構命令 (`fetch_javdb` 與 `rd_user`)
-- **`cmd_fetch_javdb`**（`sidecar/sidecar.py:596-605`）：
+- **`cmd_fetch_javdb`**（`sidecar/sidecar.py:598-607`）：
   ```python
   return _ok(req, {
       "result": {
@@ -41,7 +41,7 @@
   })
   ```
   `magnets_out` 陣列中每筆項目包含 `handle_id`, `name`, `size`, `tags`, `date`, `magnet_redacted`。
-- **`cmd_rd_user`**（`sidecar/sidecar.py:989-996`）：
+- **`cmd_rd_user`**（`sidecar/sidecar.py:996-1003`）：
   ```python
   return _ok(req, {
       "user": {
@@ -54,10 +54,10 @@
   ```
 
 ### 3.3 平鋪結構命令 (`rd_send_magnet`, `resolve_magnet` 等)
-- **`cmd_rd_send_magnet`**（`sidecar/sidecar.py:1147-1170`）：
+- **`cmd_rd_send_magnet`**（`sidecar/sidecar.py:1154-1177`）：
   - `status="completed"` 時回傳：`{"ok": true, "request_id": ..., "status": "completed", "torrent_id": ..., "name": ..., "links": [{"original", "download", "filename", "filesize", "streamable", "error"?}]}`
   - `status="pending"` 時回傳：`{"ok": true, "request_id": ..., "status": "pending", "torrent_id": ..., "name": ..., "rd_status": ..., "progress": ..., "files_selected": bool, "strategy": ...}`
-- **`cmd_resolve_magnet`**（`sidecar/sidecar.py:616`）：回傳 `{"ok": true, "request_id": ..., "magnet": full_uri}`。
+- **`cmd_resolve_magnet`**（`sidecar/sidecar.py:618`）：回傳 `{"ok": true, "request_id": ..., "magnet": full_uri}`。
 
 ## 4. Handshake 前置條件守衛（權威對齊）
 依據 `sidecar/sidecar.py` 各 handler 進入點（權威契約見 `docs/architecture/contracts/sidecar-runtime.md` 的 Commands 表），僅有以下 **6 個命令** 受到 `if not state.handshake_done:` 守衛：
@@ -69,6 +69,20 @@
 6. `rd_check_pending`
 
 其餘 10 個命令（`hello`, `handshake`, `ping`, `resolve_magnet`, `resolve_magnets`, `forget_magnets`, `register_magnets`, `update_settings`, `cancel`, `shutdown`）無 handshake 守衛。
+
+## 4.1 同一格式錯誤的兩種信封（PR #11）
+Token 格式不符（`_is_valid_rd_token` 失敗）時，兩個命令回傳不同的錯誤**形狀**：
+- `cmd_rd_user`（token override）把它放在 `error.code`，位於 `sidecar/sidecar.py:981-982`：
+  ```python
+  if token_override and not _is_valid_rd_token(token_override):
+      return _err(req, "rd_token_format_invalid", "rd_token_format_invalid")
+  ```
+- `cmd_rd_set_token` 則是 `error.code = "bad_request"`、`error.message = "rd_token_format_invalid"`，位於 `sidecar/sidecar.py:1052-1053`：
+  ```python
+  if not _is_valid_rd_token(token):
+      return _err(req, "bad_request", "rd_token_format_invalid")
+  ```
+Rust 端兩條路徑都先以 `secret_store::is_valid_rd_token` 擋下（`rd_test_token` 經 `check_candidate_token`、`rd_save_token` 自行預檢），回傳 `Err("rd_token_format_invalid")`，所以前端 `rdErrorMessage` 只需處理 code 形式；直接讀 sidecar 回應的呼叫端則必須同時處理兩種形狀。
 
 ## 5. Action Patterns & Fix
 - 呼叫端必須先驗證 `resp["ok"] === true`，若為 `false` 則從 `resp["error"]["code"]` 與 `resp["error"]["message"]` 提取錯誤。

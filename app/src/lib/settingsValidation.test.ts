@@ -31,6 +31,12 @@ describe("validateMinSizeMb", () => {
   it("accepts 500", () => {
     expect(validateMinSizeMb(500)).toBeNull();
   });
+  it("accepts 1_000_000 (ceiling)", () => {
+    expect(validateMinSizeMb(1_000_000)).toBeNull();
+  });
+  it("rejects 1_000_001 (above ceiling)", () => {
+    expect(validateMinSizeMb(1_000_001)).toMatch(/1,000,000/);
+  });
   it("rejects non-integer", () => {
     expect(validateMinSizeMb(1.5)).toMatch(/整數/);
   });

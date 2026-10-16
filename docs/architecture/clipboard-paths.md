@@ -1,6 +1,6 @@
 # 剪貼簿（Clipboard）寫入路徑
 
-> Status: M6 follow-up（2026-05-11）起所有 clipboard 寫入都走 Rust。前端不直接呼叫 `tauri-plugin-clipboard-manager`。2026-10-16 依 HEAD `9e49603` 重新核對。
+> Status: M6 follow-up（2026-05-11）起所有 clipboard 寫入都走 Rust。前端不直接呼叫 `tauri-plugin-clipboard-manager`。2026-10-16 依 HEAD `7c877a8` 重新核對。
 
 ## TL;DR
 
@@ -66,7 +66,7 @@ RD 的 unrestrict link（`https://download.real-debrid.com/d/<id>/<filename>.mp4
 
 **不需要** `clipboard-manager:allow-write-text`（也沒有任何 `clipboard-manager:*` permission）。Rust 端 `app.clipboard()` 的呼叫不受 IPC permission gate 限制（Rust 對 plugin 是直呼，不走 IPC）。`shell:allow-open` 與剪貼簿無關，是前端 `openExternal` 開啟 RD API token 頁面用的。
 
-Rust 端接線：`app/src-tauri/Cargo.toml` 相依 `tauri-plugin-clipboard-manager = "2"`；`lib.rs::run` 以 `.plugin(tauri_plugin_clipboard_manager::init())` 註冊（[lib.rs:362](../../app/src-tauri/src/lib.rs#L362)）；`commands.rs` 透過 `use tauri_plugin_clipboard_manager::ClipboardExt` 取得 `app.clipboard()`。
+Rust 端接線：`app/src-tauri/Cargo.toml` 相依 `tauri-plugin-clipboard-manager = "2"`；`lib.rs::run` 以 `.plugin(tauri_plugin_clipboard_manager::init())` 註冊（[lib.rs:389](../../app/src-tauri/src/lib.rs#L389)）；`commands.rs` 透過 `use tauri_plugin_clipboard_manager::ClipboardExt` 取得 `app.clipboard()`。
 
 ## 變更紀錄
 
@@ -77,6 +77,6 @@ Rust 端接線：`app/src-tauri/Cargo.toml` 相依 `tauri-plugin-clipboard-manag
 
 ## 測試覆蓋
 
-- Rust：沒有 sidecar mock。`copy_magnets_bulk` 的回應解析抽成 `resolved_magnets_from_response`，有兩個單元測試（保留 sidecar 錯誤碼、空白／格式錯誤項目計入 `unknown`；[commands.rs:1272](../../app/src-tauri/src/commands.rs#L1272)、[commands.rs:1286](../../app/src-tauri/src/commands.rs#L1286)）。`copy_magnet` 與 `copy_rd_links_bulk`（trim + filter + join + clipboard write）目前未加單元測試 —— 若日後新增 dedupe 等規則，再補。
+- Rust：沒有 sidecar mock。`copy_magnets_bulk` 的回應解析抽成 `resolved_magnets_from_response`，有兩個單元測試（保留 sidecar 錯誤碼、空白／格式錯誤項目計入 `unknown`；[commands.rs:1435](../../app/src-tauri/src/commands.rs#L1435)、[commands.rs:1449](../../app/src-tauri/src/commands.rs#L1449)）。`copy_magnet` 與 `copy_rd_links_bulk`（trim + filter + join + clipboard write）目前未加單元測試 —— 若日後新增 dedupe 等規則，再補。
 - 前端：`App.test.ts` 以 mock `invoke` 提供 `copy_rd_links_bulk`，並斷言 `retryAllPending` 以本輪完成的 links 呼叫它；`rdSender.test.ts` 覆蓋 `collectDownloadLinksFromRow`（決定要複製哪些連結）。`copy_magnet`／`copy_magnets_bulk` 的前端呼叫沒有測試。手動 smoke 在 `docs/sessions/m6a-release-smoke.md` 步驟 6。
 - jsdom 環境下 `invoke` 可以 mock，但 `app.clipboard().write_text()` 的真實寫入需要實機驗證。Tauri 沒有 fake clipboard backend。

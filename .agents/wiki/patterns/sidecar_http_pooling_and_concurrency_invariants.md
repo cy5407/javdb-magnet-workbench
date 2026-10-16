@@ -20,7 +20,7 @@
 ## 3. Verbatim Code Evidence
 
 ### 3.1 屬性注入與標頭同步
-- 位於 `sidecar/sidecar.py:926-930`：
+- 位於 `sidecar/sidecar.py:930-934`：
   ```python
   if session is not None and hasattr(client, "session"):
       client.session = session
@@ -89,9 +89,33 @@
       self.assertEqual(client2.session.headers.get("Authorization"), "Bearer tok-xyz")
   ```
 
+### 3.6 共享 Session 的拆除（PR #11）
+- 位於 `sidecar/sidecar.py:1252-1262`：
+  ```python
+  def _close_rd_session(state: DaemonState) -> None:
+      session = getattr(state, "rd_session", None)
+      if session is not None:
+          try:
+              headers = getattr(session, "headers", None)
+              if hasattr(headers, "pop"):
+                  headers.pop("Authorization", None)
+              session.close()
+          except Exception:
+              pass
+          state.rd_session = None
+  ```
+- 呼叫點：`cmd_handshake`（token 變更時）、`cmd_rd_set_token`（清除 `null`／`""` 或 token 變更）、`cmd_shutdown`、`run_daemon` 的 `finally`。位於 `sidecar/sidecar.py:1055-1058`：
+  ```python
+  # Authorization header nor keep-alive sockets outlive the old credential.
+  # _close_rd_session also runs on the clear paths above.
+  if state.rd_token != token:
+      _close_rd_session(state)
+  ```
+
 ## 4. Actionable Fix & Constraints
 - **負向約束**：嚴禁在 `_rd_client` 強制傳遞建構參數破壞 `_FakeClient` 測試樁；應採屬性賦值（`client.session = session`）完成 Session 注入。
 - **標頭同步約束**：任何賦值替換 `client.session` 之操作，必須立即於該 session 物件上補齊 `client.session.headers["Authorization"] = f"Bearer {token}"`。
+- **拆除約束**：`state.rd_session` 帶著某個 token 的 `Authorization` 標頭與 keep-alive 連線；凡該 token 不再是現行憑證（清除、換 token、re-handshake 換 token、shutdown、stdin EOF），一律經 `_close_rd_session` 先移除標頭再 `close()` 並設為 `None`，不得只把 `state.rd_token` 改掉。相同 token 則保留連線池（`test_handshake_closes_pooled_session_only_when_token_changes`）。測試用的 token 也要在 release-scan 白名單內（如 `LEAKABLE`、`tok-xyz`）。
 - **保序約束**：`_collect_links` 並行下載時，必須使用 `executor.map` 保持原始順序，嚴禁使用無序的 `as_completed`。
 - **預設序向約束**：前端批次送出 `sendBatch` 必須將 `concurrency` 預設限制為 `1`，避免在 UI 整合測試環境中因共享 mock 閉包發生未處理之懸掛 Promise。
 - **測試夾具安全約束**：測試檔案中凡涉及 `Bearer` 標頭之模擬 token，必須採用 `scripts/release-scan-allowlist.txt` 既有登記之安全白名單標籤（如 `tok-xyz`），禁止發明新格式觸發發布門禁攔截。

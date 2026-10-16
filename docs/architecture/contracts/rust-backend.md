@@ -4,7 +4,7 @@ Reference document for the Tauri 2.x Rust backend powering JavDBMagnet. Each fun
 
 All file:line references are absolute to the workspace root.
 
-Last refreshed against HEAD `9e49603` on 2026-10-16.
+Last refreshed against HEAD `7c877a8` on 2026-10-16.
 
 ---
 
@@ -31,11 +31,11 @@ Last refreshed against HEAD `9e49603` on 2026-10-16.
 
 - [main.rs:4-6](app/src-tauri/src/main.rs:4) `fn main()` → `javdbmagnet_lib::run()`.
 - [build.rs:3-29](app/src-tauri/build.rs:3) build-script `fn main()` → `tauri_build::build()` plus the MSVC test-manifest step (Cargo build time, not runtime).
-- [lib.rs:358-429](app/src-tauri/src/lib.rs:358) `pub fn run()` builds the Tauri app, registers plugins, wires `setup`, declares `invoke_handler`.
+- [lib.rs:385-456](app/src-tauri/src/lib.rs:385) `pub fn run()` builds the Tauri app, registers plugins, wires `setup`, declares `invoke_handler`.
 
 ### Tauri command surface (JS-callable API)
 
-Registered via `tauri::generate_handler!` at [lib.rs:394-426](app/src-tauri/src/lib.rs:394) — 31 commands. In source order:
+Registered via `tauri::generate_handler!` at [lib.rs:421-453](app/src-tauri/src/lib.rs:421) — 31 commands. In source order:
 
 | Command | Module | Async | File:Line | Frontend caller |
 |---|---|---|---|---|
@@ -50,30 +50,30 @@ Registered via `tauri::generate_handler!` at [lib.rs:394-426](app/src-tauri/src/
 | `forget_magnets` | commands | async | [commands.rs:141](app/src-tauri/src/commands.rs:141) | [App.svelte:377](app/src/App.svelte:377), [App.svelte:737](app/src/App.svelte:737) |
 | `register_magnets` | commands | async | [commands.rs:113](app/src-tauri/src/commands.rs:113) | [App.svelte:451](app/src/App.svelte:451) |
 | `rd_has_token` | commands | async | [commands.rs:307](app/src-tauri/src/commands.rs:307) | [App.svelte:249](app/src/App.svelte:249) |
-| `rd_test_token` | commands | async | [commands.rs:315](app/src-tauri/src/commands.rs:315) | [App.svelte:876](app/src/App.svelte:876) |
-| `rd_save_token` | commands | async | [commands.rs:338](app/src-tauri/src/commands.rs:338) | [App.svelte:895](app/src/App.svelte:895) |
-| `rd_clear_token` | commands | async | [commands.rs:359](app/src-tauri/src/commands.rs:359) | [App.svelte:916](app/src/App.svelte:916) |
-| `rd_check_user` | commands | async | [commands.rs:372](app/src-tauri/src/commands.rs:372) | [App.svelte:903](app/src/App.svelte:903), [App.svelte:935](app/src/App.svelte:935) |
-| `rd_send_magnet` | commands | async | [commands.rs:425](app/src-tauri/src/commands.rs:425) | [rdSender.ts:137](app/src/lib/rdSender.ts:137) |
-| `rd_check_pending` | commands | async | [commands.rs:520](app/src-tauri/src/commands.rs:520) | [rdSender.ts:143](app/src/lib/rdSender.ts:143) |
-| `pending_list` | commands | async | [commands.rs:569](app/src-tauri/src/commands.rs:569) | [App.svelte:224](app/src/App.svelte:224), [App.svelte:1192](app/src/App.svelte:1192) |
-| `pending_remove` | commands | async | [commands.rs:576](app/src-tauri/src/commands.rs:576) | [App.svelte:1622](app/src/App.svelte:1622) |
-| `pending_clear` | commands | async | [commands.rs:584](app/src-tauri/src/commands.rs:584) | [App.svelte:1637](app/src/App.svelte:1637) |
-| `get_legacy_default_dir` | commands | sync | [commands.rs:602](app/src-tauri/src/commands.rs:602) | [App.svelte:259](app/src/App.svelte:259) |
-| `preview_legacy_import` | commands | sync | [commands.rs:607](app/src-tauri/src/commands.rs:607) | [App.svelte:1315](app/src/App.svelte:1315) |
-| `apply_legacy_import` | commands | async | [commands.rs:616](app/src-tauri/src/commands.rs:616) | [App.svelte:1591](app/src/App.svelte:1591) |
-| `get_cookies_status` | commands | sync | [commands.rs:976](app/src-tauri/src/commands.rs:976) | [App.svelte:1344](app/src/App.svelte:1344), [App.svelte:1406](app/src/App.svelte:1406) |
-| `migrate_cookies_now` | commands | async | [commands.rs:1000](app/src-tauri/src/commands.rs:1000) | [App.svelte:1336](app/src/App.svelte:1336) |
-| `save_cookies` | commands | async | [commands.rs:1058](app/src-tauri/src/commands.rs:1058) | [App.svelte:1434](app/src/App.svelte:1434) |
-| `clear_cookies` | commands | async | [commands.rs:1129](app/src-tauri/src/commands.rs:1129) | [App.svelte:1385](app/src/App.svelte:1385) |
-| `create_cookies_template` | commands | sync | [commands.rs:1174](app/src-tauri/src/commands.rs:1174) | [App.svelte:1484](app/src/App.svelte:1484) |
-| `open_data_dir` | commands | sync | [commands.rs:1202](app/src-tauri/src/commands.rs:1202) | [App.svelte:1461](app/src/App.svelte:1461) |
-| `open_logs_dir` | commands | sync | [commands.rs:1207](app/src-tauri/src/commands.rs:1207) | [App.svelte:1470](app/src/App.svelte:1470) |
-| `update_sidecar_settings` | commands | async | [commands.rs:1185](app/src-tauri/src/commands.rs:1185) | [App.svelte:1553](app/src/App.svelte:1553) |
+| `rd_test_token` | commands | async | [commands.rs:329](app/src-tauri/src/commands.rs:329) | [App.svelte:876](app/src/App.svelte:876) |
+| `rd_save_token` | commands | async | [commands.rs:356](app/src-tauri/src/commands.rs:356) | [App.svelte:895](app/src/App.svelte:895) |
+| `rd_clear_token` | commands | async | [commands.rs:377](app/src-tauri/src/commands.rs:377) | [App.svelte:916](app/src/App.svelte:916) |
+| `rd_check_user` | commands | async | [commands.rs:390](app/src-tauri/src/commands.rs:390) | [App.svelte:903](app/src/App.svelte:903), [App.svelte:935](app/src/App.svelte:935) |
+| `rd_send_magnet` | commands | async | [commands.rs:443](app/src-tauri/src/commands.rs:443) | [rdSender.ts:137](app/src/lib/rdSender.ts:137) |
+| `rd_check_pending` | commands | async | [commands.rs:538](app/src-tauri/src/commands.rs:538) | [rdSender.ts:143](app/src/lib/rdSender.ts:143) |
+| `pending_list` | commands | async | [commands.rs:587](app/src-tauri/src/commands.rs:587) | [App.svelte:224](app/src/App.svelte:224), [App.svelte:1192](app/src/App.svelte:1192) |
+| `pending_remove` | commands | async | [commands.rs:594](app/src-tauri/src/commands.rs:594) | [App.svelte:1625](app/src/App.svelte:1625) |
+| `pending_clear` | commands | async | [commands.rs:602](app/src-tauri/src/commands.rs:602) | [App.svelte:1640](app/src/App.svelte:1640) |
+| `get_legacy_default_dir` | commands | sync | [commands.rs:620](app/src-tauri/src/commands.rs:620) | [App.svelte:259](app/src/App.svelte:259) |
+| `preview_legacy_import` | commands | sync | [commands.rs:625](app/src-tauri/src/commands.rs:625) | [App.svelte:1315](app/src/App.svelte:1315) |
+| `apply_legacy_import` | commands | async | [commands.rs:634](app/src-tauri/src/commands.rs:634) | [App.svelte:1591](app/src/App.svelte:1591) |
+| `get_cookies_status` | commands | sync | [commands.rs:1050](app/src-tauri/src/commands.rs:1050) | [App.svelte:1344](app/src/App.svelte:1344), [App.svelte:1406](app/src/App.svelte:1406) |
+| `migrate_cookies_now` | commands | async | [commands.rs:1074](app/src-tauri/src/commands.rs:1074) | [App.svelte:1336](app/src/App.svelte:1336) |
+| `save_cookies` | commands | async | [commands.rs:1132](app/src-tauri/src/commands.rs:1132) | [App.svelte:1434](app/src/App.svelte:1434) |
+| `clear_cookies` | commands | async | [commands.rs:1203](app/src-tauri/src/commands.rs:1203) | [App.svelte:1385](app/src/App.svelte:1385) |
+| `create_cookies_template` | commands | sync | [commands.rs:1248](app/src-tauri/src/commands.rs:1248) | [App.svelte:1484](app/src/App.svelte:1484) |
+| `open_data_dir` | commands | sync | [commands.rs:1276](app/src-tauri/src/commands.rs:1276) | [App.svelte:1461](app/src/App.svelte:1461) |
+| `open_logs_dir` | commands | sync | [commands.rs:1281](app/src-tauri/src/commands.rs:1281) | [App.svelte:1470](app/src/App.svelte:1470) |
+| `update_sidecar_settings` | commands | async | [commands.rs:1259](app/src-tauri/src/commands.rs:1259) | [App.svelte:1553](app/src/App.svelte:1553) |
 
 ### Shared `tauri::State`
 
-Two values are `.manage()`d at setup time ([lib.rs:375](app/src-tauri/src/lib.rs:375), [lib.rs:390](app/src-tauri/src/lib.rs:390)):
+Two values are `.manage()`d at setup time ([lib.rs:402](app/src-tauri/src/lib.rs:402), [lib.rs:417](app/src-tauri/src/lib.rs:417)):
 
 | Type | Owner | Lifetime |
 |---|---|---|
@@ -94,14 +94,14 @@ Plus the `tauri-plugin-store` Store (file-backed, opened on demand via `app.stor
 - `APP_FOLDER = "JavDBMagnet"` — [path_manager.rs:14](app/src-tauri/src/path_manager.rs:14).
 - `PROTOCOL_VERSION = 1` — [sidecar_manager.rs:34](app/src-tauri/src/sidecar_manager.rs:34).
 - Sidecar request budgets — `DEFAULT_REQUEST_TIMEOUT_SECS = 60` ([sidecar_manager.rs:37](app/src-tauri/src/sidecar_manager.rs:37)), `RD_SEND_TIMEOUT_SLACK_SECS = 90` ([sidecar_manager.rs:42](app/src-tauri/src/sidecar_manager.rs:42)), `MAX_RD_CACHE_WAIT_SECS = 300` ([sidecar_manager.rs:47](app/src-tauri/src/sidecar_manager.rs:47)), `MIN_RD_CACHE_WAIT_SECS = 5` ([sidecar_manager.rs:53](app/src-tauri/src/sidecar_manager.rs:53)), `DEFAULT_RD_CACHE_WAIT_SECS = 15` ([sidecar_manager.rs:57](app/src-tauri/src/sidecar_manager.rs:57)).
-- `LOG_DIR_ENV = "JAVDB_LOG_DIR"` — [sidecar_manager.rs:134](app/src-tauri/src/sidecar_manager.rs:134).
-- `COOKIES_FILE_NAME = "cookies.txt"` — [commands.rs:897](app/src-tauri/src/commands.rs:897). Also redefined as `pub const LEGACY_COOKIES_FILE` in [legacy_import.rs:30](app/src-tauri/src/legacy_import.rs:30), and hardcoded as a literal in `load_cookies` ([lib.rs:84](app/src-tauri/src/lib.rs:84)).
-- `CLEARED_SIDECAR_STALE = "cookies_cleared_sidecar_stale"` — [commands.rs:1143](app/src-tauri/src/commands.rs:1143). Matched by prefix in the frontend's `clearCookies` ([App.svelte:1396](app/src/App.svelte:1396)).
+- `LOG_DIR_ENV = "JAVDB_LOG_DIR"` — [sidecar_manager.rs:152](app/src-tauri/src/sidecar_manager.rs:152).
+- `COOKIES_FILE_NAME = "cookies.txt"` — [commands.rs:971](app/src-tauri/src/commands.rs:971). Also redefined as `pub const LEGACY_COOKIES_FILE` in [legacy_import.rs:30](app/src-tauri/src/legacy_import.rs:30), and hardcoded as a literal in `load_cookies` ([lib.rs:85](app/src-tauri/src/lib.rs:85)).
+- `CLEARED_SIDECAR_STALE = "cookies_cleared_sidecar_stale"` — [commands.rs:1217](app/src-tauri/src/commands.rs:1217). Matched by prefix in the frontend's `clearCookies` ([App.svelte:1396](app/src/App.svelte:1396)).
 - RD token keyring entry: `SERVICE = "JavDBMagnet"`, `ACCOUNT = "RD_API_TOKEN"` — [secret_store.rs:17-18](app/src-tauri/src/secret_store.rs:17). `RD_TOKEN_MAX_LEN = 255` ([secret_store.rs:29](app/src-tauri/src/secret_store.rs:29)), `RD_TOKEN_FORMAT_ERR = "rd_token_format_invalid"` ([secret_store.rs:52](app/src-tauri/src/secret_store.rs:52)).
 - Cookie keyring entry: `SERVICE = "JavDBMagnet"`, `ACCOUNT = "JAVDB_COOKIES"` — [cookie_store.rs:25-26](app/src-tauri/src/cookie_store.rs:25).
 - `FILE_NAME = "pending_torrents.json"` — [pending.rs:19](app/src-tauri/src/pending.rs:19). Also redefined as `LEGACY_PENDING_FILE` in [legacy_import.rs:31](app/src-tauri/src/legacy_import.rs:31). `MAX_PENDING_FILE_BYTES = 4 MiB` — [pending.rs:25](app/src-tauri/src/pending.rs:25).
 - `LEGACY_ENV_FILE = ".env"` — [legacy_import.rs:29](app/src-tauri/src/legacy_import.rs:29).
-- `COOKIES_TEMPLATE` — large UTF-8 (no BOM) instruction blob, [commands.rs:1148](app/src-tauri/src/commands.rs:1148).
+- `COOKIES_TEMPLATE` — large UTF-8 (no BOM) instruction blob, [commands.rs:1222](app/src-tauri/src/commands.rs:1222).
 
 ---
 
@@ -117,10 +117,10 @@ Plus the `tauri-plugin-store` Store (file-backed, opened on demand via `app.stor
 
 ### `lib::run()` flow
 
-[lib.rs:358-429](app/src-tauri/src/lib.rs:358). Steps:
+[lib.rs:385-456](app/src-tauri/src/lib.rs:385). Steps:
 
 1. `tauri::Builder::default()` —
-2. `.plugin(tauri_plugin_store::Builder::new().build())` — Store plugin ([lib.rs:360](app/src-tauri/src/lib.rs:360)).
+2. `.plugin(tauri_plugin_store::Builder::new().build())` — Store plugin ([lib.rs:387](app/src-tauri/src/lib.rs:387)).
 3. `.plugin(tauri_plugin_shell::init())` — Shell plugin (used for sidecar spawn + the frontend's scoped external open).
 4. `.plugin(tauri_plugin_clipboard_manager::init())` — clipboard (Rust-only access; never exposed to frontend directly).
 5. `.plugin(tauri_plugin_dialog::init())` — registered, but no `dialog:*` permission is granted in `capabilities/default.json` and the frontend does not import `@tauri-apps/plugin-dialog`.
@@ -128,11 +128,11 @@ Plus the `tauri-plugin-store` Store (file-backed, opened on demand via `app.stor
 7. `.invoke_handler(tauri::generate_handler![...])` — registers the 31-command surface.
 8. `.run(tauri::generate_context!())` — main loop. Calls `.expect("error while running tauri application")` on failure.
 
-### Setup hook ([lib.rs:364-393](app/src-tauri/src/lib.rs:364))
+### Setup hook ([lib.rs:391-420](app/src-tauri/src/lib.rs:391))
 
 1. `PathManager::new(app.handle())` → resolves data + log paths from env vars (Windows) or `app_data_dir()` (other OS).
 2. `path_manager.ensure_dirs()` → `create_dir_all` for both.
-3. `load_handshake_inputs(&path_manager)` → returns `(cookies: String, rd_token: Option<String>, settings_value: Value)`. Cookies come from `load_cookies` (migrates a real `cookies.txt` into the keyring and deletes the file, else reads the keyring); reads settings.json; then either reads the RD token from the keyring or migrates it from legacy plaintext.
+3. `load_handshake_inputs(&path_manager)` → returns `(cookies: String, rd_token: Option<String>, settings_value: Value)`. Cookies come from `load_cookies` (migrates a real `cookies.txt` into the keyring and deletes the file, else reads the keyring); reads settings.json; then either reads the RD token from the keyring or migrates it from legacy plaintext; finally blanks `rd.api_token` in the settings value handed to the sidecar.
 4. Build `paths: Value` JSON with `data_dir` + `log_dir`.
 5. `app.manage(path_manager)` — install PathManager into state.
 6. `tauri::async_runtime::block_on(SidecarManager::spawn_and_handshake(...))` — **synchronous-from-setup-thread** call that spawns the sidecar, performs `hello` + `handshake` over stdin/stdout. Failure here makes the window not open.
@@ -163,7 +163,7 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
 - Authorization: none.
 
 **Calls**:
-- `javdbmagnet_lib::run()` → [lib.rs:358](app/src-tauri/src/lib.rs:358).
+- `javdbmagnet_lib::run()` → [lib.rs:385](app/src-tauri/src/lib.rs:385).
 
 **Called by**: OS process loader (no Rust callers).
 
@@ -224,25 +224,26 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
 - Returns: tuple `(cookies, rd_token, settings_value)`:
   - `cookies`: from `load_cookies` — the extracted cookie pairs of a freshly migrated `cookies.txt`, else the keyring value, else empty string.
   - `rd_token`: `Some(token)` if a non-empty token was found in the OS credential store, else the result of `migrate_legacy_token` over `settings.rd.api_token`. `None` if neither source had a usable value (including a keyring read error with nothing to migrate).
-  - `settings_value`: the `"settings"` object out of `<data_dir>/settings.json`. Defaults to empty JSON object on any read/parse failure.
+  - `settings_value`: the `"settings"` object out of `<data_dir>/settings.json`. Defaults to empty JSON object on any read/parse failure. `rd.api_token` is blanked (`commands::blank_rd_api_token`, [lib.rs:64](app/src-tauri/src/lib.rs:64)) after migration has read it, so the handshake never carries the legacy plaintext token into sidecar memory — even when a malformed legacy value is deliberately left on disk.
 - Side effects: file I/O on `cookies.txt` and `settings.json`; keyring reads. May migrate `cookies.txt` into the keyring (deleting the file) and may invoke `migrate_legacy_token`, which writes the keyring + rewrites the JSON wrapper.
 - Errors: no error type; all errors are swallowed into defaults. `load_cookies` / `migrate_cookies_from_file` / `migrate_legacy_token` write diagnostics to stderr.
 - Async: no.
-- Authorization: requires `path_manager` ([lib.rs:365](app/src-tauri/src/lib.rs:365)) but no other invariants.
+- Authorization: requires `path_manager` ([lib.rs:392](app/src-tauri/src/lib.rs:392)) but no other invariants.
 
 **Calls**:
-- `load_cookies(path_manager)` → [lib.rs:83](app/src-tauri/src/lib.rs:83).
+- `load_cookies(path_manager)` → [lib.rs:84](app/src-tauri/src/lib.rs:84).
 - `std::fs::read_to_string(settings_path)`.
 - `serde_json::from_str::<Value>` — settings parse.
 - `secret_store::get_rd_token()` → [secret_store.rs:74](app/src-tauri/src/secret_store.rs:74).
-- `migrate_legacy_token(...)` → [lib.rs:176](app/src-tauri/src/lib.rs:176).
+- `migrate_legacy_token(...)` → [lib.rs:177](app/src-tauri/src/lib.rs:177).
+- `commands::blank_rd_api_token(&mut settings_value)` → [commands.rs:878](app/src-tauri/src/commands.rs:878).
 
 **Called by**:
-- `run()` setup closure ([lib.rs:368](app/src-tauri/src/lib.rs:368)).
+- `run()` setup closure ([lib.rs:395](app/src-tauri/src/lib.rs:395)).
 
 ---
 
-### `fn load_cookies(path_manager: &PathManager) -> String`  *(lib.rs:83)*
+### `fn load_cookies(path_manager: &PathManager) -> String`  *(lib.rs:84)*
 
 **Purpose**: Resolve cookies for the sidecar handshake. Precedence: (1) `cookies.txt` with a real cookie pair → migrate to keyring, delete file, use it; (2) else the credential store; (3) else empty (sidecar surfaces `cloudflare_block` on first fetch).
 
@@ -254,14 +255,14 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
 - Async: no.
 
 **Calls**:
-- `migrate_cookies_from_file(&cookies_path)` → [lib.rs:111](app/src-tauri/src/lib.rs:111).
+- `migrate_cookies_from_file(&cookies_path)` → [lib.rs:112](app/src-tauri/src/lib.rs:112).
 - `cookie_store::get_cookies()` → [cookie_store.rs:68](app/src-tauri/src/cookie_store.rs:68).
 
 **Called by**: `load_handshake_inputs` ([lib.rs:50](app/src-tauri/src/lib.rs:50)).
 
 ---
 
-### `pub(crate) fn migrate_cookies_from_file(cookies_path: &Path) -> Option<String>`  *(lib.rs:111)*
+### `pub(crate) fn migrate_cookies_from_file(cookies_path: &Path) -> Option<String>`  *(lib.rs:112)*
 
 **Purpose**: One-shot file→keyring→delete migration for `cookies.txt`. Shared by startup and the on-demand `migrate_cookies_now` command.
 
@@ -284,13 +285,13 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
 - `cookie_store::set_cookies` → [cookie_store.rs:57](app/src-tauri/src/cookie_store.rs:57).
 
 **Called by**:
-- `load_cookies` ([lib.rs:86](app/src-tauri/src/lib.rs:86)).
-- `commands::migrate_cookies_now` ([commands.rs:1005](app/src-tauri/src/commands.rs:1005)).
-- Tests at [lib.rs:314](app/src-tauri/src/lib.rs:314), [lib.rs:335](app/src-tauri/src/lib.rs:335), [lib.rs:349](app/src-tauri/src/lib.rs:349), [commands.rs:1600](app/src-tauri/src/commands.rs:1600), [commands.rs:1651](app/src-tauri/src/commands.rs:1651), [commands.rs:1686](app/src-tauri/src/commands.rs:1686), [commands.rs:1933](app/src-tauri/src/commands.rs:1933).
+- `load_cookies` ([lib.rs:87](app/src-tauri/src/lib.rs:87)).
+- `commands::migrate_cookies_now` ([commands.rs:1079](app/src-tauri/src/commands.rs:1079)).
+- Tests at [lib.rs:315](app/src-tauri/src/lib.rs:315), [lib.rs:336](app/src-tauri/src/lib.rs:336), [lib.rs:350](app/src-tauri/src/lib.rs:350), [commands.rs:1763](app/src-tauri/src/commands.rs:1763), [commands.rs:1814](app/src-tauri/src/commands.rs:1814), [commands.rs:1849](app/src-tauri/src/commands.rs:1849), [commands.rs:2096](app/src-tauri/src/commands.rs:2096).
 
 ---
 
-### `fn migrate_legacy_token(path_manager: &PathManager, settings_value: &Value) -> Option<String>`  *(lib.rs:176)*
+### `fn migrate_legacy_token(path_manager: &PathManager, settings_value: &Value) -> Option<String>`  *(lib.rs:177)*
 
 **Purpose**: One-shot M4→M5 migration. Pulls `settings.rd.api_token` (legacy plaintext) into the credential store, then scrubs the JSON file.
 
@@ -300,10 +301,10 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
   - `settings_value` — the `"settings"` JSON value as read from the store wrapper.
 - Returns: `Some(token)` if a non-empty token that passes `secret_store::is_valid_rd_token` was found (caller hands it to the sidecar so the first handshake still works). `None` if there was nothing to migrate **or** the legacy value is malformed.
 - Side effects:
-  - Malformed value (fails `is_valid_rd_token`): prints to stderr ([lib.rs:185](app/src-tauri/src/lib.rs:185)) and touches nothing — the plaintext field stays so the user can see/fix it, and it never reaches the keyring or the handshake (F-04).
+  - Malformed value (fails `is_valid_rd_token`): prints to stderr ([lib.rs:186](app/src-tauri/src/lib.rs:186)) and touches nothing — the plaintext field stays so the user can see/fix it, and it never reaches the keyring or the handshake (F-04).
   - Writes the keyring (`secret_store::set_rd_token`).
   - Rewrites `<data_dir>/settings.json` with the `rd.api_token` field blanked. Best-effort: any read/parse/write failure leaves the file alone.
-  - Prints to **stderr** (not the app log) on keyring write failure ([lib.rs:194](app/src-tauri/src/lib.rs:194)).
+  - Prints to **stderr** (not the app log) on keyring write failure ([lib.rs:195](app/src-tauri/src/lib.rs:195)).
 - Errors: only stderr; never returns an error variant. If keyring write fails, returns `Some(token)` anyway (plaintext left in place) so the in-memory copy is still usable for this run.
 - Async: no.
 - Authorization: none beyond having `path_manager`.
@@ -316,11 +317,11 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
 
 **Called by**:
 - `load_handshake_inputs` ([lib.rs:62](app/src-tauri/src/lib.rs:62)).
-- Tests at [lib.rs:278](app/src-tauri/src/lib.rs:278), [lib.rs:304](app/src-tauri/src/lib.rs:304).
+- Tests at [lib.rs:279](app/src-tauri/src/lib.rs:279), [lib.rs:305](app/src-tauri/src/lib.rs:305).
 
 ---
 
-### Tests — [lib.rs:222-355](app/src-tauri/src/lib.rs:222)
+### Tests — [lib.rs:223-382](app/src-tauri/src/lib.rs:223)
 
 - `temp_data_dir()` — builds a throwaway `PathManager`; `write_wrapper()` — writes a settings wrapper with a given `rd.api_token`.
 - `migrate_legacy_token_skips_invalid_value_and_keeps_settings_intact`.
@@ -328,10 +329,11 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
 - `migrate_cookies_no_file_returns_none`.
 - `migrate_cookies_template_only_file_is_not_migrated`.
 - `migrate_cookies_refuses_oversized_file`.
+- `load_handshake_inputs_never_hands_rd_api_token_to_sidecar` — drives `load_handshake_inputs` itself with a malformed legacy token on disk: the returned settings carry `rd.api_token = ""` while the on-disk value stays. The token is malformed on purpose so `migrate_legacy_token` never writes the keyring (the test only reads the credential store).
 
 ---
 
-### `pub fn run()`  *(lib.rs:358)*
+### `pub fn run()`  *(lib.rs:385)*
 
 **Purpose**: Build and run the Tauri application.
 
@@ -339,7 +341,7 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
 - Params: none.
 - Returns: never returns normally; `.expect(...)` panics on Tauri runtime error.
 - Side effects: spawns the WebView, registers four plugins (store, shell, clipboard-manager, dialog), spawns the sidecar process via `block_on`, manages two pieces of state, registers 31 commands.
-- Errors: the setup closure returns `Result<(), Box<dyn Error>>`. Errors there cause `Builder::run` to fail and the `.expect` to panic ([lib.rs:428](app/src-tauri/src/lib.rs:428)).
+- Errors: the setup closure returns `Result<(), Box<dyn Error>>`. Errors there cause `Builder::run` to fail and the `.expect` to panic ([lib.rs:455](app/src-tauri/src/lib.rs:455)).
 - Async: no (uses `block_on` to drive sidecar handshake during synchronous setup).
 - Authorization: this IS the bootstrap.
 
@@ -349,13 +351,13 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
 - `path_manager.ensure_dirs()` → [path_manager.rs:45](app/src-tauri/src/path_manager.rs:45).
 - `load_handshake_inputs(&path_manager)` → [lib.rs:49](app/src-tauri/src/lib.rs:49).
 - `app.manage(path_manager)` / `app.manage(manager)`.
-- `tauri::async_runtime::block_on(SidecarManager::spawn_and_handshake(...))` → [sidecar_manager.rs:187](app/src-tauri/src/sidecar_manager.rs:187).
+- `tauri::async_runtime::block_on(SidecarManager::spawn_and_handshake(...))` → [sidecar_manager.rs:205](app/src-tauri/src/sidecar_manager.rs:205).
 - `tauri::generate_handler![...]` — macro registers the command vec.
 - `tauri::generate_context!()` — macro for build-time embedding.
 
 **Called by**:
 - `main()` ([main.rs:5](app/src-tauri/src/main.rs:5)).
-- Mobile entry point (`tauri::mobile_entry_point`) for mobile builds ([lib.rs:357](app/src-tauri/src/lib.rs:357)).
+- Mobile entry point (`tauri::mobile_entry_point`) for mobile builds ([lib.rs:384](app/src-tauri/src/lib.rs:384)).
 
 ---
 
@@ -374,7 +376,7 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
 - Authorization: requires sidecar managed state (i.e. setup completed).
 
 **Calls**:
-- `sidecar.request("ping", Value::Null)` → [sidecar_manager.rs:253](app/src-tauri/src/sidecar_manager.rs:253).
+- `sidecar.request("ping", Value::Null)` → [sidecar_manager.rs:271](app/src-tauri/src/sidecar_manager.rs:271).
 
 **Called by**: frontend (Tauri invoke).
 
@@ -423,7 +425,7 @@ See the table in §1. Every `#[tauri::command]` function is one entry point.
 - Authorization: requires sidecar.
 
 **Calls**:
-- `sidecar.request("resolve_magnet", ...)` → [sidecar_manager.rs:253](app/src-tauri/src/sidecar_manager.rs:253).
+- `sidecar.request("resolve_magnet", ...)` → [sidecar_manager.rs:271](app/src-tauri/src/sidecar_manager.rs:271).
 - `ensure_ok(&resp)` → [commands.rs:274](app/src-tauri/src/commands.rs:274).
 - `app.clipboard().write_text(magnet)` → tauri-plugin-clipboard-manager.
 
@@ -466,7 +468,7 @@ DTO.
 - Authorization: requires sidecar.
 
 **Calls**:
-- `sidecar.request("register_magnets", ...)` → [sidecar_manager.rs:253](app/src-tauri/src/sidecar_manager.rs:253).
+- `sidecar.request("register_magnets", ...)` → [sidecar_manager.rs:271](app/src-tauri/src/sidecar_manager.rs:271).
 - `ensure_ok(&resp)` → [commands.rs:274](app/src-tauri/src/commands.rs:274).
 - `serde_json::from_value` twice (`Vec<RegisteredMagnet>`, `Vec<String>`).
 
@@ -485,7 +487,7 @@ DTO.
 - Async: yes.
 - Authorization: requires sidecar.
 
-**Calls**: `sidecar.request("forget_magnets", payload)` → [sidecar_manager.rs:253](app/src-tauri/src/sidecar_manager.rs:253); `ensure_ok`.
+**Calls**: `sidecar.request("forget_magnets", payload)` → [sidecar_manager.rs:271](app/src-tauri/src/sidecar_manager.rs:271); `ensure_ok`.
 
 **Called by**: frontend (clearing the result tree / unchecking all rows).
 
@@ -517,7 +519,7 @@ DTO.
 
 **Calls**: `ensure_ok`.
 
-**Called by**: `copy_magnets_bulk` ([commands.rs:167](app/src-tauri/src/commands.rs:167)); tests at [commands.rs:1272](app/src-tauri/src/commands.rs:1272), [commands.rs:1286](app/src-tauri/src/commands.rs:1286).
+**Called by**: `copy_magnets_bulk` ([commands.rs:167](app/src-tauri/src/commands.rs:167)); tests at [commands.rs:1435](app/src-tauri/src/commands.rs:1435), [commands.rs:1449](app/src-tauri/src/commands.rs:1449).
 
 ---
 
@@ -559,7 +561,8 @@ DTO.
 
 **Called by**:
 - `ensure_ok` ([commands.rs:278](app/src-tauri/src/commands.rs:278)).
-- `import_rd_token` ([commands.rs:751](app/src-tauri/src/commands.rs:751)).
+- `settings_push_warning` ([commands.rs:762](app/src-tauri/src/commands.rs:762)).
+- `import_rd_token` ([commands.rs:824](app/src-tauri/src/commands.rs:824)).
 
 ---
 
@@ -572,14 +575,14 @@ DTO.
 - `register_magnets` ([commands.rs:120](app/src-tauri/src/commands.rs:120))
 - `forget_magnets` ([commands.rs:150](app/src-tauri/src/commands.rs:150))
 - `resolved_magnets_from_response` ([commands.rs:182](app/src-tauri/src/commands.rs:182))
-- `rd_test_token` ([commands.rs:325](app/src-tauri/src/commands.rs:325))
-- `rd_save_token` ([commands.rs:352](app/src-tauri/src/commands.rs:352))
-- `rd_clear_token` ([commands.rs:364](app/src-tauri/src/commands.rs:364))
-- `rd_check_user` ([commands.rs:374](app/src-tauri/src/commands.rs:374))
-- `rd_send_magnet` ([commands.rs:445](app/src-tauri/src/commands.rs:445))
-- `rd_check_pending` ([commands.rs:531](app/src-tauri/src/commands.rs:531))
-- `push_cookies_to_sidecar` ([commands.rs:1078](app/src-tauri/src/commands.rs:1078))
-- `update_sidecar_settings` ([commands.rs:1194](app/src-tauri/src/commands.rs:1194))
+- `rd_test_token_with` ([commands.rs:343](app/src-tauri/src/commands.rs:343))
+- `rd_save_token` ([commands.rs:370](app/src-tauri/src/commands.rs:370))
+- `rd_clear_token` ([commands.rs:382](app/src-tauri/src/commands.rs:382))
+- `rd_check_user` ([commands.rs:392](app/src-tauri/src/commands.rs:392))
+- `rd_send_magnet` ([commands.rs:463](app/src-tauri/src/commands.rs:463))
+- `rd_check_pending` ([commands.rs:549](app/src-tauri/src/commands.rs:549))
+- `push_cookies_to_sidecar` ([commands.rs:1152](app/src-tauri/src/commands.rs:1152))
+- `update_sidecar_settings` ([commands.rs:1268](app/src-tauri/src/commands.rs:1268))
 
 ---
 
@@ -616,31 +619,61 @@ DTO.
 
 ---
 
-### `pub async fn rd_test_token(sidecar: State<'_, SidecarManager>, token: String) -> Result<RdUserInfo, String>`  *(commands.rs:315)*
+### `fn check_candidate_token(token: &str) -> Result<(), String>`  *(commands.rs:316)*
+
+**Purpose**: Gate a "test connection" candidate before it reaches the sidecar. Same format rule as every credential-store write path (F-04): a value that cannot be a token would otherwise go into an HTTP header and come back as an opaque internal error instead of a format message.
+
+**Contract**:
+- Params: borrowed candidate token.
+- Returns: `Ok(())` for a non-empty token passing `secret_store::is_valid_rd_token`.
+- Side effects: none.
+- Errors: `Err("rd_no_token")` for `""`; `Err(RD_TOKEN_FORMAT_ERR)` (`"rd_token_format_invalid"`) for anything else that fails `is_valid_rd_token`.
+- Async: no.
+
+**Calls**: `secret_store::is_valid_rd_token` → [secret_store.rs:43](app/src-tauri/src/secret_store.rs:43).
+
+**Called by**: `rd_test_token_with` ([commands.rs:339](app/src-tauri/src/commands.rs:339)), test `check_candidate_token_rejects_before_the_sidecar_sees_it`.
+
+---
+
+### `pub async fn rd_test_token(sidecar: State<'_, SidecarManager>, token: String) -> Result<RdUserInfo, String>`  *(commands.rs:329)*
 
 **Purpose**: Validate a candidate token by calling RD `/user` via the sidecar, without persisting.
 
 **Contract**:
 - Params:
-  - `token` — candidate. Empty short-circuits to `Err("rd_no_token")`. No `is_valid_rd_token` check here (the sidecar's `rd_user` only requires a string override); the format rule applies at `rd_save_token`.
+  - `token` — candidate. The command only delegates to the private `rd_test_token_with(&SidecarManager, token)` (so tests can drive the body with `SidecarManager::dead_for_tests`). Pre-checked by `check_candidate_token`: empty short-circuits to `Err("rd_no_token")`; anything failing `secret_store::is_valid_rd_token` short-circuits to `Err(RD_TOKEN_FORMAT_ERR)` before the sidecar is called (same F-04 rule as the write paths; the sidecar's `cmd_rd_user` enforces it again).
 - Returns: account info from RD (`resp.user`).
 - Side effects: sidecar RPC; sidecar performs HTTP to real-debrid.com. Token does NOT touch the keyring.
 - Errors:
   - `Err("rd_no_token")` for empty input.
+  - `Err("rd_token_format_invalid")` for a malformed candidate — no RPC is sent.
   - `Err(<code>)` via `ensure_ok` for non-ok response.
   - `Err(<serde error>)` if user shape can't deserialize.
 - Async: yes.
 - Authorization: requires sidecar.
 
 **Calls**:
-- `sidecar.request("rd_user", json!({"token": token}))`.
-- `ensure_ok`, `serde_json::from_value`.
+- `rd_test_token_with(&sidecar, token)` → [commands.rs:338](app/src-tauri/src/commands.rs:338).
 
 **Called by**: frontend (settings dialog).
 
 ---
 
-### `pub async fn rd_save_token(sidecar: State<'_, SidecarManager>, token: String) -> Result<(), String>`  *(commands.rs:338)*
+### `async fn rd_test_token_with(sidecar: &SidecarManager, token: String) -> Result<RdUserInfo, String>`  *(commands.rs:338)*
+
+**Purpose**: Body of `rd_test_token`, taking the manager directly so tests can drive it with `SidecarManager::dead_for_tests`. Contract as `rd_test_token` above.
+
+**Calls**:
+- `check_candidate_token(&token)` → [commands.rs:316](app/src-tauri/src/commands.rs:316).
+- `sidecar.request("rd_user", json!({"token": token}))`.
+- `ensure_ok`, `serde_json::from_value`.
+
+**Called by**: `rd_test_token` ([commands.rs:333](app/src-tauri/src/commands.rs:333)), test `rd_test_token_refuses_malformed_token_before_any_request`.
+
+---
+
+### `pub async fn rd_save_token(sidecar: State<'_, SidecarManager>, token: String) -> Result<(), String>`  *(commands.rs:356)*
 
 **Purpose**: Persist a token to the credential store AND push it to the running sidecar.
 
@@ -667,7 +700,7 @@ DTO.
 
 ---
 
-### `pub async fn rd_clear_token(sidecar: State<'_, SidecarManager>) -> Result<(), String>`  *(commands.rs:359)*
+### `pub async fn rd_clear_token(sidecar: State<'_, SidecarManager>) -> Result<(), String>`  *(commands.rs:377)*
 
 **Purpose**: Delete token from credential store and tell the sidecar to forget it.
 
@@ -688,7 +721,7 @@ DTO.
 
 ---
 
-### `pub async fn rd_check_user(sidecar: State<'_, SidecarManager>) -> Result<RdUserInfo, String>`  *(commands.rs:372)*
+### `pub async fn rd_check_user(sidecar: State<'_, SidecarManager>) -> Result<RdUserInfo, String>`  *(commands.rs:390)*
 
 **Purpose**: Refresh account info using the **sidecar's current** token (no token argument). Separate from `rd_test_token` so the secret never crosses IPC just to refresh.
 
@@ -708,21 +741,21 @@ DTO.
 
 ---
 
-### `pub struct RdSendOptions { strategy, min_size_mb, cache_wait, code, size_label }`  *(commands.rs:381)*
+### `pub struct RdSendOptions { strategy, min_size_mb, cache_wait, code, size_label }`  *(commands.rs:399)*
 
 DTO (`Default`, `Deserialize`). All fields `Option`. `code` and `size_label` are display-only — passed through so a `Pending` outcome can be persisted with the same labels the UI is showing.
 
-### `pub struct RdLink { original, download, filename, filesize, streamable, error }`  *(commands.rs:392)*
+### `pub struct RdLink { original, download, filename, filesize, streamable, error }`  *(commands.rs:410)*
 
 DTO mirroring RD's unrestrict link response. `filesize` / `streamable` default to `0`; `error: Option<String>` defaults to `None` and is omitted when serializing if `None` (per-link unrestrict failure).
 
-### `pub enum RdSendOutcome { Completed{...}, Pending{...} }`  *(commands.rs:406)*
+### `pub enum RdSendOutcome { Completed{...}, Pending{...} }`  *(commands.rs:424)*
 
 `#[serde(tag = "status", rename_all = "snake_case")]` — frontend gets a discriminated union with `status: "completed" | "pending"`.
 
 ---
 
-### `pub async fn rd_send_magnet(sidecar, path_manager, handle_id, options) -> Result<RdSendOutcome, String>`  *(commands.rs:425)*
+### `pub async fn rd_send_magnet(sidecar, path_manager, handle_id, options) -> Result<RdSendOutcome, String>`  *(commands.rs:443)*
 
 **Purpose**: Send a magnet (by handle_id) to RD. Returns either the unrestricted links (cache hit) or a Pending entry that's also persisted to disk.
 
@@ -753,13 +786,13 @@ DTO mirroring RD's unrestrict link response. `filesize` / `streamable` default t
 
 ---
 
-### `pub enum RdCheckOutcome { Completed, Pending, Missing }`  *(commands.rs:499)*
+### `pub enum RdCheckOutcome { Completed, Pending, Missing }`  *(commands.rs:517)*
 
 Three-variant tag union for the retry-poll command (`status: "completed" | "pending" | "missing"`).
 
 ---
 
-### `pub async fn rd_check_pending(sidecar, path_manager, torrent_id, strategy) -> Result<RdCheckOutcome, String>`  *(commands.rs:520)*
+### `pub async fn rd_check_pending(sidecar, path_manager, torrent_id, strategy) -> Result<RdCheckOutcome, String>`  *(commands.rs:538)*
 
 **Purpose**: Re-poll a previously-pending torrent. **Always mutates** pending_torrents.json based on outcome:
 - `completed` → entry removed.
@@ -786,7 +819,7 @@ Three-variant tag union for the retry-poll command (`status: "completed" | "pend
 
 ---
 
-### `pub async fn pending_list(path_manager: State<'_, PathManager>) -> Result<Vec<PendingEntry>, String>`  *(commands.rs:569)*
+### `pub async fn pending_list(path_manager: State<'_, PathManager>) -> Result<Vec<PendingEntry>, String>`  *(commands.rs:587)*
 
 **Purpose**: Return the full pending list.
 
@@ -802,7 +835,7 @@ Three-variant tag union for the retry-poll command (`status: "completed" | "pend
 
 ---
 
-### `pub async fn pending_remove(path_manager, torrent_id) -> Result<Vec<PendingEntry>, String>`  *(commands.rs:576)*
+### `pub async fn pending_remove(path_manager, torrent_id) -> Result<Vec<PendingEntry>, String>`  *(commands.rs:594)*
 
 **Purpose**: Drop one entry; return the new list.
 
@@ -812,7 +845,7 @@ Three-variant tag union for the retry-poll command (`status: "completed" | "pend
 
 ---
 
-### `pub async fn pending_clear(path_manager: State<'_, PathManager>) -> Result<(), String>`  *(commands.rs:584)*
+### `pub async fn pending_clear(path_manager: State<'_, PathManager>) -> Result<(), String>`  *(commands.rs:602)*
 
 **Purpose**: Wipe pending_torrents.json (writes an empty array).
 
@@ -822,7 +855,7 @@ Three-variant tag union for the retry-poll command (`status: "completed" | "pend
 
 ---
 
-### `pub fn get_legacy_default_dir() -> String`  *(commands.rs:602)*
+### `pub fn get_legacy_default_dir() -> String`  *(commands.rs:620)*
 
 **Purpose**: Return `JAVDB_LEGACY_IMPORT_DIR` env var (or empty string) — pure pre-fill helper.
 
@@ -840,7 +873,7 @@ Three-variant tag union for the retry-poll command (`status: "completed" | "pend
 
 ---
 
-### `pub fn preview_legacy_import(source_dir: String) -> Result<LegacyImportPreview, String>`  *(commands.rs:607)*
+### `pub fn preview_legacy_import(source_dir: String) -> Result<LegacyImportPreview, String>`  *(commands.rs:625)*
 
 **Purpose**: Inspect a candidate legacy directory and report what's importable. Pure preview — no mutation.
 
@@ -858,7 +891,7 @@ Three-variant tag union for the retry-poll command (`status: "completed" | "pend
 
 ---
 
-### `pub async fn apply_legacy_import(app, path_manager, sidecar, source_dir) -> Result<LegacyImportReport, String>`  *(commands.rs:616)*
+### `pub async fn apply_legacy_import(app, path_manager, sidecar, source_dir) -> Result<LegacyImportReport, String>`  *(commands.rs:634)*
 
 **Purpose**: The actual M7a-lite import. Side-effect orchestrator over `.env`, `cookies.txt`, and `pending_torrents.json` from `source_dir`, delegating each block to a private helper.
 
@@ -869,46 +902,50 @@ Three-variant tag union for the retry-poll command (`status: "completed" | "pend
 - Side effects:
   - For `.env` (`import_env_block`):
     - RD token → validated by `validate_legacy_rd_token`; a malformed value only adds a warning (keyring and sidecar untouched). Valid → `secret_store::set_rd_token` + sidecar `rd_set_token`.
-    - Non-secret settings → merge into the tauri-plugin-store `settings.json`, blank `rd.api_token` belt-and-suspenders, then round-trip through `Settings` + `clamp_rd_settings` so out-of-range numerics land clamped ([commands.rs:775-788](app/src-tauri/src/commands.rs:775)).
+    - Non-secret settings → merge into the tauri-plugin-store `settings.json`, blank `rd.api_token` belt-and-suspenders, then round-trip through `Settings` + `clamp_rd_settings` so out-of-range numerics land clamped ([commands.rs:848-861](app/src-tauri/src/commands.rs:848)). After a successful save, `push_imported_settings` sends the saved (clamped) settings to the running sidecar (`update_settings`, body from `settings_push_body`, which blanks `rd.api_token` again); a failed push becomes a `report.warnings` entry (`sidecar update_settings: …`) via `settings_push_warning`. Without this push the sidecar's in-memory settings would stay stale until the next restart.
   - For `cookies.txt` (`import_cookies_block`): file copy into `<data_dir>/cookies.txt` (refused if source and destination canonicalize to the same path). Always adds a warning instructing the user to restart for the new cookies to take effect, because the running sidecar already loaded its cookies at handshake time.
   - For `pending_torrents.json` (`import_pending_block`): read source, sanitize via `legacy_import::merge_legacy_pending`, write merged list via `pending::save`.
 - Errors:
   - `Err("source_dir is empty")`, `Err("source_dir is not a directory: <path>")`, `Err("source_dir must not be the app data directory")`.
   - Otherwise: returns `Ok(report)` even on partial failures; failures are appended to `report.warnings`.
-- Async: yes (does sidecar RPC for the token push).
+- Async: yes (sidecar RPCs for the token push and the settings push; the `.env` read runs on `spawn_blocking`).
 - Authorization: requires `path_manager` and `sidecar`.
 
 **Calls**:
-- `validate_legacy_source(&source_dir, &data_dir)` → [commands.rs:644](app/src-tauri/src/commands.rs:644).
+- `validate_legacy_source(&source_dir, &data_dir)` → [commands.rs:662](app/src-tauri/src/commands.rs:662).
 - `legacy_import::preview(&src)` → [legacy_import.rs:347](app/src-tauri/src/legacy_import.rs:347).
-- `import_env_block(...)` → [commands.rs:667](app/src-tauri/src/commands.rs:667).
-- `import_cookies_block(...)` → [commands.rs:814](app/src-tauri/src/commands.rs:814).
-- `import_pending_block(...)` → [commands.rs:853](app/src-tauri/src/commands.rs:853).
+- `import_env_block(...)` → [commands.rs:691](app/src-tauri/src/commands.rs:691).
+- `import_cookies_block(...)` → [commands.rs:888](app/src-tauri/src/commands.rs:888).
+- `import_pending_block(...)` → [commands.rs:927](app/src-tauri/src/commands.rs:927).
 
 **Called by**: frontend (apply button).
 
 #### Private helpers of `apply_legacy_import`
 
-- `fn validate_legacy_source(source_dir: &str, data_dir: &Path) -> Result<PathBuf, String>` *(commands.rs:644)* — trim, `is_dir`, and canonicalized `!= data_dir`.
-- `async fn import_env_block(app, data_dir, sidecar, src, report)` *(commands.rs:667)* — `read_to_string(.env)` (warning `read .env failed: …` on error), `legacy_import::parse_env` ([commands.rs:681](app/src-tauri/src/commands.rs:681)), parse warnings prefixed `.env: `, then `import_rd_token` and/or `import_env_settings_patch`.
-- `pub(crate) fn validate_legacy_rd_token(token: &str) -> Result<(), String>` *(commands.rs:699)* — pure; `Err("ignored legacy RD_API_TOKEN: value does not match the Real-Debrid API token format (expected ≤255 ASCII alphanumeric chars); credential store and sidecar left untouched")` on failure.
-- `async fn import_rd_token(sidecar, src, token, report)` *(commands.rs:720)* — validate → `secret_store::set_rd_token` ([commands.rs:732](app/src-tauri/src/commands.rs:732), warning `credential store: …`) → `sidecar.request("rd_set_token", …)` (warning `sidecar: …` or `sidecar rd_set_token: <code>` via `_err_code`). Sets `rd_token_imported` and pushes `<src>/.env (RD_API_TOKEN)` to `sources` only on full success.
-- `fn import_env_settings_patch(app, data_dir, src, patch, report)` *(commands.rs:757)* — `app.store(data_dir.join(crate::STORE_FILE))`, `store.get("settings")` (fallback `Settings::default()`), `legacy_import::apply_settings_patch` ([commands.rs:775](app/src-tauri/src/commands.rs:775)), `blank_rd_api_token`, `clamp_rd_settings` round-trip, `store.set` + `store.save`. Sets `env_imported`; warnings `settings store: …` / `settings save: …`.
-- `fn blank_rd_api_token(settings: &mut Value)` *(commands.rs:804)* — sets `rd.api_token = ""` if the field exists. Also used by `update_sidecar_settings`.
-- `fn import_cookies_block(data_dir, src, report)` *(commands.rs:814)* — `create_dir_all`, same-path guard, `std::fs::copy`; sets `cookies_imported`.
-- `fn import_pending_block(data_dir, src, report)` *(commands.rs:853)* — `read_to_string`, `pending::load` ([commands.rs:862](app/src-tauri/src/commands.rs:862)), `legacy_import::merge_legacy_pending` ([commands.rs:869](app/src-tauri/src/commands.rs:869)), `pending::save` ([commands.rs:876](app/src-tauri/src/commands.rs:876)); sets `pending_imported` / `pending_skipped`.
+- `fn validate_legacy_source(source_dir: &str, data_dir: &Path) -> Result<PathBuf, String>` *(commands.rs:662)* — trim, `is_dir`, and canonicalized `!= data_dir`.
+- `async fn import_env_block(app, data_dir, sidecar, src, report)` *(commands.rs:691)* — `read_legacy_env(src)` (warning `read .env failed: …` on error), `legacy_import::parse_env` ([commands.rs:705](app/src-tauri/src/commands.rs:705)), parse warnings prefixed `.env: `, then `import_rd_token` and/or `import_env_settings_patch`; when the latter returns `Some(saved_settings)`, `push_imported_settings`. Marked `#[deny(unused_variables)]` ([commands.rs:690](app/src-tauri/src/commands.rs:690)): the body needs an `AppHandle`, so no unit test reaches it — dropping the push call leaves `saved_settings` unused, which this turns into a build error instead of a silently stale sidecar.
+- `async fn read_legacy_env(src: &Path) -> Result<String, String>` *(commands.rs:727)* — reads `<src>/.env` inside `tauri::async_runtime::spawn_blocking` so a slow (user-chosen, possibly network) path does not stall an async worker; join and I/O errors both map to `Err(e.to_string())`.
+- `async fn push_imported_settings(sidecar: &SidecarManager, saved_settings: Value, report)` *(commands.rs:737)* — `sidecar.request("update_settings", settings_push_body(saved_settings))` ([commands.rs:743](app/src-tauri/src/commands.rs:743)); a warning from `settings_push_warning` is appended to `report.warnings`. Never aborts the rest of the import.
+- `fn settings_push_body(settings: Value) -> Value` *(commands.rs:753)* — `blank_rd_api_token` then `{"settings": settings}`. Blanks again (as `update_sidecar_settings` does) so this path cannot ship the token even if the importer's own sweep goes away.
+- `fn settings_push_warning(result: Result<Value, String>) -> Option<String>` *(commands.rs:759)* — `None` for `{"ok": true}`; `Some("sidecar update_settings: <code>")` (via `_err_code`) for a non-ok reply; `Some("sidecar update_settings: <transport error>")` for `Err`.
+- `pub(crate) fn validate_legacy_rd_token(token: &str) -> Result<(), String>` *(commands.rs:772)* — pure; `Err("ignored legacy RD_API_TOKEN: value does not match the Real-Debrid API token format (expected ≤255 ASCII alphanumeric chars); credential store and sidecar left untouched")` on failure.
+- `async fn import_rd_token(sidecar, src, token, report)` *(commands.rs:793)* — validate → `secret_store::set_rd_token` ([commands.rs:805](app/src-tauri/src/commands.rs:805), warning `credential store: …`) → `sidecar.request("rd_set_token", …)` (warning `sidecar: …` or `sidecar rd_set_token: <code>` via `_err_code`). Sets `rd_token_imported` and pushes `<src>/.env (RD_API_TOKEN)` to `sources` only on full success.
+- `fn import_env_settings_patch(app, data_dir, src, patch, report) -> Option<Value>` *(commands.rs:830)* — `app.store(data_dir.join(crate::STORE_FILE))`, `store.get("settings")` (fallback `Settings::default()`), `legacy_import::apply_settings_patch` ([commands.rs:848](app/src-tauri/src/commands.rs:848)), `blank_rd_api_token`, `clamp_rd_settings` round-trip, `store.set` + `store.save`. Sets `env_imported` and returns `Some(saved settings)` on success; returns `None` with warning `settings store: …` / `settings save: …` on failure.
+- `pub(crate) fn blank_rd_api_token(settings: &mut Value)` *(commands.rs:878)* — sets `rd.api_token = ""` if the field exists. Also used by `settings_push_body`, `update_sidecar_settings`, and `lib::load_handshake_inputs` ([lib.rs:64](app/src-tauri/src/lib.rs:64)).
+- `fn import_cookies_block(data_dir, src, report)` *(commands.rs:888)* — `create_dir_all`, same-path guard, `std::fs::copy`; sets `cookies_imported`.
+- `fn import_pending_block(data_dir, src, report)` *(commands.rs:927)* — `read_to_string`, `pending::load` ([commands.rs:936](app/src-tauri/src/commands.rs:936)), `legacy_import::merge_legacy_pending` ([commands.rs:943](app/src-tauri/src/commands.rs:943)), `pending::save` ([commands.rs:950](app/src-tauri/src/commands.rs:950)); sets `pending_imported` / `pending_skipped`.
 
 ---
 
-### `pub struct CookiesStatus { present, path, modified_iso, size_bytes, storage }`  *(commands.rs:900)*
+### `pub struct CookiesStatus { present, path, modified_iso, size_bytes, storage }`  *(commands.rs:974)*
 
 DTO. `modified_iso` is ISO-8601 UTC or `None` (always `None` for keyring storage). `storage` is `"none"` | `"file"` | `"keyring"`.
 
 ---
 
-### `pub(crate) fn cookies_status_with_keyring(data_dir: &Path, in_keyring: bool) -> CookiesStatus`  *(commands.rs:934)*
+### `pub(crate) fn cookies_status_with_keyring(data_dir: &Path, in_keyring: bool) -> CookiesStatus`  *(commands.rs:1008)*
 
-**Purpose**: Pure helper — report cookies status without reading the file body. `in_keyring` is injected so unit tests never touch the real OS keyring. Defended in test [commands.rs:1384](app/src-tauri/src/commands.rs:1384).
+**Purpose**: Pure helper — report cookies status without reading the file body. `in_keyring` is injected so unit tests never touch the real OS keyring. Defended in test [commands.rs:1547](app/src-tauri/src/commands.rs:1547).
 
 **Contract**:
 - Params: borrowed path to the data dir; keyring presence flag.
@@ -920,24 +957,24 @@ DTO. `modified_iso` is ISO-8601 UTC or `None` (always `None` for keyring storage
 **Calls**: `std::fs::metadata`, `meta.modified()`, `chrono::DateTime::<Utc>::from(st).to_rfc3339()`.
 
 **Called by**:
-- `cookies_status_for` ([commands.rs:972](app/src-tauri/src/commands.rs:972)).
-- Tests at [commands.rs:1329](app/src-tauri/src/commands.rs:1329), [commands.rs:1344](app/src-tauri/src/commands.rs:1344), [commands.rs:1360](app/src-tauri/src/commands.rs:1360), [commands.rs:1371](app/src-tauri/src/commands.rs:1371), [commands.rs:1391](app/src-tauri/src/commands.rs:1391).
+- `cookies_status_for` ([commands.rs:1046](app/src-tauri/src/commands.rs:1046)).
+- Tests at [commands.rs:1492](app/src-tauri/src/commands.rs:1492), [commands.rs:1507](app/src-tauri/src/commands.rs:1507), [commands.rs:1523](app/src-tauri/src/commands.rs:1523), [commands.rs:1534](app/src-tauri/src/commands.rs:1534), [commands.rs:1554](app/src-tauri/src/commands.rs:1554).
 
 ---
 
-### `pub(crate) fn cookies_status_for(data_dir: &Path) -> CookiesStatus`  *(commands.rs:964)*
+### `pub(crate) fn cookies_status_for(data_dir: &Path) -> CookiesStatus`  *(commands.rs:1038)*
 
 **Purpose**: Production wrapper — queries the keyring (`cookie_store::get_cookies()` returning a non-empty value; a backend error counts as "not in keyring") and delegates to `cookies_status_with_keyring`.
 
 **Calls**: `cookie_store::get_cookies()` → [cookie_store.rs:68](app/src-tauri/src/cookie_store.rs:68), `cookies_status_with_keyring`.
 
 **Called by**:
-- `get_cookies_status` ([commands.rs:977](app/src-tauri/src/commands.rs:977)), `migrate_cookies_now` ([commands.rs:1008](app/src-tauri/src/commands.rs:1008)), `save_cookies` ([commands.rs:1065](app/src-tauri/src/commands.rs:1065)), `clear_cookies` ([commands.rs:1137](app/src-tauri/src/commands.rs:1137)).
-- `tests_cookies_e2e` tests (e.g. [commands.rs:1706](app/src-tauri/src/commands.rs:1706)).
+- `get_cookies_status` ([commands.rs:1051](app/src-tauri/src/commands.rs:1051)), `migrate_cookies_now` ([commands.rs:1082](app/src-tauri/src/commands.rs:1082)), `save_cookies` ([commands.rs:1139](app/src-tauri/src/commands.rs:1139)), `clear_cookies` ([commands.rs:1211](app/src-tauri/src/commands.rs:1211)).
+- `tests_cookies_e2e` tests (e.g. [commands.rs:1869](app/src-tauri/src/commands.rs:1869)).
 
 ---
 
-### `pub fn get_cookies_status(path_manager: State<PathManager>) -> CookiesStatus`  *(commands.rs:976)*
+### `pub fn get_cookies_status(path_manager: State<PathManager>) -> CookiesStatus`  *(commands.rs:1050)*
 
 **Purpose**: Tauri-command wrapper around `cookies_status_for`. Plain read — never migrates.
 
@@ -947,7 +984,7 @@ DTO. `modified_iso` is ISO-8601 UTC or `None` (always `None` for keyring storage
 
 ---
 
-### `pub async fn migrate_cookies_now(sidecar, path_manager) -> Result<CookiesStatus, String>`  *(commands.rs:1000)*
+### `pub async fn migrate_cookies_now(sidecar, path_manager) -> Result<CookiesStatus, String>`  *(commands.rs:1074)*
 
 **Purpose**: "重新整理 / 套用變更" — run the startup file→keyring→delete migration on demand and push the migrated value to the running sidecar (no restart needed).
 
@@ -959,33 +996,33 @@ DTO. `modified_iso` is ISO-8601 UTC or `None` (always `None` for keyring storage
 - Async: yes.
 - Authorization: requires sidecar.
 
-**Calls**: `crate::migrate_cookies_from_file` → [lib.rs:111](app/src-tauri/src/lib.rs:111), `push_cookies_to_sidecar` → [commands.rs:1071](app/src-tauri/src/commands.rs:1071), `cookies_status_for`.
+**Calls**: `crate::migrate_cookies_from_file` → [lib.rs:112](app/src-tauri/src/lib.rs:112), `push_cookies_to_sidecar` → [commands.rs:1145](app/src-tauri/src/commands.rs:1145), `cookies_status_for`.
 
 **Called by**: frontend (cookies status refresh on mount and "重新整理" button).
 
 ---
 
-### `pub(crate) fn validate_cookies_input(cookies: &str) -> Result<String, String>`  *(commands.rs:1021)*
+### `pub(crate) fn validate_cookies_input(cookies: &str) -> Result<String, String>`  *(commands.rs:1095)*
 
 **Purpose**: Pure validation for `save_cookies`. Returns the trimmed value, or `Err("cookies_empty")` for blank input, or `Err("cookies_too_large")` (`cookie_store::COOKIES_TOO_LARGE_ERR`) over 64 KiB.
 
 **Calls**: `cookie_store::check_cookies_format` → [cookie_store.rs:46](app/src-tauri/src/cookie_store.rs:46).
 
-**Called by**: `save_cookies_local` ([commands.rs:1042](app/src-tauri/src/commands.rs:1042)); tests at [commands.rs:1461](app/src-tauri/src/commands.rs:1461), [commands.rs:1474](app/src-tauri/src/commands.rs:1474), [commands.rs:1485](app/src-tauri/src/commands.rs:1485).
+**Called by**: `save_cookies_local` ([commands.rs:1116](app/src-tauri/src/commands.rs:1116)); tests at [commands.rs:1624](app/src-tauri/src/commands.rs:1624), [commands.rs:1637](app/src-tauri/src/commands.rs:1637), [commands.rs:1648](app/src-tauri/src/commands.rs:1648).
 
 ---
 
-### `pub(crate) fn save_cookies_local(data_dir: &Path, cookies: &str) -> Result<String, String>`  *(commands.rs:1038)*
+### `pub(crate) fn save_cookies_local(data_dir: &Path, cookies: &str) -> Result<String, String>`  *(commands.rs:1112)*
 
 **Purpose**: Validate, write the keyring, then best-effort delete any stale `cookies.txt` (so the next startup doesn't re-migrate an older file over the fresh value). Returns the trimmed stored value.
 
 **Calls**: `validate_cookies_input`, `cookie_store::set_cookies` → [cookie_store.rs:57](app/src-tauri/src/cookie_store.rs:57), `std::fs::remove_file` (errors ignored).
 
-**Called by**: `save_cookies` ([commands.rs:1063](app/src-tauri/src/commands.rs:1063)); tests at [commands.rs:1766](app/src-tauri/src/commands.rs:1766), [commands.rs:1808](app/src-tauri/src/commands.rs:1808), [commands.rs:1825](app/src-tauri/src/commands.rs:1825).
+**Called by**: `save_cookies` ([commands.rs:1137](app/src-tauri/src/commands.rs:1137)); tests at [commands.rs:1929](app/src-tauri/src/commands.rs:1929), [commands.rs:1971](app/src-tauri/src/commands.rs:1971), [commands.rs:1988](app/src-tauri/src/commands.rs:1988).
 
 ---
 
-### `pub async fn save_cookies(sidecar, path_manager, cookies: String) -> Result<CookiesStatus, String>`  *(commands.rs:1058)*
+### `pub async fn save_cookies(sidecar, path_manager, cookies: String) -> Result<CookiesStatus, String>`  *(commands.rs:1132)*
 
 **Purpose**: Direct paste path: validate, write the credential store, scrub stale `cookies.txt`, push to the running sidecar.
 
@@ -1003,15 +1040,15 @@ DTO. `modified_iso` is ISO-8601 UTC or `None` (always `None` for keyring storage
 
 ---
 
-### `async fn push_cookies_to_sidecar(sidecar: &SidecarManager, value: &str) -> Result<(), String>`  *(commands.rs:1071)*
+### `async fn push_cookies_to_sidecar(sidecar: &SidecarManager, value: &str) -> Result<(), String>`  *(commands.rs:1145)*
 
 **Purpose**: `sidecar.request("set_cookies", json!({"cookies": value}))` + `ensure_ok`. An empty string is the sidecar protocol's clear signal.
 
-**Called by**: `migrate_cookies_now` ([commands.rs:1006](app/src-tauri/src/commands.rs:1006)), `save_cookies` ([commands.rs:1064](app/src-tauri/src/commands.rs:1064)), `clear_cookies` ([commands.rs:1134](app/src-tauri/src/commands.rs:1134)).
+**Called by**: `migrate_cookies_now` ([commands.rs:1080](app/src-tauri/src/commands.rs:1080)), `save_cookies` ([commands.rs:1138](app/src-tauri/src/commands.rs:1138)), `clear_cookies` ([commands.rs:1208](app/src-tauri/src/commands.rs:1208)).
 
 ---
 
-### `pub(crate) fn clear_cookies_local(data_dir: &Path) -> Result<(), String>`  *(commands.rs:1099)*
+### `pub(crate) fn clear_cookies_local(data_dir: &Path) -> Result<(), String>`  *(commands.rs:1173)*
 
 **Purpose**: Delete the plaintext `cookies.txt` (template scaffold included) **first**, then the keyring entry. Order is load-bearing: a surviving file would be re-migrated into the keyring by `migrate_cookies_from_file`. `NotFound` counts as success.
 
@@ -1020,11 +1057,11 @@ DTO. `modified_iso` is ISO-8601 UTC or `None` (always `None` for keyring storage
 
 **Calls**: `std::fs::remove_file`, `cookie_store::delete_cookies` → [cookie_store.rs:86](app/src-tauri/src/cookie_store.rs:86).
 
-**Called by**: `clear_cookies` ([commands.rs:1133](app/src-tauri/src/commands.rs:1133)); tests at [commands.rs:1856](app/src-tauri/src/commands.rs:1856), [commands.rs:1884](app/src-tauri/src/commands.rs:1884), [commands.rs:1906](app/src-tauri/src/commands.rs:1906), [commands.rs:1931](app/src-tauri/src/commands.rs:1931).
+**Called by**: `clear_cookies` ([commands.rs:1207](app/src-tauri/src/commands.rs:1207)); tests at [commands.rs:2019](app/src-tauri/src/commands.rs:2019), [commands.rs:2047](app/src-tauri/src/commands.rs:2047), [commands.rs:2069](app/src-tauri/src/commands.rs:2069), [commands.rs:2094](app/src-tauri/src/commands.rs:2094).
 
 ---
 
-### `pub async fn clear_cookies(sidecar, path_manager) -> Result<CookiesStatus, String>`  *(commands.rs:1129)*
+### `pub async fn clear_cookies(sidecar, path_manager) -> Result<CookiesStatus, String>`  *(commands.rs:1203)*
 
 **Purpose**: "清除 cookies" — wipe the JavDB session from the file, the OS credential store, and the running sidecar.
 
@@ -1043,7 +1080,7 @@ DTO. `modified_iso` is ISO-8601 UTC or `None` (always `None` for keyring storage
 
 ---
 
-### `pub(crate) fn write_cookies_template_to(data_dir: &Path) -> Result<(), String>`  *(commands.rs:1158)*
+### `pub(crate) fn write_cookies_template_to(data_dir: &Path) -> Result<(), String>`  *(commands.rs:1232)*
 
 **Purpose**: Write the inline-instructed cookies.txt scaffold (UTF-8 without BOM). Refuses to overwrite — losing a working file is worse than failing.
 
@@ -1059,12 +1096,12 @@ DTO. `modified_iso` is ISO-8601 UTC or `None` (always `None` for keyring storage
 **Calls**: `std::fs::create_dir_all`, `std::fs::write`.
 
 **Called by**:
-- `create_cookies_template` ([commands.rs:1175](app/src-tauri/src/commands.rs:1175)).
-- Tests at [commands.rs:1402](app/src-tauri/src/commands.rs:1402), [commands.rs:1498](app/src-tauri/src/commands.rs:1498).
+- `create_cookies_template` ([commands.rs:1249](app/src-tauri/src/commands.rs:1249)).
+- Tests at [commands.rs:1565](app/src-tauri/src/commands.rs:1565), [commands.rs:1661](app/src-tauri/src/commands.rs:1661).
 
 ---
 
-### `pub fn create_cookies_template(path_manager: State<PathManager>) -> Result<(), String>`  *(commands.rs:1174)*
+### `pub fn create_cookies_template(path_manager: State<PathManager>) -> Result<(), String>`  *(commands.rs:1248)*
 
 **Purpose**: Tauri-command wrapper around `write_cookies_template_to`.
 
@@ -1074,7 +1111,7 @@ DTO. `modified_iso` is ISO-8601 UTC or `None` (always `None` for keyring storage
 
 ---
 
-### `pub async fn update_sidecar_settings(sidecar: State<'_, SidecarManager>, settings: Value) -> Result<(), String>`  *(commands.rs:1185)*
+### `pub async fn update_sidecar_settings(sidecar: State<'_, SidecarManager>, settings: Value) -> Result<(), String>`  *(commands.rs:1259)*
 
 **Purpose**: Push the latest persisted settings to the running sidecar so changes take effect without a restart. Belt-and-suspenders blanks `rd.api_token` before sending.
 
@@ -1086,13 +1123,13 @@ DTO. `modified_iso` is ISO-8601 UTC or `None` (always `None` for keyring storage
 - Async: yes.
 - Authorization: requires sidecar.
 
-**Calls**: `blank_rd_api_token` → [commands.rs:804](app/src-tauri/src/commands.rs:804), `sidecar.request("update_settings", ...)`, `ensure_ok`.
+**Calls**: `blank_rd_api_token` → [commands.rs:878](app/src-tauri/src/commands.rs:878), `sidecar.request("update_settings", ...)`, `ensure_ok`.
 
-**Called by**: frontend (settings save flow).
+**Called by**: frontend (settings save flow). The only other sender of sidecar `update_settings` is `push_imported_settings` (legacy `.env` import), which builds the same blanked body via `settings_push_body`.
 
 ---
 
-### `pub fn open_data_dir(path_manager: State<PathManager>) -> Result<(), String>`  *(commands.rs:1202)*
+### `pub fn open_data_dir(path_manager: State<PathManager>) -> Result<(), String>`  *(commands.rs:1276)*
 
 **Purpose**: Open the data directory in the OS file manager (Windows: explorer.exe).
 
@@ -1102,7 +1139,7 @@ DTO. `modified_iso` is ISO-8601 UTC or `None` (always `None` for keyring storage
 
 ---
 
-### `pub fn open_logs_dir(path_manager: State<PathManager>) -> Result<(), String>`  *(commands.rs:1207)*
+### `pub fn open_logs_dir(path_manager: State<PathManager>) -> Result<(), String>`  *(commands.rs:1281)*
 
 **Purpose**: Same as `open_data_dir` but for the log dir.
 
@@ -1112,7 +1149,7 @@ DTO. `modified_iso` is ISO-8601 UTC or `None` (always `None` for keyring storage
 
 ---
 
-### `fn open_in_explorer(p: &Path) -> Result<(), String>`  *(commands.rs:1211)*
+### `fn open_in_explorer(p: &Path) -> Result<(), String>`  *(commands.rs:1285)*
 
 **Purpose**: Windows-only `explorer.exe <p>` spawn. Best-effort `create_dir_all` before opening so explorer has something to show.
 
@@ -1134,13 +1171,19 @@ DTO. `modified_iso` is ISO-8601 UTC or `None` (always `None` for keyring storage
 
 ### Tests
 
-`tests_task_contracts` — [commands.rs:1237-1302](app/src-tauri/src/commands.rs:1237):
+`tests_task_contracts` — [commands.rs:1311-1465](app/src-tauri/src/commands.rs:1311):
+- `check_candidate_token_rejects_before_the_sidecar_sees_it` — `""` → `rd_no_token`; `abc-123`, embedded space / newline, full-width, 256 chars → `rd_token_format_invalid`.
+- `settings_push_body_never_carries_the_rd_token`.
+- `rd_test_token_refuses_malformed_token_before_any_request` — drives `rd_test_token_with` against `SidecarManager::dead_for_tests`: malformed / empty tokens fail with their format codes, while a well-formed one reaches the sidecar (`sidecar is dead: unit test`). Dropping the pre-check turns the first assertion into the dead-sidecar error.
+- `read_legacy_env_reads_the_file_and_reports_a_missing_one`.
+- `push_imported_settings_reports_a_failed_push_as_a_warning` — dead sidecar → `report.warnings == ["sidecar update_settings: sidecar is dead: unit test"]`.
+- `settings_push_warning_reports_only_failures`.
 - `rd_link_deserializes_completed_payload_with_error_entry`.
 - `resolved_magnets_response_preserves_sidecar_error_code`.
 - `resolved_magnets_counts_malformed_entries_as_unknown`.
 
-`tests_m7b` — [commands.rs:1304-1507](app/src-tauri/src/commands.rs:1304) (no real keyring access):
-- `fn temp_dir() -> PathBuf` — process-id + counter-based tempdir. Same pattern is duplicated in [lib.rs:229](app/src-tauri/src/lib.rs:229), [legacy_import.rs:457](app/src-tauri/src/legacy_import.rs:457), [pending.rs:181](app/src-tauri/src/pending.rs:181) and `tests_cookies_e2e` ([commands.rs:1573](app/src-tauri/src/commands.rs:1573)).
+`tests_m7b` — [commands.rs:1467-1670](app/src-tauri/src/commands.rs:1467) (no real keyring access):
+- `fn temp_dir() -> PathBuf` — process-id + counter-based tempdir. Same pattern is duplicated in [lib.rs:230](app/src-tauri/src/lib.rs:230), [legacy_import.rs:457](app/src-tauri/src/legacy_import.rs:457), [pending.rs:181](app/src-tauri/src/pending.rs:181) and `tests_cookies_e2e` ([commands.rs:1736](app/src-tauri/src/commands.rs:1736)).
 - `cookies_status_missing_file_and_no_keyring`, `cookies_status_missing_file_but_keyring_populated`, `cookies_status_file_overrides_keyring`, `cookies_status_present_file`.
 - `cookies_status_does_not_leak_body` — defense-in-depth: serialized status never contains cookie body.
 - `create_cookies_template_writes_utf8_no_bom` — checks BOM-free output and required Chinese instruction headers.
@@ -1148,7 +1191,7 @@ DTO. `modified_iso` is ISO-8601 UTC or `None` (always `None` for keyring storage
 - `validate_cookies_input_rejects_empty`, `validate_cookies_input_rejects_oversized`, `validate_cookies_input_trims_whitespace_around_real_value`.
 - `create_cookies_template_refuses_overwrite` — original file preserved.
 
-`tests_cookies_e2e` — [commands.rs:1525-1945](app/src-tauri/src/commands.rs:1525) (touches the **real** OS credential store; on Linux needs a usable D-Bus Secret Service):
+`tests_cookies_e2e` — [commands.rs:1688-2108](app/src-tauri/src/commands.rs:1688) (touches the **real** OS credential store; on Linux needs a usable D-Bus Secret Service):
 - `keyring_lock()` (global mutex) + `KeyringSandbox` (snapshot / clear / restore the user's real cookies on `Drop`), `temp_dir()`.
 - Goal 1 (startup / refresh migration): `goal_1_migration_writes_keyring_and_removes_file`, `goal_1_oversized_template_migrates_just_the_cookie_line`, `goal_1_template_only_file_leaves_keyring_untouched`.
 - Goal 2 (status): `goal_2_status_reports_none_when_neither_file_nor_keyring`, `goal_2_status_reports_keyring_when_only_keyring_has_value`, `goal_2_status_reports_file_when_file_present_regardless_of_keyring`.
@@ -1203,7 +1246,7 @@ Empty string values for token / string keys are skipped silently. Quote strippin
 
 **Called by**:
 - `read_env_for_preview` ([legacy_import.rs:315](app/src-tauri/src/legacy_import.rs:315)) ← `preview`.
-- `commands::import_env_block` ([commands.rs:681](app/src-tauri/src/commands.rs:681)).
+- `commands::import_env_block` ([commands.rs:705](app/src-tauri/src/commands.rs:705)).
 - Tests at [legacy_import.rs:474](app/src-tauri/src/legacy_import.rs:474), [legacy_import.rs:503](app/src-tauri/src/legacy_import.rs:503), [legacy_import.rs:513](app/src-tauri/src/legacy_import.rs:513), [legacy_import.rs:522](app/src-tauri/src/legacy_import.rs:522), [legacy_import.rs:536](app/src-tauri/src/legacy_import.rs:536), [legacy_import.rs:546](app/src-tauri/src/legacy_import.rs:546), [legacy_import.rs:558](app/src-tauri/src/legacy_import.rs:558).
 
 ---
@@ -1258,7 +1301,7 @@ Empty string values for token / string keys are skipped silently. Quote strippin
 - `HashSet<String>` for dedup.
 
 **Called by**:
-- `commands::import_pending_block` ([commands.rs:869](app/src-tauri/src/commands.rs:869)).
+- `commands::import_pending_block` ([commands.rs:943](app/src-tauri/src/commands.rs:943)).
 - Tests at [legacy_import.rs:606](app/src-tauri/src/legacy_import.rs:606), [legacy_import.rs:631](app/src-tauri/src/legacy_import.rs:631), [legacy_import.rs:641](app/src-tauri/src/legacy_import.rs:641).
 
 ---
@@ -1280,8 +1323,8 @@ Empty string values for token / string keys are skipped silently. Quote strippin
 - `read_pending_count(&pending_path)` → [legacy_import.rs:334](app/src-tauri/src/legacy_import.rs:334) (`fs::read_to_string` + `serde_json::from_str::<Vec<Value>>`).
 
 **Called by**:
-- `commands::preview_legacy_import` ([commands.rs:612](app/src-tauri/src/commands.rs:612)).
-- `commands::apply_legacy_import` ([commands.rs:625](app/src-tauri/src/commands.rs:625)).
+- `commands::preview_legacy_import` ([commands.rs:630](app/src-tauri/src/commands.rs:630)).
+- `commands::apply_legacy_import` ([commands.rs:643](app/src-tauri/src/commands.rs:643)).
 - Tests at [legacy_import.rs:647](app/src-tauri/src/legacy_import.rs:647), [legacy_import.rs:674](app/src-tauri/src/legacy_import.rs:674).
 
 ---
@@ -1302,7 +1345,7 @@ Empty string values for token / string keys are skipped silently. Quote strippin
 **Calls**: `merge_patch_entry`, `clear_rd_api_token`; `Value::as_object_mut`, `Map::entry`, `insert`, `or_insert_with`.
 
 **Called by**:
-- `commands::import_env_settings_patch` ([commands.rs:775](app/src-tauri/src/commands.rs:775)).
+- `commands::import_env_settings_patch` ([commands.rs:848](app/src-tauri/src/commands.rs:848)).
 - Test at [legacy_import.rs:711](app/src-tauri/src/legacy_import.rs:711).
 
 ---
@@ -1353,7 +1396,7 @@ Notable detail: `parse_env_routes_token_outside_settings_patch` (and two other t
 
 **Calls**: `std::env::var(...)`, `PathBuf::from`, `Path::join`.
 
-**Called by**: `lib::run()` setup ([lib.rs:365](app/src-tauri/src/lib.rs:365)).
+**Called by**: `lib::run()` setup ([lib.rs:392](app/src-tauri/src/lib.rs:392)).
 
 ---
 
@@ -1367,7 +1410,7 @@ Notable detail: `parse_env_routes_token_outside_settings_patch` (and two other t
 
 **Calls**: `tauri::Manager::path`, `PathResolver::app_data_dir`, `app_log_dir`.
 
-**Called by**: `lib::run()` setup ([lib.rs:365](app/src-tauri/src/lib.rs:365)).
+**Called by**: `lib::run()` setup ([lib.rs:392](app/src-tauri/src/lib.rs:392)).
 
 ---
 
@@ -1382,7 +1425,7 @@ Notable detail: `parse_env_routes_token_outside_settings_patch` (and two other t
 
 **Calls**: `std::fs::create_dir_all` twice.
 
-**Called by**: `lib::run()` setup ([lib.rs:366](app/src-tauri/src/lib.rs:366)).
+**Called by**: `lib::run()` setup ([lib.rs:393](app/src-tauri/src/lib.rs:393)).
 
 ---
 
@@ -1412,7 +1455,7 @@ Returns `"smart"`. Trivial. Called only by serde via `#[serde(default = "default
 **Calls**: `chrono::Utc::now()`, `to_rfc3339()`.
 
 **Called by**:
-- `commands::rd_send_magnet` ([commands.rs:478](app/src-tauri/src/commands.rs:478)).
+- `commands::rd_send_magnet` ([commands.rs:496](app/src-tauri/src/commands.rs:496)).
 - Test `sample` at [pending.rs:190](app/src-tauri/src/pending.rs:190), [legacy_import.rs:619](app/src-tauri/src/legacy_import.rs:619).
 
 ---
@@ -1436,8 +1479,8 @@ Trivial: `data_dir.join("pending_torrents.json")`. Called by `load`, `save`, and
 **Calls**: `Path::exists`, `fs::metadata`, `fs::read_to_string`, `serde_json::from_str`.
 
 **Called by**:
-- `commands::pending_list` ([commands.rs:572](app/src-tauri/src/commands.rs:572)).
-- `commands::import_pending_block` ([commands.rs:862](app/src-tauri/src/commands.rs:862)).
+- `commands::pending_list` ([commands.rs:590](app/src-tauri/src/commands.rs:590)).
+- `commands::import_pending_block` ([commands.rs:936](app/src-tauri/src/commands.rs:936)).
 - `pending::add` ([pending.rs:134](app/src-tauri/src/pending.rs:134)).
 - `pending::remove` ([pending.rs:144](app/src-tauri/src/pending.rs:144)).
 - `pending::update_status` ([pending.rs:158](app/src-tauri/src/pending.rs:158)).
@@ -1459,7 +1502,7 @@ Trivial: `data_dir.join("pending_torrents.json")`. Called by `load`, `save`, and
 **Calls**: `fs::create_dir_all`, `serde_json::to_string_pretty`, `fs::File::create`, `Write::write_all`, `File::sync_data`, `fs::rename`.
 
 **Called by**:
-- `commands::import_pending_block` ([commands.rs:876](app/src-tauri/src/commands.rs:876)).
+- `commands::import_pending_block` ([commands.rs:950](app/src-tauri/src/commands.rs:950)).
 - `pending::add`, `pending::remove`, `pending::update_status`, `pending::clear`.
 
 ---
@@ -1476,7 +1519,7 @@ Trivial: `data_dir.join("pending_torrents.json")`. Called by `load`, `save`, and
 **Calls**: `load`, `Vec::retain`, `Vec::push`, `save`.
 
 **Called by**:
-- `commands::rd_send_magnet` pending path ([commands.rs:487](app/src-tauri/src/commands.rs:487)).
+- `commands::rd_send_magnet` pending path ([commands.rs:505](app/src-tauri/src/commands.rs:505)).
 - Several tests.
 
 ---
@@ -1490,8 +1533,8 @@ Trivial: `data_dir.join("pending_torrents.json")`. Called by `load`, `save`, and
 **Calls**: `load`, `Vec::retain`, `save`.
 
 **Called by**:
-- `commands::rd_check_pending` ([commands.rs:536](app/src-tauri/src/commands.rs:536), [commands.rs:548](app/src-tauri/src/commands.rs:548)).
-- `commands::pending_remove` ([commands.rs:580](app/src-tauri/src/commands.rs:580)).
+- `commands::rd_check_pending` ([commands.rs:554](app/src-tauri/src/commands.rs:554), [commands.rs:566](app/src-tauri/src/commands.rs:566)).
+- `commands::pending_remove` ([commands.rs:598](app/src-tauri/src/commands.rs:598)).
 - Test.
 
 ---
@@ -1508,7 +1551,7 @@ Trivial: `data_dir.join("pending_torrents.json")`. Called by `load`, `save`, and
 **Calls**: `load`, `Utc::now().to_rfc3339()`, `save`.
 
 **Called by**:
-- `commands::rd_check_pending` ([commands.rs:559](app/src-tauri/src/commands.rs:559)).
+- `commands::rd_check_pending` ([commands.rs:577](app/src-tauri/src/commands.rs:577)).
 - Test at [pending.rs:240](app/src-tauri/src/pending.rs:240).
 
 ---
@@ -1520,7 +1563,7 @@ Trivial: `data_dir.join("pending_torrents.json")`. Called by `load`, `save`, and
 **Calls**: `save(data_dir, &[])`.
 
 **Called by**:
-- `commands::pending_clear` ([commands.rs:585](app/src-tauri/src/commands.rs:585)).
+- `commands::pending_clear` ([commands.rs:603](app/src-tauri/src/commands.rs:603)).
 - Test.
 
 ---
@@ -1546,7 +1589,7 @@ Trivial: `data_dir.join("pending_torrents.json")`. Called by `load`, `save`, and
 
 **Purpose**: Single RD token format rule (F-04): non-empty, ≤ 255 bytes, all ASCII alphanumeric. Must stay in sync with the sidecar's `_RD_TOKEN_MAX_LEN` / `_is_valid_rd_token` in [sidecar/sidecar.py](sidecar/sidecar.py) (comment at [secret_store.rs:27-28](app/src-tauri/src/secret_store.rs:27), [secret_store.rs:35-42](app/src-tauri/src/secret_store.rs:35)). Empty is *invalid* here; callers that support "clear" check `is_empty()` themselves.
 
-**Called by**: `set_rd_token` ([secret_store.rs:63](app/src-tauri/src/secret_store.rs:63)), `lib::migrate_legacy_token` ([lib.rs:184](app/src-tauri/src/lib.rs:184)), `commands::rd_save_token` ([commands.rs:342](app/src-tauri/src/commands.rs:342)), `commands::validate_legacy_rd_token` ([commands.rs:700](app/src-tauri/src/commands.rs:700)), tests.
+**Called by**: `set_rd_token` ([secret_store.rs:63](app/src-tauri/src/secret_store.rs:63)), `lib::migrate_legacy_token` ([lib.rs:185](app/src-tauri/src/lib.rs:185)), `commands::rd_save_token` ([commands.rs:360](app/src-tauri/src/commands.rs:360)), `commands::validate_legacy_rd_token` ([commands.rs:773](app/src-tauri/src/commands.rs:773)), tests.
 
 ### `pub const RD_TOKEN_FORMAT_ERR: &str = "rd_token_format_invalid"`  *(secret_store.rs:52)*
 
@@ -1578,9 +1621,9 @@ Stable error code for a non-empty token that fails `is_valid_rd_token`.
 **Calls**: `is_valid_rd_token`, `entry()`, `keyring::Entry::set_password`, `delete_internal` (when token is empty).
 
 **Called by**:
-- `lib::migrate_legacy_token` ([lib.rs:193](app/src-tauri/src/lib.rs:193)).
-- `commands::rd_save_token` ([commands.rs:345](app/src-tauri/src/commands.rs:345)).
-- `commands::import_rd_token` ([commands.rs:732](app/src-tauri/src/commands.rs:732)).
+- `lib::migrate_legacy_token` ([lib.rs:194](app/src-tauri/src/lib.rs:194)).
+- `commands::rd_save_token` ([commands.rs:363](app/src-tauri/src/commands.rs:363)).
+- `commands::import_rd_token` ([commands.rs:805](app/src-tauri/src/commands.rs:805)).
 - Test `set_rd_token_rejects_invalid_before_touching_keyring`.
 
 ---
@@ -1608,7 +1651,7 @@ Stable error code for a non-empty token that fails `is_valid_rd_token`.
 
 **Calls**: `entry()`, `delete_internal(&e)`.
 
-**Called by**: `commands::rd_clear_token` ([commands.rs:360](app/src-tauri/src/commands.rs:360)).
+**Called by**: `commands::rd_clear_token` ([commands.rs:378](app/src-tauri/src/commands.rs:378)).
 
 ---
 
@@ -1656,7 +1699,7 @@ DTO. Top-level shape that lands inside `settings.json` under the key `"settings"
 
 **Contract**: pure; cannot fail.
 
-**Called by**: `read_settings` ([settings.rs:131](app/src-tauri/src/settings.rs:131)), `write_settings` ([settings.rs:146](app/src-tauri/src/settings.rs:146)), `commands::import_env_settings_patch` ([commands.rs:785](app/src-tauri/src/commands.rs:785)), test.
+**Called by**: `read_settings` ([settings.rs:131](app/src-tauri/src/settings.rs:131)), `write_settings` ([settings.rs:146](app/src-tauri/src/settings.rs:146)), `commands::import_env_settings_patch` ([commands.rs:858](app/src-tauri/src/commands.rs:858)), test.
 
 ---
 
@@ -1748,30 +1791,34 @@ Private. `child.write(...)` is the stdin sender. `line_rx` is the receiving end 
 - `fn mark_dead(&mut self, reason: String) -> String` *(sidecar_manager.rs:73)* — best-effort `child.kill()` (takes the child), records `dead = Some(reason)`, returns `reason`.
 - `impl Drop for SidecarInner` *(sidecar_manager.rs:82)* — kills the child if still held.
 
+### `pub(crate) fn SidecarManager::dead_for_tests(reason: &str) -> Self`  *(sidecar_manager.rs:93)*
+
+`#[cfg(test)]` only ([sidecar_manager.rs:88](app/src-tauri/src/sidecar_manager.rs:88)). Builds a manager whose `SidecarInner` has `child: None` and `dead: Some(reason)`, so every `request()` fails fast with `Err("sidecar is dead: <reason>")` and nothing is spawned. Lets command bodies (`rd_test_token_with`, `push_imported_settings`) be tested for whether they reach the sidecar at all.
+
 ---
 
 ### Private helpers
 
-- `fn timeout_error(cmd: &str, secs: u64) -> String` *(sidecar_manager.rs:88)* — `"sidecar request '<cmd>' timed out after <secs>s; restart the app to recover"`.
-- `fn timeout_for(cmd: &str, body: &Value) -> Result<u64, String>` *(sidecar_manager.rs:100)* — 60 s for every command except `rd_send_magnet`, which gets `cache_wait + 90`. `cache_wait` missing/null → 15; non-integer / negative → `Err("rd_send_magnet: cache_wait must be a non-negative integer, got …")`; `< 5` → `Err("rd_send_magnet: cache_wait=<n> below floor 5s")`; `> 300` → `Err("… above ceiling 300s")`. On `Err` the request is never sent.
-- `fn sidecar_env(paths: &Value) -> Vec<(&'static str, String)>` *(sidecar_manager.rs:148)* — `[("JAVDB_LOG_DIR", log_dir)]` when `paths.log_dir` is a non-blank string (forwarded as-is, untrimmed), else empty.
-- `fn drain_line(buffer: &mut Vec<u8>) -> Option<String>` *(sidecar_manager.rs:174)* — pop one `\n`-terminated line, strip `\n` and a preceding `\r`, lossy UTF-8.
-- `fn error_message(resp: &Value) -> Option<&str>` *(sidecar_manager.rs:319)* — `resp.error.message`.
-- `fn require_ok(resp: &Value, what: &str) -> Result<(), String>` *(sidecar_manager.rs:328)* — `Err("sidecar <what> failed: <error.message | '<what> failed'>")` for a non-ok reply.
+- `fn timeout_error(cmd: &str, secs: u64) -> String` *(sidecar_manager.rs:106)* — `"sidecar request '<cmd>' timed out after <secs>s; restart the app to recover"`.
+- `fn timeout_for(cmd: &str, body: &Value) -> Result<u64, String>` *(sidecar_manager.rs:118)* — 60 s for every command except `rd_send_magnet`, which gets `cache_wait + 90`. `cache_wait` missing/null → 15; non-integer / negative → `Err("rd_send_magnet: cache_wait must be a non-negative integer, got …")`; `< 5` → `Err("rd_send_magnet: cache_wait=<n> below floor 5s")`; `> 300` → `Err("… above ceiling 300s")`. On `Err` the request is never sent.
+- `fn sidecar_env(paths: &Value) -> Vec<(&'static str, String)>` *(sidecar_manager.rs:166)* — `[("JAVDB_LOG_DIR", log_dir)]` when `paths.log_dir` is a non-blank string (forwarded as-is, untrimmed), else empty.
+- `fn drain_line(buffer: &mut Vec<u8>) -> Option<String>` *(sidecar_manager.rs:192)* — pop one `\n`-terminated line, strip `\n` and a preceding `\r`, lossy UTF-8.
+- `fn error_message(resp: &Value) -> Option<&str>` *(sidecar_manager.rs:337)* — `resp.error.message`.
+- `fn require_ok(resp: &Value, what: &str) -> Result<(), String>` *(sidecar_manager.rs:346)* — `Err("sidecar <what> failed: <error.message | '<what> failed'>")` for a non-ok reply.
 
 ---
 
-### `pub fn sidecar_command<R: Runtime>(app: &AppHandle<R>, paths: &Value) -> Result<Command, String>`  *(sidecar_manager.rs:161)*
+### `pub fn sidecar_command<R: Runtime>(app: &AppHandle<R>, paths: &Value) -> Result<Command, String>`  *(sidecar_manager.rs:179)*
 
 **Purpose**: Resolve the bundled `sidecar` (`app.shell().sidecar("sidecar")`) and attach `.envs(sidecar_env(paths))`, without spawning. `pub` and re-exported `#[doc(hidden)]` from [lib.rs:25-26](app/src-tauri/src/lib.rs:25) only so `tests/sidecar_command.rs` can inspect it through `MockRuntime`.
 
 **Errors**: `Err("sidecar resolve failed: ...")`.
 
-**Called by**: `spawn_and_handshake` ([sidecar_manager.rs:194](app/src-tauri/src/sidecar_manager.rs:194)); integration tests at [tests/sidecar_command.rs:38](app/src-tauri/tests/sidecar_command.rs:38), [tests/sidecar_command.rs:49](app/src-tauri/tests/sidecar_command.rs:49).
+**Called by**: `spawn_and_handshake` ([sidecar_manager.rs:212](app/src-tauri/src/sidecar_manager.rs:212)); integration tests at [tests/sidecar_command.rs:38](app/src-tauri/tests/sidecar_command.rs:38), [tests/sidecar_command.rs:49](app/src-tauri/tests/sidecar_command.rs:49).
 
 ---
 
-### `pub async fn SidecarManager::spawn_and_handshake(app, cookies, rd_token, settings, paths) -> Result<Self, String>`  *(sidecar_manager.rs:187)*
+### `pub async fn SidecarManager::spawn_and_handshake(app, cookies, rd_token, settings, paths) -> Result<Self, String>`  *(sidecar_manager.rs:205)*
 
 **Purpose**: Spawn the bundled `sidecar` binary, perform `hello` + `handshake`, and return a manager ready for `request(...)`.
 
@@ -1785,7 +1832,7 @@ Private. `child.write(...)` is the stdin sender. `line_rx` is the receiving end 
 - Returns: `Ok(SidecarManager)` once both `hello` (with `{"protocol_version": 1}`) and `handshake` (`{"cookies", "rd_token", "settings", "paths"}`) returned `ok: true`.
 - Side effects:
   - Spawns a child process via `tauri-plugin-shell`, passing `paths.log_dir` as `JAVDB_LOG_DIR` in the child environment. The command is built by `sidecar_command(app, &paths)` (resolve `sidecar` + `.envs(sidecar_env(&paths))`), re-exported `#[doc(hidden)]` from lib.rs solely so the integration test `tests/sidecar_command.rs` can inspect it through tauri's MockRuntime without spawning. On MSVC, build.rs embeds the Common Controls v6 manifest into test targets only (`cargo:rustc-link-arg-tests`) so that test exe can load; see docs/platform/windows-build.md §3. The value is forwarded as-is and `app_logging` `.strip()`s it, so leading/trailing whitespace is never part of the effective log path; a missing, non-string or whitespace-only `log_dir` sets nothing, leaving the sidecar's own fallback (`%LOCALAPPDATA%\JavDBMagnet\logs` → console-only). The handshake `paths.log_dir` field alone does not reach logging: the sidecar configures logging before reading the handshake.
-  - Spawns a tokio task that lives until the child terminates: parses `CommandEvent::Stdout` chunks into lines via `drain_line` and pushes to the unbounded channel. `CommandEvent::Stderr` is **silently dropped** ([sidecar_manager.rs:213-217](app/src-tauri/src/sidecar_manager.rs:213)); the comment says M6 will wire stderr to the log file. `CommandEvent::Terminated` ends the task.
+  - Spawns a tokio task that lives until the child terminates: parses `CommandEvent::Stdout` chunks into lines via `drain_line` and pushes to the unbounded channel. `CommandEvent::Stderr` is **silently dropped** ([sidecar_manager.rs:231-235](app/src-tauri/src/sidecar_manager.rs:231)); the comment says M6 will wire stderr to the log file. `CommandEvent::Terminated` ends the task.
   - Writes 2 JSON lines on stdin during construction.
 - Errors:
   - `Err("sidecar resolve failed: ...")` / `Err("sidecar spawn failed: ...")` from plugin-shell.
@@ -1796,18 +1843,18 @@ Private. `child.write(...)` is the stdin sender. `line_rx` is the receiving end 
 - Authorization: this is the bootstrap.
 
 **Calls**:
-- `sidecar_command(app, &paths)` → [sidecar_manager.rs:161](app/src-tauri/src/sidecar_manager.rs:161) → `tauri_plugin_shell::ShellExt::sidecar`.
+- `sidecar_command(app, &paths)` → [sidecar_manager.rs:179](app/src-tauri/src/sidecar_manager.rs:179) → `tauri_plugin_shell::ShellExt::sidecar`.
 - `Command::spawn` from plugin-shell.
 - `tauri::async_runtime::spawn` for the line-reader task.
 - `tokio::sync::mpsc::unbounded_channel`.
-- `self.request("hello", ...)`, `self.request("handshake", ...)` → [sidecar_manager.rs:253](app/src-tauri/src/sidecar_manager.rs:253).
-- `require_ok(&resp, ...)` → [sidecar_manager.rs:328](app/src-tauri/src/sidecar_manager.rs:328).
+- `self.request("hello", ...)`, `self.request("handshake", ...)` → [sidecar_manager.rs:271](app/src-tauri/src/sidecar_manager.rs:271).
+- `require_ok(&resp, ...)` → [sidecar_manager.rs:346](app/src-tauri/src/sidecar_manager.rs:346).
 
-**Called by**: `lib::run` setup ([lib.rs:380-388](app/src-tauri/src/lib.rs:380)).
+**Called by**: `lib::run` setup ([lib.rs:407-415](app/src-tauri/src/lib.rs:407)).
 
 ---
 
-### `pub async fn SidecarManager::request(&self, cmd: &str, body: Value) -> Result<Value, String>`  *(sidecar_manager.rs:253)*
+### `pub async fn SidecarManager::request(&self, cmd: &str, body: Value) -> Result<Value, String>`  *(sidecar_manager.rs:271)*
 
 **Purpose**: Send one JSON-line request to the sidecar and await one JSON-line response, bounded by a per-command timeout. The core RPC primitive.
 
@@ -1838,7 +1885,7 @@ Private. `child.write(...)` is the stdin sender. `line_rx` is the receiving end 
 - Authorization: requires the sidecar to be alive.
 
 **Calls**:
-- `timeout_for` → [sidecar_manager.rs:100](app/src-tauri/src/sidecar_manager.rs:100).
+- `timeout_for` → [sidecar_manager.rs:118](app/src-tauri/src/sidecar_manager.rs:118).
 - `Mutex::lock`.
 - `serde_json::to_string`.
 - `CommandChild::write`.
@@ -1848,11 +1895,11 @@ Private. `child.write(...)` is the stdin sender. `line_rx` is the receiving end 
 
 **Called by**:
 - `spawn_and_handshake` (twice — hello + handshake).
-- Every `#[tauri::command]` that talks to the sidecar (17 of them: `sidecar_ping`, `fetch_javdb`, `copy_magnet`, `copy_magnets_bulk`, `forget_magnets`, `register_magnets`, `rd_test_token`, `rd_save_token`, `rd_clear_token`, `rd_check_user`, `rd_send_magnet`, `rd_check_pending`, `apply_legacy_import` via `import_rd_token`, `migrate_cookies_now` / `save_cookies` / `clear_cookies` via `push_cookies_to_sidecar`, `update_sidecar_settings`).
+- Every `#[tauri::command]` that talks to the sidecar (17 of them: `sidecar_ping`, `fetch_javdb`, `copy_magnet`, `copy_magnets_bulk`, `forget_magnets`, `register_magnets`, `rd_test_token` via `rd_test_token_with`, `rd_save_token`, `rd_clear_token`, `rd_check_user`, `rd_send_magnet`, `rd_check_pending`, `apply_legacy_import` via `import_rd_token` and `push_imported_settings`, `migrate_cookies_now` / `save_cookies` / `clear_cookies` via `push_cookies_to_sidecar`, `update_sidecar_settings`).
 
 ---
 
-### Tests — [sidecar_manager.rs:337-484](app/src-tauri/src/sidecar_manager.rs:337)
+### Tests — [sidecar_manager.rs:355-502](app/src-tauri/src/sidecar_manager.rs:355)
 
 - `mark_dead_records_reason_and_is_idempotent`, `require_ok_propagates_err_on_error_envelope`, `timeout_error_names_the_command_and_actual_secs`.
 - `timeout_for_normal_command_uses_default`, `timeout_for_rd_send_magnet_missing_cache_wait_uses_default_15`, `timeout_for_rd_send_magnet_at_ceiling`, `timeout_for_rd_send_magnet_above_ceiling_errors`, `timeout_for_rd_send_magnet_non_integer_errors`, `timeout_for_rd_send_magnet_below_floor_errors`.
@@ -1881,7 +1928,7 @@ Size cap mirroring `lib::COOKIES_MAX_BYTES`, and its stable error code.
 
 **Purpose**: Pure size check — `Err("cookies_too_large")` when `value.len() > COOKIES_MAX_BYTES`.
 
-**Called by**: `set_cookies` ([cookie_store.rs:58](app/src-tauri/src/cookie_store.rs:58)), `commands::validate_cookies_input` ([commands.rs:1026](app/src-tauri/src/commands.rs:1026)), tests.
+**Called by**: `set_cookies` ([cookie_store.rs:58](app/src-tauri/src/cookie_store.rs:58)), `commands::validate_cookies_input` ([commands.rs:1100](app/src-tauri/src/commands.rs:1100)), tests.
 
 ---
 
@@ -1896,7 +1943,7 @@ Size cap mirroring `lib::COOKIES_MAX_BYTES`, and its stable error code.
 
 **Calls**: `check_cookies_format`, `entry()`, `keyring::Entry::set_password`, `delete_internal`.
 
-**Called by**: `lib::migrate_cookies_from_file` ([lib.rs:143](app/src-tauri/src/lib.rs:143)), `commands::save_cookies_local` ([commands.rs:1043](app/src-tauri/src/commands.rs:1043)), `KeyringSandbox::drop` and e2e tests.
+**Called by**: `lib::migrate_cookies_from_file` ([lib.rs:144](app/src-tauri/src/lib.rs:144)), `commands::save_cookies_local` ([commands.rs:1117](app/src-tauri/src/commands.rs:1117)), `KeyringSandbox::drop` and e2e tests.
 
 ---
 
@@ -1904,7 +1951,7 @@ Size cap mirroring `lib::COOKIES_MAX_BYTES`, and its stable error code.
 
 **Purpose**: Read the blob. `NoEntry` → `Ok(None)`; other failures → `Err("keyring get: ...")`.
 
-**Called by**: `lib::load_cookies` ([lib.rs:90](app/src-tauri/src/lib.rs:90)), `commands::cookies_status_for` ([commands.rs:969](app/src-tauri/src/commands.rs:969)), `KeyringSandbox::new` and e2e tests.
+**Called by**: `lib::load_cookies` ([lib.rs:91](app/src-tauri/src/lib.rs:91)), `commands::cookies_status_for` ([commands.rs:1043](app/src-tauri/src/commands.rs:1043)), `KeyringSandbox::new` and e2e tests.
 
 ---
 
@@ -1914,7 +1961,7 @@ Size cap mirroring `lib::COOKIES_MAX_BYTES`, and its stable error code.
 
 **Calls**: `entry()`, `delete_internal`.
 
-**Called by**: `commands::clear_cookies_local` ([commands.rs:1106](app/src-tauri/src/commands.rs:1106)), `KeyringSandbox` (tests).
+**Called by**: `commands::clear_cookies_local` ([commands.rs:1180](app/src-tauri/src/commands.rs:1180)), `KeyringSandbox` (tests).
 
 ---
 
@@ -1928,7 +1975,7 @@ Size cap mirroring `lib::COOKIES_MAX_BYTES`, and its stable error code.
 
 **Purpose**: Heuristic: at least one trimmed, non-empty, non-`#` line containing `=`. Keeps a template-only file from clobbering a good keyring value.
 
-**Called by**: `lib::migrate_cookies_from_file` ([lib.rs:124](app/src-tauri/src/lib.rs:124)), tests.
+**Called by**: `lib::migrate_cookies_from_file` ([lib.rs:125](app/src-tauri/src/lib.rs:125)), tests.
 
 ---
 
@@ -1936,7 +1983,7 @@ Size cap mirroring `lib::COOKIES_MAX_BYTES`, and its stable error code.
 
 **Purpose**: Keep only cookie-pair lines (trimmed, non-empty, non-`#`, contains `=`) joined with `"; "`, so the keyring blob stays under Windows Credential Manager's ~2.5 KiB cap and matches the `Cookie:`-header shape the sidecar's `parse_cookie_string` expects. Empty string if none.
 
-**Called by**: `lib::migrate_cookies_from_file` ([lib.rs:134](app/src-tauri/src/lib.rs:134)), tests.
+**Called by**: `lib::migrate_cookies_from_file` ([lib.rs:135](app/src-tauri/src/lib.rs:135)), tests.
 
 ---
 
@@ -1971,20 +2018,20 @@ Common error-string shapes:
 - `format!("keyring entry: {e}")` — keyring failures (both `secret_store` and `cookie_store`).
 - `format!("mkdir {}: {e}", ...)` — directory creation.
 - `ensure_ok(&resp)` / `_err_code(&resp)` — sidecar non-ok responses surface only the `error.code` (e.g. `unknown_handle`, `rd_no_token`). Exception: `fetch_javdb` surfaces `error.message`.
-- Stable Rust-side codes: `rd_token_format_invalid`, `rd_no_token` (empty `rd_test_token` input), `cookies_empty`, `cookies_too_large`, `cookies_cleared_sidecar_stale: <e>`.
+- Stable Rust-side codes: `rd_token_format_invalid` (`rd_save_token`, and `rd_test_token` before any RPC via `check_candidate_token`), `rd_no_token` (empty `rd_test_token` input), `cookies_empty`, `cookies_too_large`, `cookies_cleared_sidecar_stale: <e>`.
 - `sidecar is dead: <reason>` — every request after a timeout / EOF / protocol corruption.
 
 ### 4.2 Logging conventions
 
 There is **no logging crate** wired up in this code. The only places anything is emitted from Rust are:
-- `eprintln!` in `load_cookies` ([lib.rs:92](app/src-tauri/src/lib.rs:92)) — cookie keyring read failure.
-- `eprintln!` in `migrate_cookies_from_file` ([lib.rs:114](app/src-tauri/src/lib.rs:114), [lib.rs:144](app/src-tauri/src/lib.rs:144), [lib.rs:155](app/src-tauri/src/lib.rs:155)) — oversized file, keyring write failure, file delete failure.
-- `eprintln!` in `migrate_legacy_token` ([lib.rs:185](app/src-tauri/src/lib.rs:185), [lib.rs:194](app/src-tauri/src/lib.rs:194)) — malformed legacy token, keyring write failure.
-- `.expect(...)` at the bottom of `run()` ([lib.rs:428](app/src-tauri/src/lib.rs:428)) — panic on Tauri runtime error.
+- `eprintln!` in `load_cookies` ([lib.rs:93](app/src-tauri/src/lib.rs:93)) — cookie keyring read failure.
+- `eprintln!` in `migrate_cookies_from_file` ([lib.rs:115](app/src-tauri/src/lib.rs:115), [lib.rs:145](app/src-tauri/src/lib.rs:145), [lib.rs:156](app/src-tauri/src/lib.rs:156)) — oversized file, keyring write failure, file delete failure.
+- `eprintln!` in `migrate_legacy_token` ([lib.rs:186](app/src-tauri/src/lib.rs:186), [lib.rs:195](app/src-tauri/src/lib.rs:195)) — malformed legacy token, keyring write failure.
+- `.expect(...)` at the bottom of `run()` ([lib.rs:455](app/src-tauri/src/lib.rs:455)) — panic on Tauri runtime error.
 
 In a release (`windows_subsystem = "windows"`) build these stderr lines go nowhere visible (noted at [cookie_store.rs:121-122](app/src-tauri/src/cookie_store.rs:121)).
 
-Stderr from the sidecar process is **silently dropped** by the line-reader background task ([sidecar_manager.rs:213-217](app/src-tauri/src/sidecar_manager.rs:213)). The comment promises M6 will wire it to a log file; that's still a TODO. The sidecar writes its own log file under `JAVDB_LOG_DIR`.
+Stderr from the sidecar process is **silently dropped** by the line-reader background task ([sidecar_manager.rs:231-235](app/src-tauri/src/sidecar_manager.rs:231)). The comment promises M6 will wire it to a log file; that's still a TODO. The sidecar writes its own log file under `JAVDB_LOG_DIR`.
 
 ### 4.3 Event emission patterns
 
@@ -2002,18 +2049,21 @@ frontend read_settings → settings.rs::read_settings → tauri-plugin-store
                        (clamp_rd_settings + without_secrets applied both ways)
 
 frontend update_sidecar_settings → commands.rs::update_sidecar_settings → SidecarManager → sidecar process
+
+frontend apply_legacy_import → import_env_block → import_env_settings_patch → tauri-plugin-store (save)
+                                                └→ push_imported_settings → SidecarManager ("update_settings")
 ```
 
-Notably, `write_settings` and `update_sidecar_settings` are **separate commands** and the frontend is responsible for calling both ([App.svelte:1549](app/src/App.svelte:1549), [App.svelte:1553](app/src/App.svelte:1553)). There is no Rust-side observer pattern; if the frontend writes settings without pushing to the sidecar, the sidecar stays out of sync until the next app restart. Note `update_sidecar_settings` forwards the frontend's raw object (not the clamped copy that `write_settings` persisted).
+Notably, `write_settings` and `update_sidecar_settings` are **separate commands** and the frontend is responsible for calling both ([App.svelte:1549](app/src/App.svelte:1549), [App.svelte:1553](app/src/App.svelte:1553)). There is no Rust-side observer pattern; if the frontend writes settings without pushing to the sidecar, the sidecar stays out of sync until the next app restart. Note `update_sidecar_settings` forwards the frontend's raw object (not the clamped copy that `write_settings` persisted). The one Rust-side push is the legacy `.env` import: after `import_env_settings_patch` saves, `push_imported_settings` sends the saved (clamped, token-blanked) settings to the sidecar itself.
 
 ### 4.5 Sidecar lifecycle
 
-- **Spawn**: synchronous during setup via `block_on(SidecarManager::spawn_and_handshake)` ([lib.rs:380](app/src-tauri/src/lib.rs:380)). Setup failure means the window does not open.
+- **Spawn**: synchronous during setup via `block_on(SidecarManager::spawn_and_handshake)` ([lib.rs:407](app/src-tauri/src/lib.rs:407)). Setup failure means the window does not open.
 - **Handshake**: `hello` (protocol version negotiation) then `handshake` (cookies, token, settings, paths). `JAVDB_LOG_DIR` is passed via the child environment, not the handshake.
 - **Health check**: there is **no periodic ping**. `sidecar_ping` exists but is invoked by the frontend on demand.
 - **Concurrency**: a single `tauri::async_runtime::Mutex` (tokio) serializes all requests. This was a deliberate choice because the sidecar's dispatch loop is single-threaded synchronous ([sidecar_manager.rs:7-8](app/src-tauri/src/sidecar_manager.rs:7)).
 - **Liveness / timeouts**: every request is bounded — 60 s default, `cache_wait + 90` s for `rd_send_magnet` (max 390 s) ([sidecar_manager.rs:10-23](app/src-tauri/src/sidecar_manager.rs:10)).
-- **Shutdown**: no explicit goodbye message. `SidecarInner` implements `Drop` ([sidecar_manager.rs:82-86](app/src-tauri/src/sidecar_manager.rs:82)) and best-effort kills the child when the managed state is dropped.
+- **Shutdown**: no explicit goodbye message. `SidecarInner` implements `Drop` ([sidecar_manager.rs:82-104](app/src-tauri/src/sidecar_manager.rs:82)) and best-effort kills the child when the managed state is dropped.
 - **Crash handling**: timeout, EOF (`CommandEvent::Terminated` ends the reader task), stdin write failure, unparsable line or `request_id` mismatch → `mark_dead` kills the child and every subsequent `request(...)` fails fast with `Err("sidecar is dead: <reason>")`. There is no automatic respawn; the user must restart the app.
 
 ### 4.6 Path discovery / config dirs
@@ -2026,11 +2076,11 @@ Notably, `write_settings` and `update_sidecar_settings` are **separate commands*
 
 ### 4.7 Security invariants (per-module annotations)
 
-1. **RD token never lives in plaintext on disk** after the first launch: `migrate_legacy_token` moves a valid legacy token to the keyring and blanks `settings.rd.api_token` (a malformed legacy value is left in place and never reaches the keyring or handshake). Both `read_settings` and `write_settings` go through `without_secrets` ([settings.rs:87](app/src-tauri/src/settings.rs:87)) which clears the field defensively.
-2. **RD token format is gated on every keyring write path**: `secret_store::set_rd_token` validates before touching the keyring, and `rd_save_token` / `import_rd_token` / `migrate_legacy_token` pre-check with `is_valid_rd_token` (same rule as the sidecar's `_is_valid_rd_token`).
+1. **RD token never lives in plaintext on disk** after the first launch: `migrate_legacy_token` moves a valid legacy token to the keyring and blanks `settings.rd.api_token` (a malformed legacy value is left in place and never reaches the keyring or handshake). Both `read_settings` and `write_settings` go through `without_secrets` ([settings.rs:87](app/src-tauri/src/settings.rs:87)) which clears the field defensively. **Settings sent to the sidecar never carry `rd.api_token`**: every path blanks it with `blank_rd_api_token` — the handshake (`load_handshake_inputs`, [lib.rs:64](app/src-tauri/src/lib.rs:64)), `update_sidecar_settings`, and the legacy import push (`settings_push_body`); the token reaches the sidecar only as the separate `rd_token` / `rd_set_token` value.
+2. **RD token format is gated on every keyring write path**: `secret_store::set_rd_token` validates before touching the keyring, and `rd_save_token` / `import_rd_token` / `migrate_legacy_token` pre-check with `is_valid_rd_token` (same rule as the sidecar's `_is_valid_rd_token`). The non-persisting `rd_test_token` applies the same rule (`check_candidate_token`) before any sidecar RPC.
 3. **Magnet text only crosses the IPC boundary inbound**: `register_magnets` is the only inbound path; everywhere else, magnets are referenced by `handle_id` only. Comments at [commands.rs:3-9](app/src-tauri/src/commands.rs:3) and [commands.rs:110-111](app/src-tauri/src/commands.rs:110) document the invariant; the `entries_have_no_magnet_field` test ([pending.rs:248](app/src-tauri/src/pending.rs:248)) and `sanitize_pending_drops_magnet_fields` test ([legacy_import.rs:564](app/src-tauri/src/legacy_import.rs:564)) defend the persistence side.
 4. **JavDB cookies live in the OS credential store**: a real `cookies.txt` is migrated (extracted pairs only) and deleted at startup / `migrate_cookies_now`; `save_cookies` writes the keyring directly; `clear_cookies` removes file, keyring and sidecar copy (file first, so it can't be resurrected).
-5. **cookies body is never returned**: `cookies_status_with_keyring` reports only metadata, defended by `cookies_status_does_not_leak_body` ([commands.rs:1384](app/src-tauri/src/commands.rs:1384)).
+5. **cookies body is never returned**: `cookies_status_with_keyring` reports only metadata, defended by `cookies_status_does_not_leak_body` ([commands.rs:1547](app/src-tauri/src/commands.rs:1547)).
 6. **The legacy importer cannot exfiltrate values**: `preview` only echoes presence flags and key names. The `preview_reports_files_without_echoing_values` test ([legacy_import.rs:656](app/src-tauri/src/legacy_import.rs:656)) asserts no echo of test secrets.
 7. **`rd.api_token` is structurally unreachable from `.env` patches**: `parse_env` puts the token into a separate `ParsedEnv.token` field; `merge_patch_entry` ([legacy_import.rs:426-428](app/src-tauri/src/legacy_import.rs:426)) explicitly skips any `rd.api_token` key in the patch and `clear_rd_api_token` then re-blanks the field as a final safety net.
 8. **Clipboard / dialog / store plugins are not exposed to the WebView**: `capabilities/default.json` grants only `core:default` and a single-URL `shell:allow-open`.
@@ -2042,14 +2092,14 @@ Notably, `write_settings` and `update_sidecar_settings` are **separate commands*
 ### 5.1 `lib::run` → setup
 
 ```
-lib::run                                              (lib.rs:358)
+lib::run                                              (lib.rs:385)
 ├── PathManager::new                                  (path_manager.rs:24)
 │   └── std::env::var(APPDATA / LOCALAPPDATA)
 ├── PathManager::ensure_dirs                          (path_manager.rs:45)
 │   └── std::fs::create_dir_all  x2
 ├── load_handshake_inputs                             (lib.rs:49)
-│   ├── load_cookies                                  (lib.rs:83)
-│   │   ├── migrate_cookies_from_file                 (lib.rs:111)
+│   ├── load_cookies                                  (lib.rs:84)
+│   │   ├── migrate_cookies_from_file                 (lib.rs:112)
 │   │   │   ├── std::fs::metadata + read_to_string (cookies.txt, ≤ 64 KiB)
 │   │   │   ├── cookie_store::file_has_real_cookies   (cookie_store.rs:107)
 │   │   │   ├── cookie_store::extract_cookie_lines    (cookie_store.rs:131)
@@ -2060,18 +2110,18 @@ lib::run                                              (lib.rs:358)
 │   ├── secret_store::get_rd_token                    (secret_store.rs:74)
 │   │   ├── keyring::Entry::new
 │   │   └── keyring::Entry::get_password
-│   └── migrate_legacy_token (only if keyring empty)  (lib.rs:176)
+│   └── migrate_legacy_token (only if keyring empty)  (lib.rs:177)
 │       ├── secret_store::is_valid_rd_token           (secret_store.rs:43)
 │       ├── secret_store::set_rd_token                (secret_store.rs:62)
 │       ├── std::fs::read_to_string + serde_json roundtrip
 │       └── std::fs::write
 ├── tauri::AppHandle::manage(PathManager)
 ├── tauri::async_runtime::block_on(
-│     SidecarManager::spawn_and_handshake )           (sidecar_manager.rs:187)
-│   ├── sidecar_command (ShellExt::sidecar("sidecar").envs(JAVDB_LOG_DIR)) (sidecar_manager.rs:161)
+│     SidecarManager::spawn_and_handshake )           (sidecar_manager.rs:205)
+│   ├── sidecar_command (ShellExt::sidecar("sidecar").envs(JAVDB_LOG_DIR)) (sidecar_manager.rs:179)
 │   ├── Command::spawn
 │   ├── tauri::async_runtime::spawn (line reader task)
-│   ├── self.request("hello", ...)                    (sidecar_manager.rs:253)
+│   ├── self.request("hello", ...)                    (sidecar_manager.rs:271)
 │   └── self.request("handshake", ...)
 ├── tauri::AppHandle::manage(SidecarManager)
 └── tauri::generate_handler![ ... 31 commands ... ]
@@ -2081,7 +2131,7 @@ lib::run                                              (lib.rs:358)
 
 ```
 commands::fetch_javdb                                 (commands.rs:36)
-└── SidecarManager::request("fetch_javdb", ...)       (sidecar_manager.rs:253)
+└── SidecarManager::request("fetch_javdb", ...)       (sidecar_manager.rs:271)
     ├── timeout_for (60 s)
     ├── Mutex::lock
     ├── CommandChild::write
@@ -2093,7 +2143,7 @@ commands::fetch_javdb                                 (commands.rs:36)
 
 ```
 commands::copy_magnet                                 (commands.rs:56)
-├── SidecarManager::request("resolve_magnet", ...)    (sidecar_manager.rs:253)
+├── SidecarManager::request("resolve_magnet", ...)    (sidecar_manager.rs:271)
 ├── ensure_ok                                         (commands.rs:274)
 └── ClipboardExt::clipboard().write_text(magnet)      (tauri-plugin-clipboard-manager)
     [ local `magnet` String drops at function end ]
@@ -2129,7 +2179,7 @@ commands::register_magnets                            (commands.rs:113)
 ### 5.7 `commands::rd_send_magnet`
 
 ```
-commands::rd_send_magnet                              (commands.rs:425)
+commands::rd_send_magnet                              (commands.rs:443)
 ├── SidecarManager::request("rd_send_magnet", ...)
 │   └── timeout_for (cache_wait ∈ [5, 300] else Err before send; budget cache_wait + 90 s)
 ├── ensure_ok (on failure)
@@ -2151,7 +2201,7 @@ commands::rd_send_magnet                              (commands.rs:425)
 ### 5.8 `commands::rd_check_pending`
 
 ```
-commands::rd_check_pending                            (commands.rs:520)
+commands::rd_check_pending                            (commands.rs:538)
 ├── SidecarManager::request("rd_check_pending", ...)
 ├── ensure_ok (on failure)
 ├── if status == "completed":
@@ -2171,7 +2221,7 @@ commands::rd_check_pending                            (commands.rs:520)
 ### 5.9 `commands::rd_save_token`
 
 ```
-commands::rd_save_token                               (commands.rs:338)
+commands::rd_save_token                               (commands.rs:356)
 ├── secret_store::is_valid_rd_token (non-empty only)  (secret_store.rs:43)
 ├── secret_store::set_rd_token                        (secret_store.rs:62)
 │   ├── keyring::Entry::new
@@ -2184,35 +2234,40 @@ commands::rd_save_token                               (commands.rs:338)
 ### 5.10 `commands::apply_legacy_import`
 
 ```
-commands::apply_legacy_import                         (commands.rs:616)
-├── validate_legacy_source                            (commands.rs:644)
+commands::apply_legacy_import                         (commands.rs:634)
+├── validate_legacy_source                            (commands.rs:662)
 ├── legacy_import::preview                            (legacy_import.rs:347)
 │   ├── read_env_for_preview → parse_env              (legacy_import.rs:312 / :94)
 │   └── read_pending_count                            (legacy_import.rs:334)
 │
-├── if env_present: import_env_block                  (commands.rs:667)
-│   ├── std::fs::read_to_string(.env)
+├── if env_present: import_env_block                  (commands.rs:691)
+│   ├── read_legacy_env                               (commands.rs:727)
+│   │   └── spawn_blocking(std::fs::read_to_string(.env))
 │   ├── legacy_import::parse_env
-│   ├── (if token): import_rd_token                   (commands.rs:720)
-│   │   ├── validate_legacy_rd_token                  (commands.rs:699)
+│   ├── (if token): import_rd_token                   (commands.rs:793)
+│   │   ├── validate_legacy_rd_token                  (commands.rs:772)
 │   │   ├── secret_store::set_rd_token
 │   │   └── SidecarManager::request("rd_set_token", ...)
 │   │       └── _err_code (on failure)
-│   └── (if non-secret patch): import_env_settings_patch (commands.rs:757)
+│   └── (if non-secret patch): import_env_settings_patch (commands.rs:830)
 │       ├── app.store(store_path)                     (tauri-plugin-store)
 │       ├── Store::get("settings")
 │       │   (fallback: serde_json::to_value(Settings::default()))
 │       ├── legacy_import::apply_settings_patch       (legacy_import.rs:401)
-│       ├── blank_rd_api_token                        (commands.rs:804)
+│       ├── blank_rd_api_token                        (commands.rs:878)
 │       ├── settings::clamp_rd_settings (typed round-trip) (settings.rs:78)
 │       ├── Store::set("settings", base)
-│       └── Store::save
+│       ├── Store::save
+│       └── (if Some(saved_settings)): push_imported_settings (commands.rs:737)
+│           ├── settings_push_body → blank_rd_api_token (commands.rs:753)
+│           ├── SidecarManager::request("update_settings", ...)
+│           └── settings_push_warning → _err_code (on non-ok) (commands.rs:759)
 │
-├── if cookies_present: import_cookies_block          (commands.rs:814)
+├── if cookies_present: import_cookies_block          (commands.rs:888)
 │   ├── std::fs::create_dir_all
 │   └── std::fs::copy(src_cookies, dst_cookies)
 │
-└── if pending_present: import_pending_block          (commands.rs:853)
+└── if pending_present: import_pending_block          (commands.rs:927)
     ├── std::fs::read_to_string
     ├── pending::load (existing)                      (pending.rs:92)
     ├── legacy_import::merge_legacy_pending           (legacy_import.rs:277)
@@ -2225,23 +2280,23 @@ commands::apply_legacy_import                         (commands.rs:616)
 ### 5.11 Cookie commands
 
 ```
-commands::migrate_cookies_now                         (commands.rs:1000)
-├── lib::migrate_cookies_from_file                    (lib.rs:111)
-├── push_cookies_to_sidecar (only if migrated)        (commands.rs:1071)
+commands::migrate_cookies_now                         (commands.rs:1074)
+├── lib::migrate_cookies_from_file                    (lib.rs:112)
+├── push_cookies_to_sidecar (only if migrated)        (commands.rs:1145)
 │   └── SidecarManager::request("set_cookies", {cookies}) + ensure_ok
-└── cookies_status_for                                (commands.rs:964)
+└── cookies_status_for                                (commands.rs:1038)
     └── cookie_store::get_cookies → cookies_status_with_keyring
 
-commands::save_cookies                                (commands.rs:1058)
-├── save_cookies_local                                (commands.rs:1038)
+commands::save_cookies                                (commands.rs:1132)
+├── save_cookies_local                                (commands.rs:1112)
 │   ├── validate_cookies_input → cookie_store::check_cookies_format
 │   ├── cookie_store::set_cookies
 │   └── std::fs::remove_file(cookies.txt) (best-effort)
 ├── push_cookies_to_sidecar
 └── cookies_status_for
 
-commands::clear_cookies                               (commands.rs:1129)
-├── clear_cookies_local                               (commands.rs:1099)
+commands::clear_cookies                               (commands.rs:1203)
+├── clear_cookies_local                               (commands.rs:1173)
 │   ├── std::fs::remove_file(cookies.txt)  (NotFound ok)
 │   └── cookie_store::delete_cookies
 ├── push_cookies_to_sidecar("")  → on Err: "cookies_cleared_sidecar_stale: <e>"
@@ -2253,19 +2308,19 @@ commands::clear_cookies                               (commands.rs:1129)
 ## 6. Notable Findings / Oddities
 
 - ~~**`forget_magnets` does not check `resp.ok`**~~ **RESOLVED M9 Phase 0-A**: `commands::forget_magnets` now calls `ensure_ok(&resp)?` ([commands.rs:150](app/src-tauri/src/commands.rs:150)).
-- **No Rust-side logging crate**. Diagnostics are `eprintln!` in the cookie/token migration paths plus the `.expect` panic; in a windowed release build stderr is invisible. Sidecar stderr is dropped on the floor. The comment at [sidecar_manager.rs:214-216](app/src-tauri/src/sidecar_manager.rs:214) acknowledges this as a deferred M6 item.
+- **No Rust-side logging crate**. Diagnostics are `eprintln!` in the cookie/token migration paths plus the `.expect` panic; in a windowed release build stderr is invisible. Sidecar stderr is dropped on the floor. The comment at [sidecar_manager.rs:232-234](app/src-tauri/src/sidecar_manager.rs:232) acknowledges this as a deferred M6 item.
 - **No graceful sidecar shutdown message**. `SidecarInner`'s `Drop` kills the child; no goodbye is sent.
 - **No sidecar respawn on crash**. Once `mark_dead` fires (timeout / EOF / protocol corruption), all subsequent `request(...)` calls error with `"sidecar is dead: <reason>"` and the user has to restart the app.
-- **Five independent `temp_dir`-style test helpers** in [lib.rs:229](app/src-tauri/src/lib.rs:229), [pending.rs:181](app/src-tauri/src/pending.rs:181), [legacy_import.rs:457](app/src-tauri/src/legacy_import.rs:457), [commands.rs:1311](app/src-tauri/src/commands.rs:1311), [commands.rs:1573](app/src-tauri/src/commands.rs:1573) (plus `Scratch` in `build_support.rs`) — duplicated rather than factored into a shared dev-dep or test util.
+- **Five independent `temp_dir`-style test helpers** in [lib.rs:230](app/src-tauri/src/lib.rs:230), [pending.rs:181](app/src-tauri/src/pending.rs:181), [legacy_import.rs:457](app/src-tauri/src/legacy_import.rs:457), [commands.rs:1474](app/src-tauri/src/commands.rs:1474), [commands.rs:1736](app/src-tauri/src/commands.rs:1736) (plus `Scratch` in `build_support.rs` and an inline tempdir in `read_legacy_env_reads_the_file_and_reports_a_missing_one`, [commands.rs:1357](app/src-tauri/src/commands.rs:1357)) — duplicated rather than factored into a shared dev-dep or test util.
 - **`STORE_FILE` is defined twice** — private `const` in [lib.rs:28](app/src-tauri/src/lib.rs:28) and private in [settings.rs:13](app/src-tauri/src/settings.rs:13). `import_env_settings_patch` uses `crate::STORE_FILE` while `settings.rs` uses its own. Mild duplication risk if one is changed and the other isn't.
 - **`COOKIES_MAX_BYTES` is defined twice** with different types — `u64` in [lib.rs:36](app/src-tauri/src/lib.rs:36), `usize` in [cookie_store.rs:32](app/src-tauri/src/cookie_store.rs:32).
 - **`pending::FILE_NAME` and `legacy_import::LEGACY_PENDING_FILE`** both hardcode `"pending_torrents.json"`. Similar duplication for `cookies.txt` (`commands::COOKIES_FILE_NAME` vs `legacy_import::LEGACY_COOKIES_FILE` vs the literal in `lib::load_cookies`).
-- ~~**Stale in-source comments about cookie storage**~~ — fixed 2026-10-16: [secret_store.rs:14-15](app/src-tauri/src/secret_store.rs:14) and the M7b banner at [commands.rs:891-894](app/src-tauri/src/commands.rs:891) now point at `cookie_store`.
+- ~~**Stale in-source comments about cookie storage**~~ — fixed 2026-10-16: [secret_store.rs:14-15](app/src-tauri/src/secret_store.rs:14) and the M7b banner at [commands.rs:965-968](app/src-tauri/src/commands.rs:965) now point at `cookie_store`.
 - **Legacy cookie import still copies to `cookies.txt`**: `import_cookies_block` writes the plaintext file and warns "restart the app", but the file is migrated into the keyring by the next `migrate_cookies_now` (frontend on-mount refresh) or handshake.
-- **`update_settings` push to sidecar is not automatic**. After `write_settings`, the frontend must also call `update_sidecar_settings` for the running daemon to pick up the change. No Rust-side hook chains these.
+- **`update_settings` push to sidecar is not automatic after `write_settings`**. The frontend must also call `update_sidecar_settings` for the running daemon to pick up the change. The one Rust-side push is `apply_legacy_import`'s `.env` settings block, which calls `update_settings` itself after saving (`push_imported_settings`).
 - **Tests at [legacy_import.rs:472](app/src-tauri/src/legacy_import.rs:472) (and :556, :658) reconstruct `"RD_API_TOKEN"`** as `["RD_API", "TOKEN"].join("_")`. Appears to be intentional — keeps the literal string out of grep-able source for auditing.
-- **`block_on` during `.setup`** ([lib.rs:380](app/src-tauri/src/lib.rs:380)). The sidecar handshake is performed on the setup thread; any slowness there (bounded by the 60 s request timeout) delays window-open. Reasonable given the rest of the app assumes the sidecar exists.
-- **`_err_code` is named with a leading underscore** despite being used ([commands.rs:262](app/src-tauri/src/commands.rs:262); called by `ensure_ok` and `import_rd_token`). Usually that convention signals "intentionally unused" — a stylistic inconsistency rather than a bug.
+- **`block_on` during `.setup`** ([lib.rs:407](app/src-tauri/src/lib.rs:407)). The sidecar handshake is performed on the setup thread; any slowness there (bounded by the 60 s request timeout) delays window-open. Reasonable given the rest of the app assumes the sidecar exists.
+- **`_err_code` is named with a leading underscore** despite being used ([commands.rs:262](app/src-tauri/src/commands.rs:262); called by `ensure_ok`, `settings_push_warning` and `import_rd_token`). Usually that convention signals "intentionally unused" — a stylistic inconsistency rather than a bug.
 - **`pending::save` calls `f.sync_data().ok()`** ([pending.rs:125](app/src-tauri/src/pending.rs:125)) — sync failures are ignored. Acceptable on Windows where the flush is best-effort, but worth noting.
 - **`copy_rd_links_bulk` takes `AppHandle` but not `SidecarManager`** — it's the only `copy_*` command that doesn't go through the sidecar at all. The link strings are already on the frontend.
 - **`rd_has_token` is async but does no awaiting**. Required by Tauri's command macro when `State<'_, _>` is involved — but this one doesn't even take state. The async signature is gratuitous; sync `pub fn rd_has_token() -> Result<RdHasTokenResult, String>` would work.

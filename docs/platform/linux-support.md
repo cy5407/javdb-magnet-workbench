@@ -121,12 +121,12 @@ python -m PyInstaller --onefile --name sidecar-x86_64-unknown-linux-gnu \
 
 `app_logging.py:36-51` 的候選目錄順序是
 `$JAVDB_LOG_DIR` → `%LOCALAPPDATA%/JavDBMagnet/logs` → console-only。
-而 `app/src-tauri/src/sidecar_manager.rs:154-159` 的 spawn **沒有 `.env(...)`**，
+而 `app/src-tauri/src/sidecar_manager.rs:172-177` 的 spawn **沒有 `.env(...)`**，
 全 repo 亦無任何 `.rs` 提及 `JAVDB_LOG_DIR`。
 
 Windows 上靠繼承的 `%LOCALAPPDATA%` 恰好等於 `PathManager.log_dir`，所以「剛好會動」。
 Linux 上兩個候選都不存在 → logging 降級 console-only；而
-`sidecar_manager.rs:176-180` 又把 sidecar 的 stderr **直接丟棄**。
+`sidecar_manager.rs:194-198` 又把 sidecar 的 stderr **直接丟棄**。
 
 **後果**：Linux 上 `debug.log` 與 `rd_outcomes.jsonl` 都不會產生，
 且使用者看不到任何錯誤——診斷能力歸零。
@@ -150,7 +150,7 @@ debug.log  rd_outcomes.jsonl
 
 ## 4. 「打開資料夾」只實作 Windows（功能退化）
 
-`app/src-tauri/src/commands.rs:1211-1235` 的 `open_in_explorer` 只有
+`app/src-tauri/src/commands.rs:1285-1309` 的 `open_in_explorer` 只有
 `#[cfg(target_os = "windows")]` 分支呼叫 `explorer.exe`，其他平台回
 `open_in_explorer not implemented for this OS`。
 

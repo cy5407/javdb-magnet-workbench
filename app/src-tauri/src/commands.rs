@@ -309,6 +309,20 @@ pub async fn rd_has_token() -> Result<RdHasTokenResult, String> {
     Ok(RdHasTokenResult { present })
 }
 
+/// Gate a "test connection" candidate before it reaches the sidecar. Same
+/// format rule as every credential-store write path (F-04): a value that
+/// cannot be a token would otherwise go into an HTTP header and come back
+/// as an opaque internal error instead of a format message.
+fn check_candidate_token(token: &str) -> Result<(), String> {
+    if token.is_empty() {
+        return Err("rd_no_token".to_string());
+    }
+    if !secret_store::is_valid_rd_token(token) {
+        return Err(secret_store::RD_TOKEN_FORMAT_ERR.to_string());
+    }
+    Ok(())
+}
+
 /// Validate a candidate token without persisting it. Used by the settings
 /// dialog's "test connection" affordance.
 #[tauri::command]
@@ -316,9 +330,13 @@ pub async fn rd_test_token(
     sidecar: State<'_, SidecarManager>,
     token: String,
 ) -> Result<RdUserInfo, String> {
-    if token.is_empty() {
-        return Err("rd_no_token".to_string());
-    }
+    rd_test_token_with(&sidecar, token).await
+}
+
+/// Body of [`rd_test_token`], taking the manager directly so tests can drive
+/// it with `SidecarManager::dead_for_tests`.
+async fn rd_test_token_with(sidecar: &SidecarManager, token: String) -> Result<RdUserInfo, String> {
+    check_candidate_token(&token)?;
     let resp = sidecar
         .request("rd_user", json!({ "token": token }))
         .await?;
@@ -664,6 +682,12 @@ fn validate_legacy_source(source_dir: &str, data_dir: &Path) -> Result<PathBuf, 
 /// Read `.env` from `src`, parse it, then route the optional RD token to
 /// the credential store / sidecar and the non-secret settings patch to
 /// the tauri-plugin-store. All failures are appended to `report.warnings`.
+///
+/// `deny(unused_variables)`: this body needs an `AppHandle`, so no unit test
+/// reaches it. Dropping the `push_imported_settings` call leaves
+/// `saved_settings` unused, which this turns into a build error instead of a
+/// silently stale sidecar.
+#[deny(unused_variables)]
 async fn import_env_block(
     app: &AppHandle,
     data_dir: &Path,
@@ -671,7 +695,7 @@ async fn import_env_block(
     src: &Path,
     report: &mut LegacyImportReport,
 ) {
-    let raw = match std::fs::read_to_string(src.join(legacy_import::LEGACY_ENV_FILE)) {
+    let raw = match read_legacy_env(src).await {
         Ok(s) => s,
         Err(e) => {
             report.warnings.push(format!("read .env failed: {e}"));
@@ -687,7 +711,56 @@ async fn import_env_block(
         import_rd_token(sidecar, src, token, report).await;
     }
     if !parsed.settings_patch.is_empty() {
-        import_env_settings_patch(app, data_dir, src, &parsed.settings_patch, report);
+        // Push what was saved to the running sidecar too; otherwise its
+        // in-memory settings stay stale until the next restart.
+        if let Some(saved_settings) =
+            import_env_settings_patch(app, data_dir, src, &parsed.settings_patch, report)
+        {
+            push_imported_settings(sidecar, saved_settings, report).await;
+        }
+    }
+}
+
+/// Read `<src>/.env` off the async runtime: a blocking read inside an async
+/// command would stall a worker thread for as long as the (user-chosen,
+/// possibly network) path takes.
+async fn read_legacy_env(src: &Path) -> Result<String, String> {
+    let env_path = src.join(legacy_import::LEGACY_ENV_FILE);
+    tauri::async_runtime::spawn_blocking(move || std::fs::read_to_string(env_path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Send imported settings to the running sidecar; a failed push becomes an
+/// import warning rather than aborting the rest of the import.
+async fn push_imported_settings(
+    sidecar: &SidecarManager,
+    saved_settings: Value,
+    report: &mut LegacyImportReport,
+) {
+    let result = sidecar
+        .request("update_settings", settings_push_body(saved_settings))
+        .await;
+    if let Some(w) = settings_push_warning(result) {
+        report.warnings.push(w);
+    }
+}
+
+/// Body for pushing imported settings to the running sidecar. Blanks
+/// `rd.api_token` again, as `update_sidecar_settings` does, so this path
+/// cannot ship the token even if the importer's own sweep goes away.
+fn settings_push_body(mut settings: Value) -> Value {
+    blank_rd_api_token(&mut settings);
+    json!({ "settings": settings })
+}
+
+/// Map the sidecar's `update_settings` reply to an import warning, if any.
+fn settings_push_warning(result: Result<Value, String>) -> Option<String> {
+    match result {
+        Ok(resp) if resp.get("ok").and_then(Value::as_bool).unwrap_or(false) => None,
+        Ok(resp) => Some(format!("sidecar update_settings: {}", _err_code(&resp))),
+        Err(e) => Some(format!("sidecar update_settings: {e}")),
     }
 }
 
@@ -760,13 +833,13 @@ fn import_env_settings_patch(
     src: &Path,
     patch: &Map<String, Value>,
     report: &mut LegacyImportReport,
-) {
+) -> Option<Value> {
     let store_path = data_dir.join(crate::STORE_FILE);
     let store = match app.store(&store_path) {
         Ok(s) => s,
         Err(e) => {
             report.warnings.push(format!("settings store: {e}"));
-            return;
+            return None;
         }
     };
     let mut base = store.get("settings").unwrap_or_else(|| {
@@ -786,22 +859,23 @@ fn import_env_settings_patch(
             base = v;
         }
     }
-    store.set("settings", base);
+    store.set("settings", base.clone());
     if let Err(e) = store.save() {
         report.warnings.push(format!("settings save: {e}"));
-        return;
+        return None;
     }
     report.env_imported = true;
     report
         .sources
         .push(format!("{}/.env (settings)", src.display()));
+    Some(base)
 }
 
 /// Force `settings.rd.api_token` to an empty string in-place, regardless
 /// of whether the field was present before. Used as a defensive sweep
 /// before we save settings.json so a future patch can never reintroduce
 /// the token into the on-disk settings.
-fn blank_rd_api_token(settings: &mut Value) {
+pub(crate) fn blank_rd_api_token(settings: &mut Value) {
     if let Some(rd) = settings.get_mut("rd").and_then(Value::as_object_mut) {
         if let Some(t) = rd.get_mut("api_token") {
             *t = Value::String(String::new());
@@ -1237,6 +1311,95 @@ fn open_in_explorer(p: &std::path::Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests_task_contracts {
     use super::*;
+
+    #[test]
+    fn check_candidate_token_rejects_before_the_sidecar_sees_it() {
+        assert_eq!(check_candidate_token(""), Err("rd_no_token".to_string()));
+        let long = "A".repeat(256);
+        for bad in ["abc-123", "abc 123", "abc\n", "ＡＢＣ123", long.as_str()] {
+            assert_eq!(
+                check_candidate_token(bad),
+                Err("rd_token_format_invalid".to_string()),
+                "for {bad:?}",
+            );
+        }
+        assert_eq!(check_candidate_token("ABC123def456"), Ok(()));
+    }
+
+    #[test]
+    fn settings_push_body_never_carries_the_rd_token() {
+        let body = settings_push_body(json!({
+            "rd": {"api_token": "LEAKABLE", "file_pick": "smart"},
+            "ui": {"theme": "dark"},
+        }));
+        assert_eq!(body["settings"]["rd"]["api_token"], json!(""));
+        assert_eq!(body["settings"]["rd"]["file_pick"], json!("smart"));
+        assert_eq!(body["settings"]["ui"]["theme"], json!("dark"));
+    }
+
+    // Drives the command body with a dead sidecar: a malformed token must be
+    // refused before any request, while a well-formed one does reach the
+    // sidecar (and fails there). Dropping the pre-check turns the first
+    // assertion into "sidecar is dead: ...".
+    #[test]
+    fn rd_test_token_refuses_malformed_token_before_any_request() {
+        let sidecar = SidecarManager::dead_for_tests("unit test");
+        let run = |token: &str| {
+            tauri::async_runtime::block_on(rd_test_token_with(&sidecar, token.to_string()))
+                .map(|_| ())
+        };
+        assert_eq!(run("abc-123"), Err("rd_token_format_invalid".to_string()));
+        assert_eq!(run(""), Err("rd_no_token".to_string()));
+        assert_eq!(run("ABC123def456"), Err("sidecar is dead: unit test".to_string()));
+    }
+
+    #[test]
+    fn read_legacy_env_reads_the_file_and_reports_a_missing_one() {
+        let dir = std::env::temp_dir().join(format!(
+            "javdbmagnet-read-env-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let env_file = dir.join(legacy_import::LEGACY_ENV_FILE);
+        std::fs::write(&env_file, "RD_FILE_PICK=smart\n").unwrap();
+
+        let got = tauri::async_runtime::block_on(read_legacy_env(&dir));
+        assert_eq!(got, Ok("RD_FILE_PICK=smart\n".to_string()));
+
+        std::fs::remove_file(&env_file).unwrap();
+        let missing = tauri::async_runtime::block_on(read_legacy_env(&dir));
+        assert!(missing.is_err(), "missing .env must be an error, got {missing:?}");
+        std::fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn push_imported_settings_reports_a_failed_push_as_a_warning() {
+        let sidecar = SidecarManager::dead_for_tests("unit test");
+        let mut report = LegacyImportReport::default();
+        tauri::async_runtime::block_on(push_imported_settings(
+            &sidecar,
+            json!({"rd": {"api_token": "", "file_pick": "smart"}}),
+            &mut report,
+        ));
+        assert_eq!(
+            report.warnings,
+            vec!["sidecar update_settings: sidecar is dead: unit test".to_string()],
+        );
+    }
+
+    #[test]
+    fn settings_push_warning_reports_only_failures() {
+        assert_eq!(settings_push_warning(Ok(json!({"ok": true}))), None);
+        assert_eq!(
+            settings_push_warning(Ok(json!({"ok": false, "error": {"code": "bad_request"}}))),
+            Some("sidecar update_settings: bad_request".to_string()),
+        );
+        assert_eq!(
+            settings_push_warning(Err("sidecar is dead".to_string())),
+            Some("sidecar update_settings: sidecar is dead".to_string()),
+        );
+    }
 
     #[test]
     fn rd_link_deserializes_completed_payload_with_error_entry() {

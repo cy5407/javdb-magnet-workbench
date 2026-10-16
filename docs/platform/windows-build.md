@@ -181,6 +181,6 @@ runner 預設不啟用 SAC。repo 目前只有 `sonarcloud.yml`，需要另外�
 
 ## 附帶
 
-Rust 端的 lib 單元測試目前共 89 個（2026-10-14 在 Windows 上 `cargo test --tests` 實測：lib 89、
-`sidecar_command` 整合測試 2，全過）。這個 gate 在 2026-08-01 之前
+Rust 端的 lib 單元測試目前共 96 個（2026-10-16 Linux 實測 lib 96、`sidecar_command` 整合測試 2，全過；
+2026-10-14 在 Windows 上 `cargo test --tests` 實測時為 lib 89，之後 PR #11 新增 7 個）。這個 gate 在 2026-08-01 之前
 一直被記載為「本機編不過、只能人工細審」，現在可用了——動 Rust 前請跑它。

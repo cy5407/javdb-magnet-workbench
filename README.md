@@ -350,7 +350,7 @@ cargo test --lib                             # Rust 單元測試
 > externalBin 檢查會擋下（keyring feature 問題已於 2026-08-01 修好）。只跑測試時用
 > `TAURI_CONFIG='{"bundle":{"externalBin":[]}}' cargo test --lib` 繞過，且需要可用的
 > D-Bus Secret Service。細節見 [`docs/platform/linux-support.md`](docs/platform/linux-support.md)；
-> lib 單元測試目前共 89 個（2026-10-14 Windows 實測 89 passed）。
+> lib 單元測試目前共 96 個（2026-10-16 Linux 實測 96 passed；2026-10-14 Windows 實測時為 89 個，之後 PR #11 新增 7 個）。
 
 ### Repo 結構
 

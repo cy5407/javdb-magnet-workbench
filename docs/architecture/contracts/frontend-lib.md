@@ -3,7 +3,7 @@
 Reference for refactoring on `codex/function-contracts-analysis`. Every exported and non-exported function in
 the Svelte+TypeScript frontend library modules is documented with its contract and call trace.
 
-Last refreshed against HEAD `9e49603` on 2026-10-16 (line numbers and `App.svelte` call sites
+Last refreshed against HEAD `7c877a8` on 2026-10-16 (line numbers and `App.svelte` call sites
 re-verified against that tree).
 
 The companion `App.svelte` (which consumes everything here) is documented separately by another
@@ -62,7 +62,7 @@ row classes), not only through `magnetUtils.ts`.
 | `rdPriority.ts` | `RD_CACHE_PREFIXES`, `hasCachePrefix`, `hasHdResolution`, `isHdRow`, `rdDateKey`, `classifyRow`, `rdBadge`, `pickRdCandidate`, `summarizeRdLikelihood` | `RdRowClass`, `RdPickTier`, `RdCandidate` |
 | `scraper.ts` | `isRateLimitError`, `randomDelayMs`, `parseUrlBatch`, `parseMagnetBatch`, `applyScrapeProgressForRun`, `scrapeBatch` | `JitterFn`, `SleepFn`, `ScrapeProgressEvent`, `ScrapeUiSnapshot`, `ScrapeOptions` |
 | `rdSender.ts` | `collectDownloadLinksFromRow`, `sortCompletedRowsByCompletionTime`, `buildRdDisplayRows`, `formatCompletedAt`, `sendBatch`, `applyRetryEventToProgressRows`, `retryPending`, `rdErrorMessage` | `RdSendOptions`, `RdSendItem`, `RdSendBatchEvent`, `RdSendBatchOptions`, `RdRetryEvent`, `RdRetryOptions` |
-| `settingsValidation.ts` | `FILE_PICK_VALUES`, `THEME_VALUES`, `SCALE_PRESETS`, `validateMinSizeMb`, `validateCacheWaitSeconds`, `validateScale`, `validateFilePick`, `validateTheme`, `validateSettingsDraft` | `FilePickValue`, `ThemeValue` |
+| `settingsValidation.ts` | `FILE_PICK_VALUES`, `THEME_VALUES`, `SCALE_PRESETS`, `MAX_MIN_SIZE_MB`, `validateMinSizeMb`, `validateCacheWaitSeconds`, `validateScale`, `validateFilePick`, `validateTheme`, `validateSettingsDraft` | `FilePickValue`, `ThemeValue` |
 | `errText.ts` | `errText` | — |
 | `flashAction.ts` | `createFlashController` | `FlashController` |
 | `types.ts` | `defaultFilterState` | `Theme`, `PathInfo`, `UiSettings`, `RdSettings`, `Settings`, `MagnetRow`, `FetchResult`, `PingResponse`, `CopyBulkResult`, `CopyRdLinksBulkResult`, `LegacyImportPreview`, `CookiesStatus`, `LegacyImportReport`, `ScrapedGroup`, `GroupPick`, `FilterState`, `SortColumn`, `SortDirection`, `RdUserInfo`, `RdLink`, `RdSendOutcome`, `RdCheckOutcome`, `PendingEntry`, `RdSendProgress` |
@@ -82,8 +82,8 @@ Only three `invoke` call sites live inside `lib/*`. Every other backend call ori
 
 Tauri maps the camelCase payload keys onto the Rust parameters `batch_id` / `handle_id` /
 `torrent_id` ([commands.rs:36](app/src-tauri/src/commands.rs:36),
-[commands.rs:425](app/src-tauri/src/commands.rs:425),
-[commands.rs:520](app/src-tauri/src/commands.rs:520)). All three wrappers are exposed as
+[commands.rs:443](app/src-tauri/src/commands.rs:443),
+[commands.rs:538](app/src-tauri/src/commands.rs:538)). All three wrappers are exposed as
 injectable seams via the `fetcher` option, so tests stub them without monkey-patching
 `@tauri-apps/api/core`.
 
@@ -1245,7 +1245,7 @@ Module-level private wrappers:
 
 **Called by**:
 - `App.svelte` `copyRdDownloads` (line 1126), `copyRdRow` (line 1146) and the per-row link list
-  in markup (line 2737).
+  in markup (line 2741).
 - `rdSender.test.ts`.
 
 ---
@@ -1298,7 +1298,7 @@ Module-level private wrappers:
 - Side effects: none (reads the host time zone). Errors: none. Async: no.
 
 **Called by**:
-- `App.svelte` progress table markup (line 2715), only for `completed` rows.
+- `App.svelte` progress table markup (line 2719), only for `completed` rows.
 - `rdSender.test.ts`.
 
 ---
@@ -1423,7 +1423,9 @@ unknown codes fall through to a generic `「（其他錯誤：${code}）」` so 
 the raw code.
 
 **Contract**:
-- Params: `code: string` — e.g. `"rd_no_token"`, `"rd_token_invalid"`, `"rd_premium_required"`,
+- Params: `code: string` — e.g. `"rd_no_token"`, `"rd_token_format_invalid"` (Rust
+  `secret_store::RD_TOKEN_FORMAT_ERR`, from `rd_save_token` / `rd_test_token`),
+  `"rd_token_invalid"`, `"rd_premium_required"`,
   `"rd_rate_limited"`, `"rd_magnet_error"`, `"rd_download_failed"`, `"rd_torrent_missing"`,
   `"rd_api_error"`, `"unknown_handle"`, `"rd_internal"`.
 - Returns: `string` — zh-Hant message.
@@ -1431,11 +1433,12 @@ the raw code.
 - Errors: none.
 - Async: no.
 
-**Known codes & messages** (verbatim, [rdSender.ts:359-382](app/src/lib/rdSender.ts:359)):
+**Known codes & messages** (verbatim, [rdSender.ts:359-384](app/src/lib/rdSender.ts:359)):
 
 | Code | Message |
 |------|---------|
 | `rd_no_token` | 尚未設定 Real-Debrid Token |
+| `rd_token_format_invalid` | Real-Debrid Token 格式無效（僅限英數且長度 ≤ 255） |
 | `rd_token_invalid` | Real-Debrid Token 無效或已過期 |
 | `rd_premium_required` | 需要 Real-Debrid Premium 帳號 |
 | `rd_rate_limited` | Real-Debrid 速率限制，請稍後再試 |
@@ -1451,7 +1454,7 @@ the raw code.
 
 **Called by**:
 - `App.svelte` lines 885, 906, 910, 924, 940 (token test / save / clear / user refresh), 1285
-  (pending-retry summary) and 2790 (progress-row error cell) — search
+  (pending-retry summary) and 2794 (progress-row error cell) — search
   [App.svelte](app/src/App.svelte) for `rdErrorMessage`.
 - `rdSender.test.ts`.
 
@@ -1461,7 +1464,7 @@ the raw code.
 
 - `RdSendOptions` [rdSender.ts:24-31](app/src/lib/rdSender.ts:24) — passed verbatim as
   `options` to `rd_send_magnet` (Rust `RdSendOptions`,
-  [commands.rs:381](app/src-tauri/src/commands.rs:381)). `code` / `size_label` are display-only
+  [commands.rs:399](app/src-tauri/src/commands.rs:399)). `code` / `size_label` are display-only
   metadata that Rust persists to `pending_torrents.json` on a pending outcome.
 - `RdSendItem` [rdSender.ts:33-39](app/src/lib/rdSender.ts:33) — one row of the batch
   (`handle_id` + display fields).
@@ -1492,16 +1495,21 @@ Module-level constants:
   [settingsValidation.ts:21-30](app/src/lib/settingsValidation.ts:21). UI dropdown options.
 - Private: `SCALE_MIN = 0.5`, `SCALE_MAX = 3` —
   [settingsValidation.ts:32-33](app/src/lib/settingsValidation.ts:32).
+- `MAX_MIN_SIZE_MB = 1_000_000` — [settingsValidation.ts:34](app/src/lib/settingsValidation.ts:34).
+  Ceiling for `rd.min_size_mb`; same value as Rust `clamp_rd_settings` and sidecar
+  `MAX_RD_MIN_SIZE_MB`. `App.svelte`'s min-size `<input>` carries the matching `max="1000000"`.
 
 ---
 
-#### `validateMinSizeMb(value: number): string | null` *(settingsValidation.ts:36)*
+#### `validateMinSizeMb(value: number): string | null` *(settingsValidation.ts:37)*
 
-**Purpose**: Non-negative integer check for `rd.min_size_mb`.
+**Purpose**: Integer check for `rd.min_size_mb` within `[0, MAX_MIN_SIZE_MB]` (1,000,000 — the
+same ceiling as Rust `clamp_rd_settings` and sidecar `MAX_RD_MIN_SIZE_MB`), so the UI reports an
+out-of-range value instead of letting the backend clamp it silently.
 
 **Contract**:
 - Params: `value: number`.
-- Returns: `null` if integer ≥ 0, else `「必須是數字」`/`「必須是整數」`/`「不能為負」`.
+- Returns: `null` if integer in `[0, 1_000_000]`, else `「必須是數字」`/`「必須是整數」`/`「不能為負」`/`「最大為 1,000,000 MB」`.
 - Side effects: none. Errors: none. Async: no.
 
 **Calls**: `Number.isFinite`, `Number.isInteger`.
@@ -1510,7 +1518,7 @@ Module-level constants:
 
 ---
 
-#### `validateCacheWaitSeconds(value: number): string | null` *(settingsValidation.ts:52)*
+#### `validateCacheWaitSeconds(value: number): string | null` *(settingsValidation.ts:54)*
 
 **Purpose**: Integer in `[5, 300]` check for `rd.cache_wait_seconds`.
 
@@ -1527,7 +1535,7 @@ timeout for `rd_send_magnet` is `cache_wait + 90s`, and Rust rejects a value out
 
 ---
 
-#### `validateScale(value: string): string | null` *(settingsValidation.ts:61)*
+#### `validateScale(value: string): string | null` *(settingsValidation.ts:63)*
 
 **Purpose**: Validate `ui.scale` — must be `"auto"` (literal) OR a decimal in `[0.5, 3.0]`.
 
@@ -1545,7 +1553,7 @@ timeout for `rd_send_magnet` is `cache_wait + 90s`, and Rust rejects a value out
 
 ---
 
-#### `validateFilePick(value: string): string | null` *(settingsValidation.ts:78)*
+#### `validateFilePick(value: string): string | null` *(settingsValidation.ts:80)*
 
 **Purpose**: Membership check against `FILE_PICK_VALUES`.
 
@@ -1558,7 +1566,7 @@ from the tuple).
 
 ---
 
-#### `validateTheme(value: string): string | null` *(settingsValidation.ts:86)*
+#### `validateTheme(value: string): string | null` *(settingsValidation.ts:88)*
 
 **Purpose**: Membership check against `THEME_VALUES`.
 
@@ -1570,7 +1578,7 @@ from the tuple).
 
 ---
 
-#### `validateSettingsDraft(draft: Settings): Record<string, string>` *(settingsValidation.ts:102)*
+#### `validateSettingsDraft(draft: Settings): Record<string, string>` *(settingsValidation.ts:104)*
 
 **Purpose**: Aggregate every per-field validator into a `field-id → error-message` map. Empty
 map means the draft is valid.

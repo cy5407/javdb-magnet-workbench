@@ -30,7 +30,7 @@
       session.headers.update(headers)
       return session, "requests"
   ```
-- 位於 `sidecar/sidecar.py:579-584`（錯誤分類邏輯）：
+- 位於 `sidecar/sidecar.py:581-586`（錯誤分類邏輯）：
   ```python
   error = result.get("error", "") or ""
   if error:

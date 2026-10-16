@@ -763,12 +763,15 @@ cmd_rd_check_pending(state, req)
 
 ```
 cmd_rd_user(state, req)
+  ├─ non-empty token override failing _is_valid_rd_token
+  │    → error code "rd_token_format_invalid"   [before any HTTP call]
   └─ _rd_client(state, token_override, deadline=monotonic()+50).user()
        └─ _request("GET", "/user") → {user: {username, type, expiration, points}}
 
 cmd_rd_set_token(state, req)
-  ├─ null / "" → clear; invalid format → bad_request "rd_token_format_invalid"
-  ├─ token changed → close + drop state.rd_session
+  ├─ null / "" → clear: _close_rd_session (drop Authorization header, close, None)
+  ├─ invalid format → bad_request "rd_token_format_invalid"
+  ├─ token changed → _close_rd_session
   └─ state.rd_token = req["token"]   [in-memory only; persistence is Rust-side]
 ```
 

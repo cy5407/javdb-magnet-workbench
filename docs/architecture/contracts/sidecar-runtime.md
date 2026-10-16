@@ -43,7 +43,10 @@ Reference for the live Python JSON-lines daemon in [`sidecar/sidecar.py`](../../
   code stay distinguishable in the log
 - `start_time` for `ping`
 - `rd_session`: lazily created shared `requests.Session` for RD calls made with the stored
-  token; closed and reset by `cmd_rd_set_token` when the token changes and by `cmd_shutdown`
+  token. Torn down by `_close_rd_session` (drops the `Authorization` header, closes, sets
+  `None`) whenever the credential it carries stops being current: `cmd_rd_set_token` on a
+  clear (`null` / `""`) or a change to a different token, `cmd_handshake` when the resulting
+  token differs from `state.rd_token`, `cmd_shutdown`, and the `finally` of `run_daemon`
 
 The sidecar persists no protocol state. The one thing it does write is the
 append-only outcome log (`rd_outcomes.jsonl`, next to `debug.log`) — a diagnostic
@@ -89,7 +92,7 @@ Produced by `_err`:
 
 ### Commands
 
-`DISPATCH` ([sidecar.py:1255](../../../sidecar/sidecar.py#L1255)) maps 16 commands:
+`DISPATCH` ([sidecar.py:1270](../../../sidecar/sidecar.py#L1270)) maps 16 commands:
 
 | `cmd` | Handler | Requires handshake | Calls external HTTP |
 |---|---|---:|---:|
@@ -209,7 +212,7 @@ Rust never sends `cancel` or `shutdown` today (`SidecarManager` only kills the c
 
 **Called by**: validation failures, command failures, and `dispatch` exception boundary.
 
-### `_magnet_dedupe_key(full: str) -> str` ([sidecar.py:311](../../../sidecar/sidecar.py#L311))
+### `_magnet_dedupe_key(full: str) -> str` ([sidecar.py:313](../../../sidecar/sidecar.py#L313))
 
 **Purpose**: Normalize magnets so equivalent BTIH links reuse one handle.
 
@@ -223,7 +226,7 @@ Rust never sends `cancel` or `shutdown` today (`SidecarManager` only kills the c
 
 **Called by**: `_intern_magnet`, `cmd_forget_magnets`.
 
-### `_intern_magnet(state: DaemonState, full: str) -> tuple[str, bool]` ([sidecar.py:348](../../../sidecar/sidecar.py#L348))
+### `_intern_magnet(state: DaemonState, full: str) -> tuple[str, bool]` ([sidecar.py:350](../../../sidecar/sidecar.py#L350))
 
 **Purpose**: Allocate or reuse a stable per-process magnet handle.
 
@@ -237,7 +240,7 @@ Rust never sends `cancel` or `shutdown` today (`SidecarManager` only kills the c
 
 **Called by**: `_process_scraped_magnets` (via `cmd_fetch_javdb`), `cmd_register_magnets`.
 
-### `_is_javdb_host(host: str) -> bool` ([sidecar.py:369](../../../sidecar/sidecar.py#L369))
+### `_is_javdb_host(host: str) -> bool` ([sidecar.py:371](../../../sidecar/sidecar.py#L371))
 
 **Purpose**: Host allowlist for `fetch_javdb` (F-01): true iff `host` (lower-cased) is `javdb.com` or ends with `.javdb.com`.
 
@@ -245,19 +248,19 @@ Rust never sends `cancel` or `shutdown` today (`SidecarManager` only kills the c
 
 **Called by**: `_validate_javdb_url`.
 
-### `_validate_batch_id(batch_id) -> tuple[str, str] | None` ([sidecar.py:494](../../../sidecar/sidecar.py#L494))
+### `_validate_batch_id(batch_id) -> tuple[str, str] | None` ([sidecar.py:496](../../../sidecar/sidecar.py#L496))
 
 **Purpose**: Return `("bad_request", "batch_id must be a non-empty bounded string")` unless `batch_id` is a non-empty `str` of at most `MAX_SCRAPE_BATCH_ID_LEN` (128) characters; `None` when valid.
 
 **Called by**: `cmd_fetch_javdb`.
 
-### `_validate_javdb_url(url) -> tuple[str, str] | None` ([sidecar.py:500](../../../sidecar/sidecar.py#L500))
+### `_validate_javdb_url(url) -> tuple[str, str] | None` ([sidecar.py:502](../../../sidecar/sidecar.py#L502))
 
 **Purpose**: URL gate for `fetch_javdb`. Errors (all `bad_request`): `url must start with https://` (non-string or not `https://`), `url is not a valid URL` (`urlparse` `ValueError`), `url host not allowed` (`_is_javdb_host` false). `None` when valid.
 
 **Called by**: `cmd_fetch_javdb`.
 
-### `_process_scraped_magnets(state, magnets_in) -> list[dict]` ([sidecar.py:520](../../../sidecar/sidecar.py#L520))
+### `_process_scraped_magnets(state, magnets_in) -> list[dict]` ([sidecar.py:522](../../../sidecar/sidecar.py#L522))
 
 **Purpose**: Bound, validate and intern the rows returned by `fetch_magnets`.
 
@@ -299,7 +302,7 @@ coexist in one send.)
 
 **Called by**: `cmd_rd_send_magnet`, `cmd_rd_check_pending`.
 
-### `_record_group_meta(state, code, rows, batch_id=None) -> None` ([sidecar.py:398](../../../sidecar/sidecar.py#L398))
+### `_record_group_meta(state, code, rows, batch_id=None) -> None` ([sidecar.py:400](../../../sidecar/sidecar.py#L400))
 
 **Purpose**: Store each fetched row's raw fields plus its 1-based rank inside that fetch.
 
@@ -323,7 +326,7 @@ written. See [the outcome-log spec §2](../../specs/2026-08-01-rd-outcome-log.md
 
 **Called by**: `cmd_fetch_javdb`.
 
-### `_begin_scrape_meta_batch(state, batch_id) -> None` ([sidecar.py:471](../../../sidecar/sidecar.py#L471))
+### `_begin_scrape_meta_batch(state, batch_id) -> None` ([sidecar.py:473](../../../sidecar/sidecar.py#L473))
 
 **Purpose**: Reconcile sidecar metadata when the frontend replaces all visible web groups.
 
@@ -336,14 +339,14 @@ written. See [the outcome-log spec §2](../../specs/2026-08-01-rd-outcome-log.md
 
 **Called by**: `cmd_fetch_javdb`.
 
-### `_parse_decimal_int(value) -> int | None` ([sidecar.py:843](../../../sidecar/sidecar.py#L843))
+### `_parse_decimal_int(value) -> int | None` ([sidecar.py:845](../../../sidecar/sidecar.py#L845))
 
 **Purpose**: Parse JSON integer or strict ASCII decimal-string settings (optional single minus,
 no whitespace) without throwing. Booleans, malformed text, and Unicode-only digits return `None`.
 
 **Called by**: `_normalize_runtime_settings`, `_coerce_int_setting`.
 
-### `_normalize_runtime_settings(settings) -> dict` ([sidecar.py:862](../../../sidecar/sidecar.py#L862))
+### `_normalize_runtime_settings(settings) -> dict` ([sidecar.py:864](../../../sidecar/sidecar.py#L864))
 
 **Purpose**: Copy persisted settings and enforce the sidecar's RD numeric bounds.
 
@@ -388,13 +391,16 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
 - Returns: success envelope (plus `warnings` only when the token was dropped).
 - Side effects: mutates `state.cookies`, `state.rd_token`, `state.settings`, `state.paths`, `state.handshake_done`.
   `paths.log_dir` is stored but not re-applied to logging (Rust passes it as `JAVDB_LOG_DIR` at spawn).
+  When the resulting token differs from `state.rd_token`, closes the pooled `state.rd_session`
+  first (`_close_rd_session`), so a re-handshake never reuses the old credential's pool; the
+  same token keeps the pool.
 - Errors: none raised.
 
-**Calls**: `parse_cookie_string`, `_is_valid_rd_token`, `_normalize_runtime_settings`, `_ok`.
+**Calls**: `parse_cookie_string`, `_is_valid_rd_token`, `_close_rd_session`, `_normalize_runtime_settings`, `_ok`.
 
 **Called by**: Rust `SidecarManager::spawn_and_handshake` immediately after `hello`.
 
-### `cmd_ping(state: DaemonState, req: dict) -> dict` ([sidecar.py:303](../../../sidecar/sidecar.py#L303))
+### `cmd_ping(state: DaemonState, req: dict) -> dict` ([sidecar.py:305](../../../sidecar/sidecar.py#L305))
 
 **Purpose**: Liveness and uptime check.
 
@@ -408,7 +414,7 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
 
 **Called by**: Rust `commands::sidecar_ping`.
 
-### `cmd_fetch_javdb(state: DaemonState, req: dict) -> dict` ([sidecar.py:548](../../../sidecar/sidecar.py#L548))
+### `cmd_fetch_javdb(state: DaemonState, req: dict) -> dict` ([sidecar.py:550](../../../sidecar/sidecar.py#L550))
 
 **Purpose**: Scrape one JavDB URL and intern returned magnets.
 
@@ -430,7 +436,7 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
 
 **Called by**: Rust `commands::fetch_javdb`.
 
-### `cmd_resolve_magnet(state: DaemonState, req: dict) -> dict` ([sidecar.py:608](../../../sidecar/sidecar.py#L608))
+### `cmd_resolve_magnet(state: DaemonState, req: dict) -> dict` ([sidecar.py:610](../../../sidecar/sidecar.py#L610))
 
 **Purpose**: Convert one handle back to the full magnet for clipboard/RD use.
 
@@ -444,7 +450,7 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
 
 **Called by**: Rust `commands::copy_magnet`.
 
-### `cmd_resolve_magnets(state: DaemonState, req: dict) -> dict` ([sidecar.py:619](../../../sidecar/sidecar.py#L619))
+### `cmd_resolve_magnets(state: DaemonState, req: dict) -> dict` ([sidecar.py:621](../../../sidecar/sidecar.py#L621))
 
 **Purpose**: Batch-resolve handles for bulk clipboard writes.
 
@@ -458,7 +464,7 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
 
 **Called by**: Rust `commands::copy_magnets_bulk`.
 
-### `cmd_forget_magnets(state: DaemonState, req: dict) -> dict` ([sidecar.py:637](../../../sidecar/sidecar.py#L637))
+### `cmd_forget_magnets(state: DaemonState, req: dict) -> dict` ([sidecar.py:639](../../../sidecar/sidecar.py#L639))
 
 **Purpose**: Clear all or specified in-memory magnet handles.
 
@@ -472,7 +478,7 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
 
 **Called by**: Rust `commands::forget_magnets`.
 
-### `cmd_register_magnets(state: DaemonState, req: dict) -> dict` ([sidecar.py:671](../../../sidecar/sidecar.py#L671))
+### `cmd_register_magnets(state: DaemonState, req: dict) -> dict` ([sidecar.py:673](../../../sidecar/sidecar.py#L673))
 
 **Purpose**: Register user-pasted magnets without scraping JavDB.
 
@@ -486,7 +492,7 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
 
 **Called by**: Rust `commands::register_magnets`.
 
-### `cmd_update_settings(state: DaemonState, req: dict) -> dict` ([sidecar.py:738](../../../sidecar/sidecar.py#L738))
+### `cmd_update_settings(state: DaemonState, req: dict) -> dict` ([sidecar.py:740](../../../sidecar/sidecar.py#L740))
 
 **Purpose**: Refresh in-memory settings after Rust persists settings.
 
@@ -501,7 +507,7 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
 
 **Called by**: Rust `commands::update_sidecar_settings`.
 
-### `cmd_set_cookies(state: DaemonState, req: dict) -> dict` ([sidecar.py:747](../../../sidecar/sidecar.py#L747))
+### `cmd_set_cookies(state: DaemonState, req: dict) -> dict` ([sidecar.py:749](../../../sidecar/sidecar.py#L749))
 
 **Purpose**: Replace `state.cookies` at runtime so refreshing an expired `cf_clearance` does not require restarting the app.
 
@@ -517,7 +523,7 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
 
 **Called by**: Rust `commands::push_cookies_to_sidecar`, used by `save_cookies`, `migrate_cookies_now`, and `clear_cookies` (sends `""`).
 
-### `cmd_cancel(state: DaemonState, req: dict) -> dict` ([sidecar.py:778](../../../sidecar/sidecar.py#L778))
+### `cmd_cancel(state: DaemonState, req: dict) -> dict` ([sidecar.py:780](../../../sidecar/sidecar.py#L780))
 
 **Purpose**: Protocol-level acknowledgement for future cancellation support.
 
@@ -531,23 +537,23 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
 
 **Important behavior**: It does not interrupt in-flight JavDB/RD work; the daemon is synchronous.
 
-### `cmd_shutdown(state: DaemonState, req: dict) -> dict` ([sidecar.py:1245](../../../sidecar/sidecar.py#L1245))
+### `cmd_shutdown(state: DaemonState, req: dict) -> dict` ([sidecar.py:1265](../../../sidecar/sidecar.py#L1265))
 
 **Purpose**: Release the shared RD session before the loop exits.
 
 **Contract**:
 - Returns: success.
-- Side effects: closes `state.rd_session` (errors swallowed) and sets it to `None`. The loop exit itself happens in `run_daemon`, which checks `cmd == "shutdown"` before dispatch and returns after emitting the response.
+- Side effects: `_close_rd_session(state)` — drops the session's `Authorization` header, closes `state.rd_session` (errors swallowed) and sets it to `None`. The loop exit itself happens in `run_daemon`, which checks `cmd == "shutdown"` before dispatch and returns after emitting the response.
 
-**Calls**: `_ok`.
+**Calls**: `_close_rd_session`, `_ok`.
 
 ---
 
 ## 5. Real-Debrid Helpers And Commands
 
-RD error codes (constants at [sidecar.py:800-809](../../../sidecar/sidecar.py#L800)): `rd_token_invalid`, `rd_premium_required`, `rd_rate_limited`, `rd_api_error`, `rd_no_token` (message `RD token not configured`), `rd_magnet_error`, `rd_download_failed`, `rd_internal`. `rd_no_token` and `rd_internal` are emitted directly by handlers; the rest come from `_classify_rd_error`.
+RD error codes (constants at [sidecar.py:802-811](../../../sidecar/sidecar.py#L802)): `rd_token_invalid`, `rd_premium_required`, `rd_rate_limited`, `rd_api_error`, `rd_no_token` (message `RD token not configured`), `rd_magnet_error`, `rd_download_failed`, `rd_internal`. `rd_no_token` and `rd_internal` are emitted directly by handlers; the rest come from `_classify_rd_error`. `cmd_rd_user` additionally emits the literal code `rd_token_format_invalid` (no constant; same string as Rust `secret_store::RD_TOKEN_FORMAT_ERR`) for a malformed `token` override.
 
-### `_classify_rd_error(message: str) -> str` ([sidecar.py:812](../../../sidecar/sidecar.py#L812))
+### `_classify_rd_error(message: str) -> str` ([sidecar.py:814](../../../sidecar/sidecar.py#L814))
 
 **Purpose**: Map `RealDebridError` text into stable frontend-localizable codes.
 
@@ -559,13 +565,13 @@ RD error codes (constants at [sidecar.py:800-809](../../../sidecar/sidecar.py#L8
 
 **Called by**: `cmd_rd_user`, `cmd_rd_send_magnet`, `cmd_rd_check_pending`.
 
-### `_rd_settings(state: DaemonState) -> dict` ([sidecar.py:828](../../../sidecar/sidecar.py#L828))
+### `_rd_settings(state: DaemonState) -> dict` ([sidecar.py:830](../../../sidecar/sidecar.py#L830))
 
 **Purpose**: Return `state.settings["rd"]` when it is a dict, else `{}` — so a truthy non-dict `rd` cannot turn every RD command into an opaque `internal` envelope.
 
 **Called by**: `_rd_client`, `_resolve_strategy`, `_resolve_int_setting`.
 
-### `_rd_client(state: DaemonState, token_override: str | None = None, min_size_mb: int | None = None, deadline: float | None = None)` ([sidecar.py:897](../../../sidecar/sidecar.py#L897))
+### `_rd_client(state: DaemonState, token_override: str | None = None, min_size_mb: int | None = None, deadline: float | None = None)` ([sidecar.py:899](../../../sidecar/sidecar.py#L899))
 
 **Purpose**: Build a `RealDebrid` client from state or a token override.
 
@@ -579,7 +585,21 @@ RD error codes (constants at [sidecar.py:800-809](../../../sidecar/sidecar.py#L8
 
 **Called by**: `cmd_rd_user`, `cmd_rd_send_magnet`, `cmd_rd_check_pending`.
 
-### `_resolve_strategy(state: DaemonState, override: str | None) -> str` ([sidecar.py:935](../../../sidecar/sidecar.py#L935))
+### `_close_rd_session(state: DaemonState) -> None` ([sidecar.py:1252](../../../sidecar/sidecar.py#L1252))
+
+**Purpose**: Tear down the pooled RD session so neither its `Authorization` header nor its keep-alive sockets outlive the credential they were built for.
+
+**Contract**:
+- Params: daemon `state` (read via `getattr(state, "rd_session", None)`, so a partial test state is fine).
+- Returns: `None`.
+- Side effects: when a session exists — pops `Authorization` from `session.headers` (if it supports `pop`), calls `session.close()`, then sets `state.rd_session = None`. No-op when there is none.
+- Errors: exceptions from the header pop / `close()` are swallowed; `rd_session` is reset regardless.
+
+**Calls**: `session.headers.pop`, `session.close`.
+
+**Called by**: `cmd_handshake` (token changed), `cmd_rd_set_token` (clear, or token changed), `cmd_shutdown`, `run_daemon` (`finally`).
+
+### `_resolve_strategy(state: DaemonState, override: str | None) -> str` ([sidecar.py:937](../../../sidecar/sidecar.py#L937))
 
 **Purpose**: Resolve RD file-pick strategy.
 
@@ -591,13 +611,13 @@ RD error codes (constants at [sidecar.py:800-809](../../../sidecar/sidecar.py#L8
 
 **Called by**: `cmd_rd_send_magnet`, `cmd_rd_check_pending`.
 
-### `_coerce_int_setting(value, *, min_value: int) -> int | None` ([sidecar.py:943](../../../sidecar/sidecar.py#L943))
+### `_coerce_int_setting(value, *, min_value: int) -> int | None` ([sidecar.py:945](../../../sidecar/sidecar.py#L945))
 
 **Purpose**: `_parse_decimal_int(value)` if it is `>= min_value`, else `None`.
 
 **Called by**: `_rd_client`, `_resolve_int_setting`.
 
-### `_resolve_int_setting(state: DaemonState, key: str, override, default: int, *, min_value: int = 1) -> int` ([sidecar.py:948](../../../sidecar/sidecar.py#L948))
+### `_resolve_int_setting(state: DaemonState, key: str, override, default: int, *, min_value: int = 1) -> int` ([sidecar.py:950](../../../sidecar/sidecar.py#L950))
 
 **Purpose**: Resolve integer settings from request override, then `settings.rd[key]`, then default.
 
@@ -609,28 +629,28 @@ RD error codes (constants at [sidecar.py:800-809](../../../sidecar/sidecar.py#L8
 
 **Called by**: `cmd_rd_send_magnet` (`cache_wait_seconds` with `min_value=1`, `min_size_mb` with `min_value=0`).
 
-### `cmd_rd_user(state: DaemonState, req: dict) -> dict` ([sidecar.py:967](../../../sidecar/sidecar.py#L967))
+### `cmd_rd_user(state: DaemonState, req: dict) -> dict` ([sidecar.py:968](../../../sidecar/sidecar.py#L968))
 
 **Purpose**: Validate a candidate or stored RD token and return account metadata.
 
 **Contract**:
 - Params: optional `token` string (non-string → `bad_request`); an empty override falls back to the stored token.
-- Preconditions: handshake done (`bad_request` otherwise); override or stored token present (`rd_no_token` otherwise).
+- Preconditions: handshake done (`bad_request` otherwise); a non-empty override must pass `_is_valid_rd_token` (error **code** `rd_token_format_invalid`, message the same, returned before any HTTP call — an invalid header value would otherwise surface as an opaque `rd_internal`); override or stored token present (`rd_no_token` otherwise).
 - Returns: success with `user: {username, type, expiration, points}`; or stable RD error.
 - Side effects: performs RD `/user` HTTP request with a `time.monotonic() + 50.0` deadline; closes the client in `finally`.
-- Errors: catches `RealDebridError` (classified) and generic exceptions (`rd_internal`, `<Type>: <redacted>`).
+- Errors: `rd_token_format_invalid` as above. Note `cmd_rd_set_token` reports the same condition as code `bad_request` with message `rd_token_format_invalid`. Otherwise catches `RealDebridError` (classified) and generic exceptions (`rd_internal`, `<Type>: <redacted>`).
 
-**Calls**: `_rd_client`, `RealDebrid.user`, `RealDebrid.close`, `_classify_rd_error`, `_ok`, `_err`.
+**Calls**: `_is_valid_rd_token`, `_rd_client`, `RealDebrid.user`, `RealDebrid.close`, `_classify_rd_error`, `_ok`, `_err`.
 
 **Called by**: Rust `commands::rd_test_token` (sends `token`), `commands::rd_check_user` (no body).
 
-### `_is_valid_rd_token(token: str) -> bool` ([sidecar.py:1005](../../../sidecar/sidecar.py#L1005))
+### `_is_valid_rd_token(token: str) -> bool` ([sidecar.py:1012](../../../sidecar/sidecar.py#L1012))
 
 **Purpose**: Token shape rule (F-04): `0 < len <= 255` and every char ASCII alphanumeric. **KEEP IN SYNC** with Rust `secret_store::is_valid_rd_token` — both sides must accept exactly the same strings.
 
-**Called by**: `cmd_handshake`, `cmd_rd_set_token`.
+**Called by**: `cmd_handshake`, `cmd_rd_user`, `cmd_rd_set_token`.
 
-### `cmd_rd_set_token(state: DaemonState, req: dict) -> dict` ([sidecar.py:1026](../../../sidecar/sidecar.py#L1026))
+### `cmd_rd_set_token(state: DaemonState, req: dict) -> dict` ([sidecar.py:1033](../../../sidecar/sidecar.py#L1033))
 
 **Purpose**: Update the in-memory RD token after Rust saves or clears it.
 
@@ -638,14 +658,14 @@ RD error codes (constants at [sidecar.py:800-809](../../../sidecar/sidecar.py#L8
 - **Requires handshake** (F-17): `bad_request` (`handshake required before rd_set_token`) before one is established.
 - Params: `token` string, or `null` / `""` to clear.
 - Returns: success with `set: bool` (`false` on clear).
-- Side effects: mutates `state.rd_token`; when the token changes, closes and drops `state.rd_session` so the next RD call builds a session with the new header.
-- Errors: `bad_request` with message `token must be a string` for non-string/non-null; `bad_request` with message `rd_token_format_invalid` when `_is_valid_rd_token` fails.
+- Side effects: mutates `state.rd_token`. On a clear (`null` or `""`), and on a change to a different token, calls `_close_rd_session` (drops the `Authorization` header, closes, sets `None`), so neither the header nor keep-alive sockets outlive the old credential and the next RD call builds a session with the new header. Setting the same token keeps the pool.
+- Errors: `bad_request` with message `token must be a string` for non-string/non-null; `bad_request` with message `rd_token_format_invalid` when `_is_valid_rd_token` fails (state untouched).
 
-**Calls**: `_is_valid_rd_token`, `_ok`, `_err`.
+**Calls**: `_is_valid_rd_token`, `_close_rd_session`, `_ok`, `_err`.
 
-**Called by**: Rust `commands::rd_save_token`, `commands::rd_clear_token`, and the legacy-import `import_rd_token` path.
+**Called by**: Rust `commands::rd_save_token`, `commands::rd_clear_token`, and `commands::import_rd_token` (`apply_legacy_import`'s `.env` token step).
 
-### `cmd_rd_send_magnet(state: DaemonState, req: dict) -> dict` ([sidecar.py:1056](../../../sidecar/sidecar.py#L1056))
+### `cmd_rd_send_magnet(state: DaemonState, req: dict) -> dict` ([sidecar.py:1063](../../../sidecar/sidecar.py#L1063))
 
 **Purpose**: Add one known magnet handle to RD and attempt file selection/cache wait.
 
@@ -663,7 +683,7 @@ RD error codes (constants at [sidecar.py:800-809](../../../sidecar/sidecar.py#L8
 
 **Called by**: Rust `commands::rd_send_magnet` (which persists the pending entry via `pending::add`).
 
-### `cmd_rd_check_pending(state: DaemonState, req: dict) -> dict` ([sidecar.py:1173](../../../sidecar/sidecar.py#L1173))
+### `cmd_rd_check_pending(state: DaemonState, req: dict) -> dict` ([sidecar.py:1180](../../../sidecar/sidecar.py#L1180))
 
 **Purpose**: Poll one saved RD torrent id.
 
@@ -682,7 +702,7 @@ RD error codes (constants at [sidecar.py:800-809](../../../sidecar/sidecar.py#L8
 
 ## 6. Dispatch And Loop
 
-### `dispatch(state: DaemonState, req: dict) -> dict` ([sidecar.py:1275](../../../sidecar/sidecar.py#L1275))
+### `dispatch(state: DaemonState, req: dict) -> dict` ([sidecar.py:1290](../../../sidecar/sidecar.py#L1290))
 
 **Purpose**: Route one parsed request to a handler.
 
@@ -696,7 +716,7 @@ RD error codes (constants at [sidecar.py:800-809](../../../sidecar/sidecar.py#L8
 
 **Called by**: `run_daemon`.
 
-### `_emit(stdout: IO[str], obj: dict) -> None` ([sidecar.py:1295](../../../sidecar/sidecar.py#L1295))
+### `_emit(stdout: IO[str], obj: dict) -> None` ([sidecar.py:1310](../../../sidecar/sidecar.py#L1310))
 
 **Purpose**: Serialize and flush one response line.
 
@@ -710,7 +730,7 @@ RD error codes (constants at [sidecar.py:800-809](../../../sidecar/sidecar.py#L8
 
 **Called by**: `run_daemon`.
 
-### `run_daemon(stdin: IO[str], stdout: IO[str], state: DaemonState | None = None) -> None` ([sidecar.py:1306](../../../sidecar/sidecar.py#L1306))
+### `run_daemon(stdin: IO[str], stdout: IO[str], state: DaemonState | None = None) -> None` ([sidecar.py:1321](../../../sidecar/sidecar.py#L1321))
 
 **Purpose**: Main JSON-lines read/dispatch/write loop.
 
@@ -718,13 +738,17 @@ RD error codes (constants at [sidecar.py:800-809](../../../sidecar/sidecar.py#L8
 - Params: text input/output streams; optional injected state for tests.
 - Returns: `None` after the loop exits cleanly — either on stdin EOF or after acknowledging `shutdown`. The CLI entry maps this to exit code 0; there is no other terminal state.
 - Side effects: reads stdin forever, writes stdout responses, mutates daemon state through handlers.
+  On any exit from the loop (EOF, `shutdown`, or a propagating error) a `finally` runs
+  `_close_rd_session(state)`. Rust normally ends the sidecar with `child.kill()`
+  (`sidecar_manager.rs`), which skips this; it matters when stdin closes because the parent
+  died without killing the child.
 - Errors: blank lines are skipped; invalid JSON (`invalid JSON line`) and non-object requests (`request must be a JSON object`) become `bad_request` envelopes with `request_id: null`; stream I/O errors may propagate.
 
-**Calls**: `DaemonState`, `json.loads`, `dispatch`, `_emit`.
+**Calls**: `DaemonState`, `json.loads`, `dispatch`, `_emit`, `_close_rd_session`.
 
 **Called by**: `main`.
 
-### `main(argv: list[str]) -> int` ([sidecar.py:1356](../../../sidecar/sidecar.py#L1356))
+### `main(argv: list[str]) -> int` ([sidecar.py:1374](../../../sidecar/sidecar.py#L1374))
 
 **Purpose**: CLI entry; parse flags, initialize logging, run daemon.
 

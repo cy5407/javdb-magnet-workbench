@@ -1,13 +1,13 @@
 # `app/src/App.svelte` — Function & State Contract Reference
 
 **Source**: [`app/src/App.svelte`](../../../app/src/App.svelte) (3422 lines, single-file Svelte 5 component)
-**Last refreshed**: against HEAD `9e49603` on 2026-10-16 (originally written on `codex/function-contracts-analysis` against a 2177-line revision).
+**Last refreshed**: against HEAD `7c877a8` on 2026-10-16 (originally written on `codex/function-contracts-analysis` against a 2177-line revision).
 
 The file is organized as:
 
-- `<script lang="ts">` — lines [1–1665](../../../app/src/App.svelte#L1)
-- `<main>` markup — lines [1667–2869](../../../app/src/App.svelte#L1667)
-- `<style>` — lines [2871–3422](../../../app/src/App.svelte#L2871)
+- `<script lang="ts">` — lines [1–1668](../../../app/src/App.svelte#L1)
+- `<main>` markup — lines [1670–2873](../../../app/src/App.svelte#L1670)
+- `<style>` — lines [2875–3426](../../../app/src/App.svelte#L2875)
 
 Surface at a glance: 65 top-level functions (+ the `onMount` callback), 56 `$state` vars, 27
 `$derived` (5 of them `$derived.by`), 36 `invoke()` call sites reaching 28 distinct Rust
@@ -75,10 +75,10 @@ commands.
 | `create_cookies_template` | `createCookiesTemplate` | [1484](../../../app/src/App.svelte#L1484) |
 | `update_sidecar_settings` | `saveSettings` | [1553](../../../app/src/App.svelte#L1553) |
 | `apply_legacy_import` | `applyLegacyImportConfirmed` | [1591](../../../app/src/App.svelte#L1591) |
-| `pending_remove` | `removePending` | [1622](../../../app/src/App.svelte#L1622) |
-| `pending_clear` | `clearAllPending` | [1637](../../../app/src/App.svelte#L1637) |
+| `pending_remove` | `removePending` | [1625](../../../app/src/App.svelte#L1625) |
+| `pending_clear` | `clearAllPending` | [1640](../../../app/src/App.svelte#L1640) |
 
-Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch` (`fetch_javdb`, [scraper.ts:116](../../../app/src/lib/scraper.ts#L116)), `sendBatch` (`rd_send_magnet`, [rdSender.ts:137](../../../app/src/lib/rdSender.ts#L137)) and `retryPending` (`rd_check_pending`, [rdSender.ts:143](../../../app/src/lib/rdSender.ts#L143)) each issue their own per-item invokes. They are documented in `frontend-lib.md`; from App.svelte's perspective they are a single async call with a progress callback. Together the 28 direct + 3 indirect commands are exactly the 31 registered in `generate_handler!` ([lib.rs:394–426](../../../app/src-tauri/src/lib.rs#L394)).
+Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch` (`fetch_javdb`, [scraper.ts:116](../../../app/src/lib/scraper.ts#L116)), `sendBatch` (`rd_send_magnet`, [rdSender.ts:137](../../../app/src/lib/rdSender.ts#L137)) and `retryPending` (`rd_check_pending`, [rdSender.ts:143](../../../app/src/lib/rdSender.ts#L143)) each issue their own per-item invokes. They are documented in `frontend-lib.md`; from App.svelte's perspective they are a single async call with a progress callback. Together the 28 direct + 3 indirect commands are exactly the 31 registered in `generate_handler!` ([lib.rs:421–453](../../../app/src-tauri/src/lib.rs#L421)).
 
 ### 1.3 Event subscription surface
 
@@ -110,11 +110,11 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch` (`f
 | `rdSendTriage` (`$derived.by`) | `groups`, `selectedHandles`（經 `buildSelectedSendItems`）, `rowClassByHandle` — 送出前確認面板與 `confirmSend` 的唯一資料來源 | [849](../../../app/src/App.svelte#L849) |
 | `settingsErrors` | `settingsDraft` | [1505](../../../app/src/App.svelte#L1505) |
 | `settingsValid` | `settingsErrors` | [1508](../../../app/src/App.svelte#L1508) |
-| `rdCompletedCount` | `rdSendProgress[].status` | [1646](../../../app/src/App.svelte#L1646) |
-| `rdPendingCount` | `rdSendProgress[].status` | [1649](../../../app/src/App.svelte#L1649) |
-| `rdErrorCount` | `rdSendProgress[].status` | [1652](../../../app/src/App.svelte#L1652) |
-| `rdDownloadLinkCount` | `rdSendProgress[].status`, `rdSendProgress[].links` | [1655](../../../app/src/App.svelte#L1655) |
-| `rdDisplayRows` | `rdSendProgress` via `buildRdDisplayRows` (display-only order; `rdSendProgress` itself is never reordered) | [1664](../../../app/src/App.svelte#L1664) |
+| `rdCompletedCount` | `rdSendProgress[].status` | [1649](../../../app/src/App.svelte#L1649) |
+| `rdPendingCount` | `rdSendProgress[].status` | [1652](../../../app/src/App.svelte#L1652) |
+| `rdErrorCount` | `rdSendProgress[].status` | [1655](../../../app/src/App.svelte#L1655) |
+| `rdDownloadLinkCount` | `rdSendProgress[].status`, `rdSendProgress[].links` | [1658](../../../app/src/App.svelte#L1658) |
+| `rdDisplayRows` | `rdSendProgress` via `buildRdDisplayRows` (display-only order; `rdSendProgress` itself is never reordered) | [1667](../../../app/src/App.svelte#L1667) |
 
 ### 1.5 Lifecycle
 
@@ -129,25 +129,25 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch` (`f
 
 | Var | Type | Initial | Mutated by | Read by |
 |---|---|---|---|---|
-| `dataDir` | `string` | `"（載入中）"` | `onMount` | markup [1806](../../../app/src/App.svelte#L1806) |
-| `logDir` | `string` | `"（載入中）"` | `onMount` | markup [1808](../../../app/src/App.svelte#L1808) |
-| `theme` | `Theme` | `"light"` | `loadAndApplySettings`, `toggleTheme` | `toggleTheme`, markup [1815](../../../app/src/App.svelte#L1815) |
+| `dataDir` | `string` | `"（載入中）"` | `onMount` | markup [1809](../../../app/src/App.svelte#L1809) |
+| `logDir` | `string` | `"（載入中）"` | `onMount` | markup [1811](../../../app/src/App.svelte#L1811) |
+| `theme` | `Theme` | `"light"` | `loadAndApplySettings`, `toggleTheme` | `toggleTheme`, markup [1818](../../../app/src/App.svelte#L1818) |
 | `settings` | `Settings \| null` | `null` | `loadAndApplySettings`, `toggleTheme` (mutates `.ui.theme`) | `toggleTheme`, `runSendBatch` (for defaults), `openSettingsEditor`, `revertSettingsDraft` |
-| `statusMessage` | `string` | `""` | `onMount` (catch), `toggleTheme`, `startScrape` (guard), `copyOne`, `copySelected`, `selectRdCandidatesOnly`, `clearResults` | markup [1714](../../../app/src/App.svelte#L1714) |
-| `activeTab` | `"search" \| "select" \| "rd" \| "settings"` | `"search"` | `onTabKeydown`, tab buttons [1676–1706](../../../app/src/App.svelte#L1676), `sendSelectedToRd` / `confirmSend` (bounces), in-section 前往 buttons | every `<section hidden={activeTab !== …}>` |
+| `statusMessage` | `string` | `""` | `onMount` (catch), `toggleTheme`, `startScrape` (guard), `copyOne`, `copySelected`, `selectRdCandidatesOnly`, `clearResults` | markup [1717](../../../app/src/App.svelte#L1717) |
+| `activeTab` | `"search" \| "select" \| "rd" \| "settings"` | `"search"` | `onTabKeydown`, tab buttons [1679–1709](../../../app/src/App.svelte#L1679), `sendSelectedToRd` / `confirmSend` (bounces), in-section 前往 buttons | every `<section hidden={activeTab !== …}>` |
 | `isThemeSaving` | `boolean` | `false` | `toggleTheme` (set/finally) | `settingsWriteBusy` |
 
 ### 2.2 JavDB scrape / magnet batch
 
 | Var | Type | Initial | Mutated by | Read by |
 |---|---|---|---|---|
-| `urlBatch` | `string` | `"https://javdb.com/v/RkX3Rp\n"` | `bind:value` textarea [2299](../../../app/src/App.svelte#L2299) | `startScrape` |
-| `magnetBatch` | `string` | `""` | `bind:value` textarea [2382](../../../app/src/App.svelte#L2382), cleared in `registerPastedMagnets` | `registerPastedMagnets` |
-| `isRegistering` | `boolean` | `false` | `registerPastedMagnets` | button disabled [2391](../../../app/src/App.svelte#L2391) |
-| `registerStatus` | `{kind, text} \| null` | `null` | `registerPastedMagnets` | markup [2404](../../../app/src/App.svelte#L2404) |
-| `groups` | `ScrapedGroup[]` | `[]` | `startScrape` (placeholders + kept manual groups; `scrapeBatch` callback replaces the array via `applyScrapeProgressForRun`), `registerPastedMagnets`, `clearResults` | many: `groupProcessedRowsMap`, `buildSelectedSendItems`, `webGroups` and the other count/row derived values, `rdCandidates`, `rowClassByHandle`, markup [2506](../../../app/src/App.svelte#L2506) |
-| `scrapeProgress` | `{done, total}` | `{0,0}` | `startScrape`, `scrapeBatch` callback, `clearResults` | markup [1680](../../../app/src/App.svelte#L1680), [2327–2328](../../../app/src/App.svelte#L2327) |
-| `isScraping` | `boolean` | `false` | `startScrape` (set/finally, current run only), `cancelScrape`, `clearResults` | button disabled [2306–2313](../../../app/src/App.svelte#L2306), status bar [2326](../../../app/src/App.svelte#L2326) |
+| `urlBatch` | `string` | `"https://javdb.com/v/RkX3Rp\n"` | `bind:value` textarea [2303](../../../app/src/App.svelte#L2303) | `startScrape` |
+| `magnetBatch` | `string` | `""` | `bind:value` textarea [2386](../../../app/src/App.svelte#L2386), cleared in `registerPastedMagnets` | `registerPastedMagnets` |
+| `isRegistering` | `boolean` | `false` | `registerPastedMagnets` | button disabled [2395](../../../app/src/App.svelte#L2395) |
+| `registerStatus` | `{kind, text} \| null` | `null` | `registerPastedMagnets` | markup [2408](../../../app/src/App.svelte#L2408) |
+| `groups` | `ScrapedGroup[]` | `[]` | `startScrape` (placeholders + kept manual groups; `scrapeBatch` callback replaces the array via `applyScrapeProgressForRun`), `registerPastedMagnets`, `clearResults` | many: `groupProcessedRowsMap`, `buildSelectedSendItems`, `webGroups` and the other count/row derived values, `rdCandidates`, `rowClassByHandle`, markup [2510](../../../app/src/App.svelte#L2510) |
+| `scrapeProgress` | `{done, total}` | `{0,0}` | `startScrape`, `scrapeBatch` callback, `clearResults` | markup [1683](../../../app/src/App.svelte#L1683), [2331–2332](../../../app/src/App.svelte#L2331) |
+| `isScraping` | `boolean` | `false` | `startScrape` (set/finally, current run only), `cancelScrape`, `clearResults` | button disabled [2310–2317](../../../app/src/App.svelte#L2310), status bar [2330](../../../app/src/App.svelte#L2330) |
 | `scrapeAbort` (plain `let`) | `AbortController \| null` | `null` | `startScrape`, `cancelScrape`, `clearResults` | `cancelScrape`, `clearResults` |
 | `scrapeRunId` (plain `let`) | `number` | `0` | `startScrape` (`++`), `cancelScrape`, `clearResults` (`+= 1`) | `startScrape` callback / finally — late events from a superseded run are dropped |
 
@@ -156,18 +156,18 @@ Indirect `invoke` calls also happen inside the lib modules — `scrapeBatch` (`f
 | Var | Type | Initial | Mutated by | Read by |
 |---|---|---|---|---|
 | `filter` | `FilterState` | `defaultFilterState()` | `bind:value` inputs, `commitMinSize`, `commitMaxSize`, `setGroupPick`, `resetFilter` | `groupProcessedRowsMap` / `processedRows`, `allVisibleRows`（經 `webVisibleRows`/`manualVisibleRows`）, `rdConsideredRows`（經 `rdCandidates`：★ 首選必須與畫面同一組列） |
-| `minSizeInput` | `string` | `""` | input bind [2475](../../../app/src/App.svelte#L2475), `resetFilter` | `commitMinSize` |
-| `maxSizeInput` | `string` | `""` | input bind [2485](../../../app/src/App.svelte#L2485), `resetFilter` | `commitMaxSize` |
+| `minSizeInput` | `string` | `""` | input bind [2479](../../../app/src/App.svelte#L2479), `resetFilter` | `commitMinSize` |
+| `maxSizeInput` | `string` | `""` | input bind [2489](../../../app/src/App.svelte#L2489), `resetFilter` | `commitMaxSize` |
 | `sortColumn` | `SortColumn \| null` | `null` | `toggleSort`, `resetFilter` | `processedRows`, `sortIndicator` |
 | `sortDirection` | `SortDirection` | `"asc"` | `toggleSort`, `resetFilter` | `processedRows`, `sortIndicator` |
-| `collapsed` | `Record<string, boolean>` | `{}` | `toggleCollapsed`, `clearResults` | markup [2508](../../../app/src/App.svelte#L2508) |
-| `selectedHandles` | `Record<string, boolean>` | `{}` | `rememberSelectableRows`, `registerPastedMagnets` (re-checks every pasted handle), `setRowSelected`, `setRowsSelected`, `selectOnlyRows`, `selectRdCandidatesOnly`, `clearResults` | `buildSelectedSendItems`, `selectedMagnets` / `sendButtonLabel` derived, `copySelected`, `selectedInRows`, `rowSelected` (per-row checkbox [2606](../../../app/src/App.svelte#L2606)) |
+| `collapsed` | `Record<string, boolean>` | `{}` | `toggleCollapsed`, `clearResults` | markup [2512](../../../app/src/App.svelte#L2512) |
+| `selectedHandles` | `Record<string, boolean>` | `{}` | `rememberSelectableRows`, `registerPastedMagnets` (re-checks every pasted handle), `setRowSelected`, `setRowsSelected`, `selectOnlyRows`, `selectRdCandidatesOnly`, `clearResults` | `buildSelectedSendItems`, `selectedMagnets` / `sendButtonLabel` derived, `copySelected`, `selectedInRows`, `rowSelected` (per-row checkbox [2610](../../../app/src/App.svelte#L2610)) |
 
 `selectedHandles` is the send batch's source of truth — filters and sort only decide what is
 drawn, never what gets sent. `filter` and `selectedHandles` are therefore independent: a row can
 be checked and invisible at the same time. (Row added 2026-08-01; the var predates it.)
 
-`filter.hd_only` (只顯示高清 checkbox [2466](../../../app/src/App.svelte#L2466)) **widened on
+`filter.hd_only` (只顯示高清 checkbox [2470](../../../app/src/App.svelte#L2470)) **widened on
 2026-08-01** without any change in this file: `magnetUtils.isHd` now means "高清/hd tag **or** a
 1080p/2160p/4K/UHD token in the filename", so the checkbox keeps untagged HD releases it used to
 hide. Same definition the ⚡/高清 badges use — see `frontend-lib.md` §3.3 `isHd` / §3.4 `isHdRow`.
@@ -178,29 +178,29 @@ them.
 
 | Var | Type | Initial | Mutated by | Read by |
 |---|---|---|---|---|
-| `pingMessage` | `string` | `""` | `pingSidecar` | markup [1828](../../../app/src/App.svelte#L1828) |
+| `pingMessage` | `string` | `""` | `pingSidecar` | markup [1831](../../../app/src/App.svelte#L1831) |
 
 ### 2.5 Real-Debrid token + user
 
 | Var | Type | Initial | Mutated by | Read by |
 |---|---|---|---|---|
 | `rdHasToken` | `boolean` | `false` | `onMount`, `rdSaveToken`, `rdClearToken`, `applyLegacyImportConfirmed` | `sendSelectedToRd`, `confirmSend`, `rdRefreshUser`, markup (many gates) |
-| `rdUser` | `RdUserInfo \| null` | `null` | `rdTestToken`, `rdSaveToken`, `rdClearToken`, `rdRefreshUser` | markup [1741](../../../app/src/App.svelte#L1741) |
-| `rdTokenInput` | `string` | `""` | input bind [1772](../../../app/src/App.svelte#L1772), cleared in `rdSaveToken`/`rdClearToken` | `rdTestToken`, `rdSaveToken` |
-| `rdShowToken` | `boolean` | `false` | checkbox bind [1778](../../../app/src/App.svelte#L1778), `rdSaveToken` (resets) | input `type` attr [1771](../../../app/src/App.svelte#L1771) |
-| `rdMessage` | `string` | `""` | RD token handlers, `sendSelectedToRd`, `confirmSend`, `cancelSendPlan`, `runSendBatch`, `copyRdDownloads`, `copyRdRow`, `copyRdSingleLink` | markup [1797](../../../app/src/App.svelte#L1797) (settings tab) and [1897](../../../app/src/App.svelte#L1897) (RD tab) — the tabs are exclusive, so only one renders |
+| `rdUser` | `RdUserInfo \| null` | `null` | `rdTestToken`, `rdSaveToken`, `rdClearToken`, `rdRefreshUser` | markup [1744](../../../app/src/App.svelte#L1744) |
+| `rdTokenInput` | `string` | `""` | input bind [1775](../../../app/src/App.svelte#L1775), cleared in `rdSaveToken`/`rdClearToken` | `rdTestToken`, `rdSaveToken` |
+| `rdShowToken` | `boolean` | `false` | checkbox bind [1781](../../../app/src/App.svelte#L1781), `rdSaveToken` (resets) | input `type` attr [1774](../../../app/src/App.svelte#L1774) |
+| `rdMessage` | `string` | `""` | RD token handlers, `sendSelectedToRd`, `confirmSend`, `cancelSendPlan`, `runSendBatch`, `copyRdDownloads`, `copyRdRow`, `copyRdSingleLink` | markup [1800](../../../app/src/App.svelte#L1800) (settings tab) and [1900](../../../app/src/App.svelte#L1900) (RD tab) — the tabs are exclusive, so only one renders |
 
 ### 2.6 Real-Debrid send-batch progress
 
 | Var | Type | Initial | Mutated by | Read by |
 |---|---|---|---|---|
-| `rdSendProgress` | `RdSendProgress[]` | `[]` | `runSendBatch`, `sendBatch` callback (slot replace), `retryAllPending` (via `applyRetryEventToProgressRows`) | derived counts, `rdDisplayRows`, `copyRdDownloads`, markup gate [2667](../../../app/src/App.svelte#L2667) |
-| `rdSendDone` | `{done,total}` | `{0,0}` | `runSendBatch`, `sendBatch` callback | markup [1700](../../../app/src/App.svelte#L1700), [2671](../../../app/src/App.svelte#L2671) |
+| `rdSendProgress` | `RdSendProgress[]` | `[]` | `runSendBatch`, `sendBatch` callback (slot replace), `retryAllPending` (via `applyRetryEventToProgressRows`) | derived counts, `rdDisplayRows`, `copyRdDownloads`, markup gate [2671](../../../app/src/App.svelte#L2671) |
+| `rdSendDone` | `{done,total}` | `{0,0}` | `runSendBatch`, `sendBatch` callback | markup [1703](../../../app/src/App.svelte#L1703), [2675](../../../app/src/App.svelte#L2675) |
 | `isRdSending` | `boolean` | `false` | `runSendBatch` (set/finally) | disabled gates, guards in `sendSelectedToRd` / `confirmSend` / `clearResults` / `refreshPending` / `retryAllPending` / `removePending` / `clearAllPending` |
-| `isCancelingSend` | `boolean` | `false` | `cancelRdSend` (set), `runSendBatch` finally (clear) | 取消 button [2679](../../../app/src/App.svelte#L2679) |
+| `isCancelingSend` | `boolean` | `false` | `cancelRdSend` (set), `runSendBatch` finally (clear) | 取消 button [2683](../../../app/src/App.svelte#L2683) |
 | `rdSendAbort` (plain `let`) | `AbortController \| null` | `null` | `runSendBatch` | `cancelRdSend` |
 | `lastBatchStartAt` | `string` (ISO) | `new Date().toISOString()` | `runSendBatch`, `retryAllPending` | `copyRdDownloads` (completion ordering) |
-| `sendPlanOpen` | `boolean` | `false` | `sendSelectedToRd` (set when `low > 0`), `runSendBatch` (clears), `confirmSend` (clears on a failed guard), `cancelSendPlan`, `clearResults`, `startScrape` | 確認面板 `{#if}` [1867](../../../app/src/App.svelte#L1867), `confirmSend`, 送出鍵 disabled [1851](../../../app/src/App.svelte#L1851) |
+| `sendPlanOpen` | `boolean` | `false` | `sendSelectedToRd` (set when `low > 0`), `runSendBatch` (clears), `confirmSend` (clears on a failed guard), `cancelSendPlan`, `clearResults`, `startScrape` | 確認面板 `{#if}` [1870](../../../app/src/App.svelte#L1870), `confirmSend`, 送出鍵 disabled [1854](../../../app/src/App.svelte#L1854) |
 
 `sendPlanOpen` is deliberately a bare flag, **not** a frozen snapshot of the batch. The
 checkboxes stay live behind the panel (回到挑選 is not disabled), so a snapshot would let the
@@ -215,34 +215,34 @@ longer exists.
 
 | Var | Type | Initial | Mutated by | Read by |
 |---|---|---|---|---|
-| `pendingEntries` | `PendingEntry[]` | `[]` | `reloadPendingSilently` (`onMount`, `runSendBatch` finally, `retryAllPending` finally, `applyLegacyImportConfirmed`), `refreshPending`, `removePending`, `clearAllPending` | `retryAllPending` (input), tab badge [1700](../../../app/src/App.svelte#L1700), markup gate [2800](../../../app/src/App.svelte#L2800) |
+| `pendingEntries` | `PendingEntry[]` | `[]` | `reloadPendingSilently` (`onMount`, `runSendBatch` finally, `retryAllPending` finally, `applyLegacyImportConfirmed`), `refreshPending`, `removePending`, `clearAllPending` | `retryAllPending` (input), tab badge [1703](../../../app/src/App.svelte#L1703), markup gate [2804](../../../app/src/App.svelte#L2804) |
 | `isRetryingPending` | `boolean` | `false` | `retryAllPending` (set/finally) | disabled gates and reentry guards (same set as `isRdSending`) |
 | `retryAbort` (plain `let`) | `AbortController \| null` | `null` | `retryAllPending` | `cancelRetry` |
-| `pendingMessage` | `{kind, text} \| null` | `null` | `refreshPending`, `retryAllPending`, `removePending`, `clearAllPending` | markup [2809](../../../app/src/App.svelte#L2809) |
+| `pendingMessage` | `{kind, text} \| null` | `null` | `refreshPending`, `retryAllPending`, `removePending`, `clearAllPending` | markup [2813](../../../app/src/App.svelte#L2813) |
 
 ### 2.8 Legacy import (M7a-lite)
 
 | Var | Type | Initial | Mutated by | Read by |
 |---|---|---|---|---|
-| `legacyPath` | `string` | `""` | `onMount` (env default), input bind [1921](../../../app/src/App.svelte#L1921) | `previewLegacyImport`, `applyLegacyImportConfirmed` |
-| `legacyPreview` | `LegacyImportPreview \| null` | `null` | `previewLegacyImport` (set/clear) | markup [1948](../../../app/src/App.svelte#L1948), apply button enable [1939](../../../app/src/App.svelte#L1939) |
-| `legacyReport` | `LegacyImportReport \| null` | `null` | `previewLegacyImport` (clear), `applyLegacyImportConfirmed` | markup [1985](../../../app/src/App.svelte#L1985) |
-| `legacyBusy` | `boolean` | `false` | both legacy functions (set/finally) | `settingsWriteBusy`, preview button label [1931](../../../app/src/App.svelte#L1931) |
-| `legacyError` | `string` | `""` | both legacy functions | markup [1945](../../../app/src/App.svelte#L1945) |
-| `legacyShown` | `boolean` | `false` | `onMount` (if env default), toggle button [1907](../../../app/src/App.svelte#L1907) | `{#if}` gate [1911](../../../app/src/App.svelte#L1911) |
+| `legacyPath` | `string` | `""` | `onMount` (env default), input bind [1924](../../../app/src/App.svelte#L1924) | `previewLegacyImport`, `applyLegacyImportConfirmed` |
+| `legacyPreview` | `LegacyImportPreview \| null` | `null` | `previewLegacyImport` (set/clear) | markup [1951](../../../app/src/App.svelte#L1951), apply button enable [1942](../../../app/src/App.svelte#L1942) |
+| `legacyReport` | `LegacyImportReport \| null` | `null` | `previewLegacyImport` (clear), `applyLegacyImportConfirmed` | markup [1988](../../../app/src/App.svelte#L1988) |
+| `legacyBusy` | `boolean` | `false` | both legacy functions (set/finally) | `settingsWriteBusy`, preview button label [1934](../../../app/src/App.svelte#L1934) |
+| `legacyError` | `string` | `""` | both legacy functions | markup [1948](../../../app/src/App.svelte#L1948) |
+| `legacyShown` | `boolean` | `false` | `onMount` (if env default), toggle button [1910](../../../app/src/App.svelte#L1910) | `{#if}` gate [1914](../../../app/src/App.svelte#L1914) |
 
 ### 2.9 Cookies status (M7b / M9)
 
 | Var | Type | Initial | Mutated by | Read by |
 |---|---|---|---|---|
-| `cookiesStatus` | `CookiesStatus \| null` | `null` | `refreshCookiesStatus` (set/clear), `clearCookies`, `saveCookies` | markup [2153](../../../app/src/App.svelte#L2153), `createCookiesTemplate`, button gates [2236](../../../app/src/App.svelte#L2236), [2242](../../../app/src/App.svelte#L2242) |
-| `cookiesShown` | `boolean` | `false` | `toggleCookiesShown` | `{#if}` gate [2148](../../../app/src/App.svelte#L2148) |
-| `cookiesError` | `string` | `""` | `refreshCookiesStatus`, `toggleCookiesPaste`, `armCookiesClear`, `clearCookies`, `saveCookies`, `openDataDir`, `openLogsDir`, `createCookiesTemplate` | markup [2192](../../../app/src/App.svelte#L2192) |
-| `cookiesMessage` | `{kind, text} \| null` | `null` | `toggleCookiesPaste`, `armCookiesClear`, `clearCookies`, `saveCookies`, `createCookiesTemplate` | markup [2195](../../../app/src/App.svelte#L2195) |
-| `cookiesPasteOpen` | `boolean` | `false` | `toggleCookiesPaste`, `clearCookies`, `saveCookies` | `{#if}` gate [2251](../../../app/src/App.svelte#L2251), toggle label [2221](../../../app/src/App.svelte#L2221) |
-| `cookiesPasteInput` | `string` | `""` | textarea bind [2265](../../../app/src/App.svelte#L2265), cleared by `toggleCookiesPaste` (on close) / `clearCookies` / `saveCookies` | `saveCookies` |
+| `cookiesStatus` | `CookiesStatus \| null` | `null` | `refreshCookiesStatus` (set/clear), `clearCookies`, `saveCookies` | markup [2157](../../../app/src/App.svelte#L2157), `createCookiesTemplate`, button gates [2240](../../../app/src/App.svelte#L2240), [2246](../../../app/src/App.svelte#L2246) |
+| `cookiesShown` | `boolean` | `false` | `toggleCookiesShown` | `{#if}` gate [2152](../../../app/src/App.svelte#L2152) |
+| `cookiesError` | `string` | `""` | `refreshCookiesStatus`, `toggleCookiesPaste`, `armCookiesClear`, `clearCookies`, `saveCookies`, `openDataDir`, `openLogsDir`, `createCookiesTemplate` | markup [2196](../../../app/src/App.svelte#L2196) |
+| `cookiesMessage` | `{kind, text} \| null` | `null` | `toggleCookiesPaste`, `armCookiesClear`, `clearCookies`, `saveCookies`, `createCookiesTemplate` | markup [2199](../../../app/src/App.svelte#L2199) |
+| `cookiesPasteOpen` | `boolean` | `false` | `toggleCookiesPaste`, `clearCookies`, `saveCookies` | `{#if}` gate [2255](../../../app/src/App.svelte#L2255), toggle label [2225](../../../app/src/App.svelte#L2225) |
+| `cookiesPasteInput` | `string` | `""` | textarea bind [2269](../../../app/src/App.svelte#L2269), cleared by `toggleCookiesPaste` (on close) / `clearCookies` / `saveCookies` | `saveCookies` |
 | `cookiesSaving` | `boolean` | `false` | `saveCookies` (set/finally) | disabled gates |
-| `cookiesClearArmed` | `boolean` | `false` | `armCookiesClear` (set), `cancelCookiesClear` / `toggleCookiesShown` (on collapse) / `toggleCookiesPaste` / `clearCookies` (clear) | confirmation block [2198](../../../app/src/App.svelte#L2198), button swap [2223](../../../app/src/App.svelte#L2223) |
+| `cookiesClearArmed` | `boolean` | `false` | `armCookiesClear` (set), `cancelCookiesClear` / `toggleCookiesShown` (on collapse) / `toggleCookiesPaste` / `clearCookies` (clear) | confirmation block [2202](../../../app/src/App.svelte#L2202), button swap [2227](../../../app/src/App.svelte#L2227) |
 | `cookiesClearing` | `boolean` | `false` | `clearCookies` (set/finally) | 確定清除 / 取消清除 disabled |
 
 清除 cookies is a two-click action (`cookiesClearArmed`): unlike 清除 Token, which is
@@ -253,11 +253,11 @@ DevTools again, so a stray click must not be enough.
 
 | Var | Type | Initial | Mutated by | Read by |
 |---|---|---|---|---|
-| `settingsShown` | `boolean` | `false` | toggle button [2030](../../../app/src/App.svelte#L2030), `openSettingsEditor`; `saveSettings` doesn't auto-close | `{#if}` gate [2037](../../../app/src/App.svelte#L2037) |
-| `settingsDraft` | `Settings \| null` | `null` | `openSettingsEditor`, `saveSettings`, `revertSettingsDraft`, `toggleTheme` (`.ui.theme` on success / rollback) + `bind:value` in form | `settingsErrors`, `saveSettings`, form binds |
-| `settingsSaving` | `boolean` | `false` | `saveSettings` (set/finally) | `settingsWriteBusy`, save label [2125](../../../app/src/App.svelte#L2125) |
-| `settingsMessage` | `string` | `""` | `openSettingsEditor`, `saveSettings`, `revertSettingsDraft` | markup [2133](../../../app/src/App.svelte#L2133) |
-| `settingsMessageKind` | `"ok"\|"error"\|"info"` | `"info"` | mirrored with `settingsMessage` | `data-kind` attr [2134](../../../app/src/App.svelte#L2134) |
+| `settingsShown` | `boolean` | `false` | toggle button [2033](../../../app/src/App.svelte#L2033), `openSettingsEditor`; `saveSettings` doesn't auto-close | `{#if}` gate [2040](../../../app/src/App.svelte#L2040) |
+| `settingsDraft` | `Settings \| null` | `null` | `openSettingsEditor`, `saveSettings`, `revertSettingsDraft`, `applyLegacyImportConfirmed` (rebuilt after `env_imported` when the editor is open), `toggleTheme` (`.ui.theme` on success / rollback) + `bind:value` in form | `settingsErrors`, `saveSettings`, form binds |
+| `settingsSaving` | `boolean` | `false` | `saveSettings` (set/finally) | `settingsWriteBusy`, save label [2129](../../../app/src/App.svelte#L2129) |
+| `settingsMessage` | `string` | `""` | `openSettingsEditor`, `saveSettings`, `revertSettingsDraft` | markup [2137](../../../app/src/App.svelte#L2137) |
+| `settingsMessageKind` | `"ok"\|"error"\|"info"` | `"info"` | mirrored with `settingsMessage` | `data-kind` attr [2138](../../../app/src/App.svelte#L2138) |
 
 ---
 
@@ -271,7 +271,7 @@ DevTools again, so a stray click must not be enough.
 
 **Contract**: ArrowRight / ArrowLeft wrap through `TAB_ORDER`; Home / End jump to first / last; any other key returns untouched. On a handled key: `preventDefault()`, writes `activeTab`, focuses the matching sibling `<button>`. The handler sits on the buttons, not on `<nav>`, because a keydown on a non-interactive landmark trips Svelte's a11y lint.
 
-**Triggered by**: `onkeydown` on each tab button [1677, 1687, 1697, 1707](../../../app/src/App.svelte#L1677).
+**Triggered by**: `onkeydown` on each tab button [1680, 1690, 1700, 1710](../../../app/src/App.svelte#L1680).
 
 ---
 
@@ -368,7 +368,7 @@ DevTools again, so a stray click must not be enough.
 
 **Calls**: `applyTheme`, `invoke('write_settings', { settings })`.
 
-**Triggered by**: Markup button [1814](../../../app/src/App.svelte#L1814) (`disabled={settingsWriteBusy}`).
+**Triggered by**: Markup button [1817](../../../app/src/App.svelte#L1817) (`disabled={settingsWriteBusy}`).
 
 ---
 
@@ -380,7 +380,7 @@ DevTools again, so a stray click must not be enough.
 
 **Calls**: `invoke('sidecar_ping')` → `PingResponse`.
 
-**Triggered by**: Markup button [1823](../../../app/src/App.svelte#L1823).
+**Triggered by**: Markup button [1826](../../../app/src/App.svelte#L1826).
 
 ---
 
@@ -406,7 +406,7 @@ DevTools again, so a stray click must not be enough.
 - `scrapeBatch(urls, callback, { signal })` ([lib/scraper.ts:231](../../../app/src/lib/scraper.ts#L231)) — that lib internally invokes `fetch_javdb` per URL.
 - `applyScrapeProgressForRun` ([lib/scraper.ts:86](../../../app/src/lib/scraper.ts#L86)), `rememberSelectableRows`.
 
-**Triggered by**: Markup button [2306](../../../app/src/App.svelte#L2306).
+**Triggered by**: Markup button [2310](../../../app/src/App.svelte#L2310).
 
 ---
 
@@ -416,7 +416,7 @@ DevTools again, so a stray click must not be enough.
 
 **Contract**: `scrapeAbort?.abort()`, bumps `scrapeRunId` (so late events are dropped), sets `isScraping = false`, `scrapeAbort = null` immediately.
 
-**Triggered by**: Markup button [2309](../../../app/src/App.svelte#L2309).
+**Triggered by**: Markup button [2313](../../../app/src/App.svelte#L2313).
 
 ---
 
@@ -440,7 +440,7 @@ DevTools again, so a stray click must not be enough.
 - `invoke('register_magnets', { magnets })` → `{ registered[], invalid[] }`
 - `rememberSelectableRows(newRows)`, `isManualGroup`.
 
-**Triggered by**: Markup button [2390](../../../app/src/App.svelte#L2390).
+**Triggered by**: Markup button [2394](../../../app/src/App.svelte#L2394).
 
 ---
 
@@ -454,7 +454,7 @@ DevTools again, so a stray click must not be enough.
 
 **Calls**: `invoke('copy_magnet', { handleId })`.
 
-**Triggered by**: Per-row `複製` button [2643](../../../app/src/App.svelte#L2643), per-row `ondblclick` [2600](../../../app/src/App.svelte#L2600).
+**Triggered by**: Per-row `複製` button [2647](../../../app/src/App.svelte#L2647), per-row `ondblclick` [2604](../../../app/src/App.svelte#L2604).
 
 ---
 
@@ -466,7 +466,7 @@ DevTools again, so a stray click must not be enough.
 
 **Calls**: `invoke('copy_magnets_bulk', { handleIds })` → `CopyBulkResult`.
 
-**Triggered by**: Markup button 複製已勾選 [2439](../../../app/src/App.svelte#L2439).
+**Triggered by**: Markup button 複製已勾選 [2443](../../../app/src/App.svelte#L2443).
 
 ---
 
@@ -478,7 +478,7 @@ DevTools again, so a stray click must not be enough.
 
 **Reads**: `groupProcessedRowsMap`, `filter`, `sortColumn`, `sortDirection`. **Pure** w.r.t. component state.
 
-**Called by**: `webVisibleRows` / `manualVisibleRows` derived [768, 769](../../../app/src/App.svelte#L768)（`allVisibleRows` 由兩者組成，供三個全選/反選按鈕共用）, `rdConsideredRows`, markup `{@const rows = processedRows(g)}` [2507](../../../app/src/App.svelte#L2507). Does not feed the RD send batch (that follows `selectedHandles`) nor the bulk copy (`copySelected` reads `allSelectableRows`).
+**Called by**: `webVisibleRows` / `manualVisibleRows` derived [768, 769](../../../app/src/App.svelte#L768)（`allVisibleRows` 由兩者組成，供三個全選/反選按鈕共用）, `rdConsideredRows`, markup `{@const rows = processedRows(g)}` [2511](../../../app/src/App.svelte#L2511). Does not feed the RD send batch (that follows `selectedHandles`) nor the bulk copy (`copySelected` reads `allSelectableRows`).
 
 ---
 
@@ -506,7 +506,7 @@ DevTools again, so a stray click must not be enough.
 
 **Purpose**: If same column → flip direction; else set new column + `asc`. **Writes** `sortColumn`, `sortDirection`.
 
-**Triggered by**: Table header buttons [2566, 2571, 2576, 2581](../../../app/src/App.svelte#L2566).
+**Triggered by**: Table header buttons [2570, 2575, 2580, 2585](../../../app/src/App.svelte#L2570).
 
 ---
 
@@ -521,11 +521,11 @@ DevTools again, so a stray click must not be enough.
 #### Checkbox helpers  *(App.svelte:[611–632](../../../app/src/App.svelte#L611), [677–683](../../../app/src/App.svelte#L677))*
 
 - `rememberSelectableRows(rows)` [611] — sets `selectedHandles[id] = true` only for handles not yet present in the map (new rows default to checked; an explicit uncheck survives a re-scrape). Called by `startScrape` (progress callback) and `registerPastedMagnets`.
-- `setRowSelected(handleId, selected)` [619] — per-row checkbox `onchange` [2609](../../../app/src/App.svelte#L2609), `selectRdCandidatesOnly`.
-- `setRowsSelected(rows, selected)` [623] — 勾選目前顯示 / 取消目前顯示 [2426, 2435](../../../app/src/App.svelte#L2426), per-group 勾選本組顯示 / 取消本組顯示 [2538, 2541](../../../app/src/App.svelte#L2538), `selectOnlyRows`, `selectRdCandidatesOnly`.
-- `selectOnlyRows(rows)` [629] — unchecks every row in `allSelectableRows` (web **and** manual), then checks `rows`. 只勾選目前顯示 [2429](../../../app/src/App.svelte#L2429).
-- `selectedInRows(rows): number` [677] — deduped checked count; group header 已勾 N [2535](../../../app/src/App.svelte#L2535).
-- `rowSelected(handleId): boolean` [681] — `selectedHandles[handleId] === true`; per-row checkbox `checked` [2606](../../../app/src/App.svelte#L2606).
+- `setRowSelected(handleId, selected)` [619] — per-row checkbox `onchange` [2613](../../../app/src/App.svelte#L2613), `selectRdCandidatesOnly`.
+- `setRowsSelected(rows, selected)` [623] — 勾選目前顯示 / 取消目前顯示 [2430, 2439](../../../app/src/App.svelte#L2430), per-group 勾選本組顯示 / 取消本組顯示 [2542, 2545](../../../app/src/App.svelte#L2542), `selectOnlyRows`, `selectRdCandidatesOnly`.
+- `selectOnlyRows(rows)` [629] — unchecks every row in `allSelectableRows` (web **and** manual), then checks `rows`. 只勾選目前顯示 [2433](../../../app/src/App.svelte#L2433).
+- `selectedInRows(rows): number` [677] — deduped checked count; group header 已勾 N [2539](../../../app/src/App.svelte#L2539).
+- `rowSelected(handleId): boolean` [681] — `selectedHandles[handleId] === true`; per-row checkbox `checked` [2610](../../../app/src/App.svelte#L2610).
 
 ---
 
@@ -554,7 +554,7 @@ cached on RD already. The button sits next to 只勾選目前顯示.
 **Reads**: `rdPickedHandles`, `rdCandidates`, `webGroups`, `groups`. **Writes**:
 `selectedHandles` (via `setRowsSelected` / `setRowSelected`), `statusMessage`.
 
-**Triggered by**: Markup button 只勾選 RD 優先候選 [2432](../../../app/src/App.svelte#L2432).
+**Triggered by**: Markup button 只勾選 RD 優先候選 [2436](../../../app/src/App.svelte#L2436).
 
 ---
 
@@ -562,7 +562,7 @@ cached on RD already. The button sits next to 只勾選目前顯示.
 
 **Purpose**: Commit `minSizeInput` (string) into `filter.min_size_gb` (number | null). `parseFloat` + finite-and-positive check; otherwise `null`.
 
-**Triggered by**: `onchange` on min-size input [2476](../../../app/src/App.svelte#L2476).
+**Triggered by**: `onchange` on min-size input [2480](../../../app/src/App.svelte#L2480).
 
 ---
 
@@ -570,16 +570,16 @@ cached on RD already. The button sits next to 只勾選目前顯示.
 
 **Purpose**: Symmetric to `commitMinSize` for `maxSizeInput`/`filter.max_size_gb`.
 
-**Triggered by**: `onchange` on max-size input [2486](../../../app/src/App.svelte#L2486).
+**Triggered by**: `onchange` on max-size input [2490](../../../app/src/App.svelte#L2490).
 
 ---
 
 #### `setGroupPick(p: GroupPick): void`  *(App.svelte:[695](../../../app/src/App.svelte#L695))*
 
-**Purpose**: Writes `filter.group_pick`. Trivial setter (could be inlined; called from the `<select>` `onchange` arrow [2493](../../../app/src/App.svelte#L2493)).
+**Purpose**: Writes `filter.group_pick`. Trivial setter (could be inlined; called from the `<select>` `onchange` arrow [2497](../../../app/src/App.svelte#L2497)).
 
 The 每組只留 select carries five options — 全部 (`all`), **RD 命中優先 (`rd_ready`)**, 最大檔
-(`largest`), 最小檔 (`smallest`), 檔案最少 (`fewest_files`) [2495–2499](../../../app/src/App.svelte#L2495).
+(`largest`), 最小檔 (`smallest`), 檔案最少 (`fewest_files`) [2499–2503](../../../app/src/App.svelte#L2499).
 `rd_ready` sits right after 全部 and is resolved by `magnetUtils.applyGroupPick` →
 `pickRdReadyRow`; the default stays `all`.
 
@@ -591,7 +591,7 @@ The 每組只留 select carries five options — 全部 (`all`), **RD 命中優�
 
 **Writes**: `filter`, `minSizeInput`, `maxSizeInput`, `sortColumn`, `sortDirection`.
 
-**Triggered by**: Markup button 重置 [2502](../../../app/src/App.svelte#L2502).
+**Triggered by**: Markup button 重置 [2506](../../../app/src/App.svelte#L2506).
 
 ---
 
@@ -599,7 +599,7 @@ The 每組只留 select carries five options — 全部 (`all`), **RD 命中優�
 
 **Purpose**: Flip `collapsed[url]` boolean (used as group card collapse state).
 
-**Triggered by**: Per-group toggle button [2517](../../../app/src/App.svelte#L2517).
+**Triggered by**: Per-group toggle button [2521](../../../app/src/App.svelte#L2521).
 
 ---
 
@@ -617,7 +617,7 @@ The 每組只留 select carries five options — 全部 (`all`), **RD 命中優�
 
 **Calls**: `scrapeAbort?.abort()`, `invoke('forget_magnets', { handleIds })` → `number`.
 
-**Triggered by**: Markup button 清空全部結果（含手貼） [2318](../../../app/src/App.svelte#L2318).
+**Triggered by**: Markup button 清空全部結果（含手貼） [2322](../../../app/src/App.svelte#L2322).
 
 ---
 
@@ -630,7 +630,7 @@ The 每組只留 select carries five options — 全部 (`all`), **RD 命中優�
 - `hd_earliest` → 本組首選：最早上傳的高清版本，較久的檔案較可能已被快取
 - `no_hd_fallback` → 本組首選（⚠ 全組皆非高清）：只能以轉載站前綴與上傳日期推測，命中率低
 
-**Triggered by**: `title` attribute of the ★ badge [2633](../../../app/src/App.svelte#L2633).
+**Triggered by**: `title` attribute of the ★ badge [2637](../../../app/src/App.svelte#L2637).
 
 ---
 
@@ -640,11 +640,11 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 #### `rdTestToken(): Promise<void>`  *(App.svelte:[873](../../../app/src/App.svelte#L873))*
 
-**Purpose**: One-shot token test that doesn't persist — calls `rd_test_token` with the trimmed typed-in token. Writes `rdUser` on success (null on failure), `rdMessage` either way; flashes `rd-test-token`.
+**Purpose**: One-shot token test that doesn't persist — calls `rd_test_token` with the trimmed typed-in token. Writes `rdUser` on success (null on failure), `rdMessage` either way; flashes `rd-test-token`. A malformed token is refused by Rust before any sidecar call (`rd_token_format_invalid` → `rdErrorMessage`: 「Real-Debrid Token 格式無效（僅限英數且長度 ≤ 255）」); an empty input yields `rd_no_token`.
 
 **Calls**: `invoke('rd_test_token', { token })` → `RdUserInfo`.
 
-**Triggered by**: Markup button [1782](../../../app/src/App.svelte#L1782).
+**Triggered by**: Markup button [1785](../../../app/src/App.svelte#L1785).
 
 ---
 
@@ -659,7 +659,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `invoke('rd_save_token', { token })`, `invoke('rd_check_user')`.
 
-**Triggered by**: Markup button [1789](../../../app/src/App.svelte#L1789).
+**Triggered by**: Markup button [1792](../../../app/src/App.svelte#L1792).
 
 ---
 
@@ -669,7 +669,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `invoke('rd_clear_token')`.
 
-**Triggered by**: Markup button [1734](../../../app/src/App.svelte#L1734) (rendered only when `rdHasToken`).
+**Triggered by**: Markup button [1737](../../../app/src/App.svelte#L1737) (rendered only when `rdHasToken`).
 
 ---
 
@@ -681,7 +681,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `invoke('rd_check_user')` → `RdUserInfo`.
 
-**Triggered by**: Markup button [1728](../../../app/src/App.svelte#L1728) (rendered only when `rdHasToken`).
+**Triggered by**: Markup button [1731](../../../app/src/App.svelte#L1731) (rendered only when `rdHasToken`).
 
 ---
 
@@ -717,7 +717,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 - `rdSendTriage` (derived; itself calls `buildSelectedSendItems` + `summarizeRdLikelihood`)
 - `runSendBatch(items)` — only on the `low === 0` path.
 
-**Triggered by**: Markup button [1846](../../../app/src/App.svelte#L1846). That button is additionally `disabled` while `sendPlanOpen` (and while sending/retrying, with nothing checked, or without a token), so the panel is the only way forward once it is up.
+**Triggered by**: Markup button [1849](../../../app/src/App.svelte#L1849). That button is additionally `disabled` while `sendPlanOpen` (and while sending/retrying, with nothing checked, or without a token), so the panel is the only way forward once it is up.
 
 ---
 
@@ -732,7 +732,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `runSendBatch(items)`.
 
-**Triggered by**: Panel buttons 全部送出 [1878](../../../app/src/App.svelte#L1878) and 只送高機率 [1882](../../../app/src/App.svelte#L1882). The latter is `disabled` when `rdSendTriage.highItems` is empty.
+**Triggered by**: Panel buttons 全部送出 [1881](../../../app/src/App.svelte#L1881) and 只送高機率 [1885](../../../app/src/App.svelte#L1885). The latter is `disabled` when `rdSendTriage.highItems` is empty.
 
 ---
 
@@ -740,7 +740,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Purpose**: Dismiss the confirmation panel without sending. Clears `sendPlanOpen` and writes `rdMessage` = 已取消送出，勾選狀態未變更 — the checkboxes are deliberately left alone so the user can adjust and retry.
 
-**Triggered by**: Panel button 取消送出 [1888](../../../app/src/App.svelte#L1888).
+**Triggered by**: Panel button 取消送出 [1891](../../../app/src/App.svelte#L1891).
 
 ---
 
@@ -768,7 +768,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Purpose**: Abort the in-flight send batch. Sets `isCancelingSend = true` (button shows 取消中… and disables) then `rdSendAbort?.abort()`.
 
-**Triggered by**: Markup button [2679](../../../app/src/App.svelte#L2679) (rendered only while `isRdSending`).
+**Triggered by**: Markup button [2683](../../../app/src/App.svelte#L2683) (rendered only while `isRdSending`).
 
 ---
 
@@ -780,7 +780,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `invoke('copy_rd_links_bulk', { links })` → `CopyRdLinksBulkResult`.
 
-**Triggered by**: Markup button [2685](../../../app/src/App.svelte#L2685).
+**Triggered by**: Markup button [2689](../../../app/src/App.svelte#L2689).
 
 ---
 
@@ -790,7 +790,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `collectDownloadLinksFromRow(row)`, `invoke('copy_rd_links_bulk', { links })`.
 
-**Triggered by**: Per-row 複製此筆 N 條 button [2743](../../../app/src/App.svelte#L2743) (only when the row has more than one link).
+**Triggered by**: Per-row 複製此筆 N 條 button [2747](../../../app/src/App.svelte#L2747) (only when the row has more than one link).
 
 ---
 
@@ -800,7 +800,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `invoke('copy_rd_links_bulk', { links: [link] })`.
 
-**Triggered by**: Per-link 複製 button [2775](../../../app/src/App.svelte#L2775).
+**Triggered by**: Per-link 複製 button [2779](../../../app/src/App.svelte#L2779).
 
 ---
 
@@ -814,7 +814,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `invoke('pending_list')`.
 
-**Triggered by**: Markup button 重讀本機紀錄 [2824](../../../app/src/App.svelte#L2824).
+**Triggered by**: Markup button 重讀本機紀錄 [2828](../../../app/src/App.svelte#L2828).
 
 ---
 
@@ -840,27 +840,27 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 - `invoke('copy_rd_links_bulk', { links })` if completedLinks not empty.
 - `rdErrorMessage(code)` ([lib/rdSender.ts:358](../../../app/src/lib/rdSender.ts#L358)).
 
-**Triggered by**: Markup button 全部重試（查 RD） [2815](../../../app/src/App.svelte#L2815).
+**Triggered by**: Markup button 全部重試（查 RD） [2819](../../../app/src/App.svelte#L2819).
 
 ---
 
 #### `cancelRetry(): void`  *(App.svelte:[1294](../../../app/src/App.svelte#L1294))*
 
-**Purpose**: Abort in-flight retry (`retryAbort?.abort()`). Triggered by markup button [2821](../../../app/src/App.svelte#L2821) (rendered only while `isRetryingPending`).
+**Purpose**: Abort in-flight retry (`retryAbort?.abort()`). Triggered by markup button [2825](../../../app/src/App.svelte#L2825) (rendered only while `isRetryingPending`).
 
 ---
 
-#### `removePending(torrent_id: string): Promise<void>`  *(App.svelte:[1619](../../../app/src/App.svelte#L1619))*
+#### `removePending(torrent_id: string): Promise<void>`  *(App.svelte:[1622](../../../app/src/App.svelte#L1622))*
 
 **Purpose**: Remove a single pending entry; Rust returns the new list. Guard: returns while `isRdSending || isRetryingPending`. Writes `pendingEntries`, `pendingMessage`.
 
 **Calls**: `invoke('pending_remove', { torrentId })` → `PendingEntry[]`.
 
-**Triggered by**: Per-row 「移除」 button [2861](../../../app/src/App.svelte#L2861).
+**Triggered by**: Per-row 「移除」 button [2865](../../../app/src/App.svelte#L2865).
 
 ---
 
-#### `clearAllPending(): Promise<void>`  *(App.svelte:[1634](../../../app/src/App.svelte#L1634))*
+#### `clearAllPending(): Promise<void>`  *(App.svelte:[1637](../../../app/src/App.svelte#L1637))*
 
 **Purpose**: Wipe all pending entries.
 
@@ -868,7 +868,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `invoke('pending_clear')`.
 
-**Triggered by**: Markup button 全部清空 [2831](../../../app/src/App.svelte#L2831).
+**Triggered by**: Markup button 全部清空 [2835](../../../app/src/App.svelte#L2835).
 
 ---
 
@@ -885,7 +885,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `invoke('preview_legacy_import', { sourceDir })` → `LegacyImportPreview`.
 
-**Triggered by**: Markup button [1927](../../../app/src/App.svelte#L1927).
+**Triggered by**: Markup button [1930](../../../app/src/App.svelte#L1930).
 
 ---
 
@@ -898,18 +898,19 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 - Resets `legacyError` / `legacyReport` (keeps `legacyPreview`); empty path → `legacyError`, return; `legacyBusy` set/finally.
 - After success, conditionally refreshes:
   - `rd_token_imported` → `rdHasToken = true`
-  - `env_imported` → `loadAndApplySettings()` (failure only `console.warn`)
+  - `env_imported` → `const updated = await loadAndApplySettings()`; if the settings editor is open (`settingsDraft` non-null), `settingsDraft = freshSettingsDraft(updated)` so the draft shows the imported values instead of stale ones (Rust already pushed them to the sidecar). Failure only `console.warn`.
   - `pending_imported > 0` → `reloadPendingSilently("pending_list after import")`
   - `cookies_imported` → `refreshCookiesStatus()`
-- Writes `legacyReport`, `legacyError`, `legacyBusy`; flashes `legacy-apply`.
+- Writes `legacyReport`, `legacyError`, `legacyBusy`, `settingsDraft` (conditional); flashes `legacy-apply`.
 
 **Calls**:
 - `invoke('apply_legacy_import', { sourceDir })` → `LegacyImportReport`.
 - `loadAndApplySettings()` → `invoke('read_settings')` (conditional).
+- `freshSettingsDraft(updated)` (conditional: `env_imported` and editor open).
 - `reloadPendingSilently()` → `invoke('pending_list')` (conditional).
 - `refreshCookiesStatus()` (conditional).
 
-**Triggered by**: Markup button [1938](../../../app/src/App.svelte#L1938).
+**Triggered by**: Markup button [1941](../../../app/src/App.svelte#L1941).
 
 ---
 
@@ -923,7 +924,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `invoke('migrate_cookies_now')` → `CookiesStatus`; fallback `invoke('get_cookies_status')` → `CookiesStatus`.
 
-**Triggered by**: `onMount`, `createCookiesTemplate`, `applyLegacyImportConfirmed`, markup button [2213](../../../app/src/App.svelte#L2213).
+**Triggered by**: `onMount`, `createCookiesTemplate`, `applyLegacyImportConfirmed`, markup button [2217](../../../app/src/App.svelte#L2217).
 
 ---
 
@@ -931,7 +932,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Purpose**: Flip `cookiesShown`; on collapse also disarms `cookiesClearArmed` so a primed destructive button is never left behind a collapsed section.
 
-**Triggered by**: Section toggle [2144](../../../app/src/App.svelte#L2144).
+**Triggered by**: Section toggle [2148](../../../app/src/App.svelte#L2148).
 
 ---
 
@@ -939,7 +940,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Purpose**: Open/close the paste box. Clears `cookiesMessage`, `cookiesError`, `cookiesClearArmed`; clears `cookiesPasteInput` when closing.
 
-**Triggered by**: 貼上新 cookies / 取消輸入 [2220](../../../app/src/App.svelte#L2220), paste-box 取消 [2284](../../../app/src/App.svelte#L2284).
+**Triggered by**: 貼上新 cookies / 取消輸入 [2224](../../../app/src/App.svelte#L2224), paste-box 取消 [2288](../../../app/src/App.svelte#L2288).
 
 ---
 
@@ -947,7 +948,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Purpose**: First click of the two-click clear (`cookiesClearArmed = true`, clears `cookiesMessage`/`cookiesError`) and its cancel (`cookiesClearArmed = false`).
 
-**Triggered by**: 清除 cookies [2235](../../../app/src/App.svelte#L2235) (disabled while saving or when `cookiesStatus` is null / `storage === "none"`) and 取消清除 [2227](../../../app/src/App.svelte#L2227).
+**Triggered by**: 清除 cookies [2239](../../../app/src/App.svelte#L2239) (disabled while saving or when `cookiesStatus` is null / `storage === "none"`) and 取消清除 [2231](../../../app/src/App.svelte#L2231).
 
 ---
 
@@ -963,7 +964,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `invoke('clear_cookies')` → `CookiesStatus`; `invoke('get_cookies_status')` on the stale-sidecar path; `errText`.
 
-**Triggered by**: 確定清除 [2224](../../../app/src/App.svelte#L2224) (rendered only while armed).
+**Triggered by**: 確定清除 [2228](../../../app/src/App.svelte#L2228) (rendered only while armed).
 
 ---
 
@@ -975,7 +976,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `invoke('save_cookies', { cookies })` → `CookiesStatus`; `errText`.
 
-**Triggered by**: 儲存到認證管理員 [2274](../../../app/src/App.svelte#L2274).
+**Triggered by**: 儲存到認證管理員 [2278](../../../app/src/App.svelte#L2278).
 
 ---
 
@@ -985,7 +986,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `invoke('open_data_dir')`.
 
-**Triggered by**: Markup button [2218](../../../app/src/App.svelte#L2218).
+**Triggered by**: Markup button [2222](../../../app/src/App.svelte#L2222).
 
 ---
 
@@ -995,7 +996,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `invoke('open_logs_dir')`.
 
-**Triggered by**: Markup button [2219](../../../app/src/App.svelte#L2219).
+**Triggered by**: Markup button [2223](../../../app/src/App.svelte#L2223).
 
 ---
 
@@ -1007,7 +1008,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Calls**: `invoke('create_cookies_template')`, `refreshCookiesStatus()`.
 
-**Triggered by**: Markup button [2244](../../../app/src/App.svelte#L2244) (only rendered when `cookiesStatus` is set and `storage !== "file"`).
+**Triggered by**: Markup button [2248](../../../app/src/App.svelte#L2248) (only rendered when `cookiesStatus` is set and `storage !== "file"`).
 
 ---
 
@@ -1015,7 +1016,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Purpose**: Format byte count as B / KB / MB string (no GB tier — cookies files are tiny).
 
-**Pure**. Called by markup for `cookiesStatus.size_bytes` formatting [2174](../../../app/src/App.svelte#L2174).
+**Pure**. Called by markup for `cookiesStatus.size_bytes` formatting [2178](../../../app/src/App.svelte#L2178).
 
 ---
 
@@ -1025,7 +1026,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Purpose**: Single clone helper for the editor draft: copies `version`, shallow-copies `ui` and `rd`, and blanks `rd.api_token` (the editor never displays it).
 
-**Pure**. Called by `openSettingsEditor`, `saveSettings`, `revertSettingsDraft`.
+**Pure**. Called by `openSettingsEditor`, `saveSettings`, `revertSettingsDraft`, `applyLegacyImportConfirmed` (only when `settingsDraft` is non-null).
 
 ---
 
@@ -1037,7 +1038,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 - Guard: if `settings` is null, writes `settingsMessage = "設定尚未載入"` / Kind = error and returns.
 - Writes `settingsDraft`, `settingsShown`, `settingsMessage` (cleared).
 
-**Triggered by**: Toggle button [2030](../../../app/src/App.svelte#L2030) (only opens, never via direct call).
+**Triggered by**: Toggle button [2033](../../../app/src/App.svelte#L2033) (only opens, never via direct call).
 
 ---
 
@@ -1057,7 +1058,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 - `invoke('update_sidecar_settings', { settings: toSave })`
 - `loadAndApplySettings()` → `invoke('read_settings')` + `applyTheme` / `applyScale`.
 
-**Triggered by**: Markup button [2121](../../../app/src/App.svelte#L2121).
+**Triggered by**: Markup button [2125](../../../app/src/App.svelte#L2125).
 
 ---
 
@@ -1065,7 +1066,7 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 **Purpose**: Reset `settingsDraft` to `freshSettingsDraft(settings)` (un-saved edits discarded); `settingsMessage = "已還原為已儲存值"`, kind `info`. No-op when `settings` is null.
 
-**Triggered by**: Markup button [2131](../../../app/src/App.svelte#L2131).
+**Triggered by**: Markup button [2135](../../../app/src/App.svelte#L2135).
 
 ---
 
@@ -1073,20 +1074,20 @@ All four handlers turn a caught error into a code with `errText(e)` ([lib/errTex
 
 These are inlined in markup rather than declared at the top level; they're listed for completeness:
 
-- `() => (activeTab = "search"|"select"|"rd"|"settings")` — tab buttons [1676, 1686, 1696, 1706](../../../app/src/App.svelte#L1676); 前往挑選 Magnet [2312](../../../app/src/App.svelte#L2312), 回到挑選 [1844](../../../app/src/App.svelte#L1844), 前往「4. 設定」設定 Token [1858](../../../app/src/App.svelte#L1858), 前往 RD 下載連結 [2448](../../../app/src/App.svelte#L2448)
-- `() => (legacyShown = !legacyShown)` — toggle button [1907](../../../app/src/App.svelte#L1907)
-- `() => { if (!settingsShown) openSettingsEditor(); else settingsShown = false; }` — settings toggle [2030](../../../app/src/App.svelte#L2030)
-- `(e) => { e.preventDefault(); openExternal('https://real-debrid.com/apitoken').catch(...) }` — external link [1760](../../../app/src/App.svelte#L1760)
-- `() => setRowsSelected(allVisibleRows, true|false)` / `() => selectOnlyRows(allVisibleRows)` — selection summary [2426–2435](../../../app/src/App.svelte#L2426)
-- `(e) => setGroupPick((e.currentTarget as HTMLSelectElement).value as GroupPick)` — group-pick select [2493](../../../app/src/App.svelte#L2493)
-- `() => confirmSend('all')` / `() => confirmSend('high')` — pre-send confirmation panel [1878, 1882](../../../app/src/App.svelte#L1878)
-- `() => toggleCollapsed(g.url)` — per-group toggle [2517](../../../app/src/App.svelte#L2517)
-- `() => setRowsSelected(rows, true|false)` — per-group 勾選本組顯示 / 取消本組顯示 [2538, 2541](../../../app/src/App.svelte#L2538)
-- `() => toggleSort('name'|'size'|'tags'|'date')` — table header buttons [2566–2581](../../../app/src/App.svelte#L2566)
-- `() => copyOne(m.handle_id, m.name || g.result!.code)` — per-row copy [2600, 2643](../../../app/src/App.svelte#L2600)
-- `(e) => setRowSelected(m.handle_id, e.currentTarget.checked)` — per-row checkbox [2609](../../../app/src/App.svelte#L2609) (click/dblclick `stopPropagation` so the row's dblclick-copy does not fire)
-- `() => copyRdRow(row)` / `() => copyRdSingleLink(row.handle_id, link.download, i)` — progress table [2743, 2775](../../../app/src/App.svelte#L2743)
-- `() => removePending(p.torrent_id)` — pending row remove [2861](../../../app/src/App.svelte#L2861)
+- `() => (activeTab = "search"|"select"|"rd"|"settings")` — tab buttons [1679, 1689, 1699, 1709](../../../app/src/App.svelte#L1679); 前往挑選 Magnet [2316](../../../app/src/App.svelte#L2316), 回到挑選 [1847](../../../app/src/App.svelte#L1847), 前往「4. 設定」設定 Token [1861](../../../app/src/App.svelte#L1861), 前往 RD 下載連結 [2452](../../../app/src/App.svelte#L2452)
+- `() => (legacyShown = !legacyShown)` — toggle button [1910](../../../app/src/App.svelte#L1910)
+- `() => { if (!settingsShown) openSettingsEditor(); else settingsShown = false; }` — settings toggle [2033](../../../app/src/App.svelte#L2033)
+- `(e) => { e.preventDefault(); openExternal('https://real-debrid.com/apitoken').catch(...) }` — external link [1763](../../../app/src/App.svelte#L1763)
+- `() => setRowsSelected(allVisibleRows, true|false)` / `() => selectOnlyRows(allVisibleRows)` — selection summary [2430–2439](../../../app/src/App.svelte#L2430)
+- `(e) => setGroupPick((e.currentTarget as HTMLSelectElement).value as GroupPick)` — group-pick select [2497](../../../app/src/App.svelte#L2497)
+- `() => confirmSend('all')` / `() => confirmSend('high')` — pre-send confirmation panel [1881, 1885](../../../app/src/App.svelte#L1881)
+- `() => toggleCollapsed(g.url)` — per-group toggle [2521](../../../app/src/App.svelte#L2521)
+- `() => setRowsSelected(rows, true|false)` — per-group 勾選本組顯示 / 取消本組顯示 [2542, 2545](../../../app/src/App.svelte#L2542)
+- `() => toggleSort('name'|'size'|'tags'|'date')` — table header buttons [2570–2585](../../../app/src/App.svelte#L2570)
+- `() => copyOne(m.handle_id, m.name || g.result!.code)` — per-row copy [2604, 2647](../../../app/src/App.svelte#L2604)
+- `(e) => setRowSelected(m.handle_id, e.currentTarget.checked)` — per-row checkbox [2613](../../../app/src/App.svelte#L2613) (click/dblclick `stopPropagation` so the row's dblclick-copy does not fire)
+- `() => copyRdRow(row)` / `() => copyRdSingleLink(row.handle_id, link.download, i)` — progress table [2747, 2779](../../../app/src/App.svelte#L2747)
+- `() => removePending(p.torrent_id)` — pending row remove [2865](../../../app/src/App.svelte#L2865)
 
 ---
 
@@ -1114,7 +1115,7 @@ Svelte mount
 ### 4.2 "Scrape" button click
 
 ```
-button.onclick [2306]
+button.onclick [2310]
 └── startScrape [322]
     ├── parseUrlBatch(urlBatch)             (lib/scraper.ts:145)
     ├── groups = [url placeholders..., ...manual groups]; sendPlanOpen = false
@@ -1133,7 +1134,7 @@ UI re-render path: `groups` mutation → `groupProcessedRowsMap` recomputed → 
 ### 4.3 "Send to RD" button click
 
 ```
-button.onclick [1846]
+button.onclick [1849]
 └── sendSelectedToRd [994]
     ├── rdSendTriage (derived) [849]
     │   ├── buildSelectedSendItems [973]
@@ -1142,7 +1143,7 @@ button.onclick [1846]
     │   └── summarizeRdLikelihood(classes via rowClassByHandle) (lib/rdPriority.ts:188)
     ├── low === 0 → runSendBatch(items)                    ← unchanged one-click path
     └── low  > 0  → sendPlanOpen = true; return
-                    └── panel [1867] → confirmSend('all'|'high') [1021] → runSendBatch
+                    └── panel [1870] → confirmSend('all'|'high') [1021] → runSendBatch
                                     → cancelSendPlan [1046]
 runSendBatch(items) [1057]
 ├── (sendPlanOpen = false; lastBatchStartAt; init rdSendProgress, rdSendDone, rdSendAbort)
@@ -1158,7 +1159,7 @@ finally:
 ### 4.4 "Paste magnet → register" flow
 
 ```
-button.onclick [2390]
+button.onclick [2394]
 └── registerPastedMagnets [431]
     ├── parseMagnetBatch(magnetBatch) (lib/scraper.ts:155)
     ├── invoke('register_magnets', { magnets })
@@ -1172,7 +1173,7 @@ Downstream: visible-count derived recomputes, filter/sort table picks up new row
 ### 4.5 "Retry all pending" flow
 
 ```
-button.onclick [2815]
+button.onclick [2819]
 └── retryAllPending [1203]
     ├── (init lastBatchStartAt, isRetryingPending, retryAbort, pendingMessage)
     └── retryPending(pendingEntries, cb, {signal}) (lib/rdSender.ts:311)
@@ -1193,7 +1194,7 @@ button.onclick [2815]
 ### 4.6 "Save settings" flow
 
 ```
-button.onclick [2121]
+button.onclick [2125]
 └── saveSettings [1532]
     ├── guard settingsWriteBusy; validate via $derived settingsValid
     ├── invoke('write_settings', { settings: toSave })   (api_token blanked)
@@ -1205,13 +1206,14 @@ button.onclick [2121]
 ### 4.7 "Apply legacy import" flow
 
 ```
-button.onclick [1938]
+button.onclick [1941]
 └── applyLegacyImportConfirmed [1580]
     ├── guard settingsWriteBusy
     ├── invoke('apply_legacy_import', { sourceDir })   → LegacyImportReport
     ├── if rd_token_imported: rdHasToken = true
     ├── if env_imported:
-    │   └── loadAndApplySettings()
+    │   ├── loadAndApplySettings()                    → updated
+    │   └── if settingsDraft: settingsDraft = freshSettingsDraft(updated)
     ├── if pending_imported > 0:
     │   └── reloadPendingSilently("pending_list after import")
     └── if cookies_imported:
@@ -1225,7 +1227,7 @@ button.onclick [1938]
 ### 5.1 Top-level structure
 
 `<main class="container">` opens with the title and a four-button tab bar (`<nav class="tabs">`
-[1671–1712](../../../app/src/App.svelte#L1671): 1. 擷取 Magnet / 2. 挑選 Magnet / 3. RD 下載連結 /
+[1674–1715](../../../app/src/App.svelte#L1674): 1. 擷取 Magnet / 2. 挑選 Magnet / 3. RD 下載連結 /
 4. 設定, each with a live count badge), then the global `statusMessage` line, then a sequence of
 `<section>` blocks. There is **no router**, **no modal overlay**, **no nested component**. Most
 sections stay mounted and are hidden with `hidden={activeTab !== "<tab>"}`; only the two RD
@@ -1233,71 +1235,71 @@ result tables are `{#if}`-gated on `activeTab === "rd"`.
 
 | Section | Lines | Tab / gate | Notes |
 |---|---|---|---|
-| `<h1>` + subtitle | [1668–1669](../../../app/src/App.svelte#L1668) | always | header |
-| Tab bar | [1671–1712](../../../app/src/App.svelte#L1671) | always | `onTabKeydown` on each button |
-| Global status | [1714–1716](../../../app/src/App.svelte#L1714) | `{#if statusMessage}` | |
-| Real-Debrid Token | [1718–1800](../../../app/src/App.svelte#L1718) | settings | token input, test/save; 查詢帳號 / 清除 Token only when `rdHasToken`; `rdUser` line, `rdMessage` |
-| 儲存位置 (Storage paths) | [1802–1810](../../../app/src/App.svelte#L1802) | settings | shows `dataDir`, `logDir` |
-| 主題 (Theme) | [1812–1817](../../../app/src/App.svelte#L1812) | settings | `toggleTheme` button |
-| Sidecar | [1819–1832](../../../app/src/App.svelte#L1819) | settings | `pingSidecar` button + `pingMessage` |
-| Real-Debrid (send panel) | [1834–1900](../../../app/src/App.svelte#L1834) | rd | 回到挑選 / send button (`sendButtonLabel`), no-token hint, 送出前確認 panel, `rdMessage` |
-| 匯入舊版資料 (Legacy import) | [1902–2023](../../../app/src/App.svelte#L1902) | settings; `{#if legacyShown}` [1911](../../../app/src/App.svelte#L1911) | preview / apply / report inside; preview-vs-report shown by `{#if legacyPreview}` and `{#if legacyReport}` |
-| 應用程式設定 (Settings editor) | [2025–2137](../../../app/src/App.svelte#L2025) | settings; `{#if settingsShown && settingsDraft}` [2037](../../../app/src/App.svelte#L2037) | two `<fieldset>`s (RD behaviour + UI). Bound via `bind:value={settingsDraft.rd.*/ui.*}` |
-| JavDB Cookies | [2139–2291](../../../app/src/App.svelte#L2139) | settings; `{#if cookiesShown}` [2148](../../../app/src/App.svelte#L2148) | status by `storage` (keyring / file / none), refresh / open dirs / paste / two-click clear / create template |
-| 批次擷取 (Scrape) | [2293–2370](../../../app/src/App.svelte#L2293) | search | URL textarea + action row + status bar + per-URL outcome list (`{#if webGroups.length > 0}` [2337](../../../app/src/App.svelte#L2337)) + empty state |
-| 直接貼磁力 (Paste magnet) | [2372–2410](../../../app/src/App.svelte#L2372) | search | magnet textarea + register button + `registerStatus` |
-| 每個番號選取 Magnet (Select) | [2412–2665](../../../app/src/App.svelte#L2412) | select; `{#if groups.length > 0}` [2417](../../../app/src/App.svelte#L2417) | selection summary + filter row + **groups list rendering lives here** (checkbox table) |
-| 送至 Real-Debrid 進度 (Send progress) | [2667–2798](../../../app/src/App.svelte#L2667) | `{#if activeTab === "rd" && rdSendProgress.length > 0}` | status bar, cancel (only while sending), bulk copy; per-row table over `rdDisplayRows` |
-| 待處理（Real-Debrid） (Pending) | [2800–2868](../../../app/src/App.svelte#L2800) | `{#if activeTab === "rd" && pendingEntries.length > 0}` | retry-all / cancel / refresh-local / clear-all + per-row table |
+| `<h1>` + subtitle | [1671–1672](../../../app/src/App.svelte#L1671) | always | header |
+| Tab bar | [1674–1715](../../../app/src/App.svelte#L1674) | always | `onTabKeydown` on each button |
+| Global status | [1717–1719](../../../app/src/App.svelte#L1717) | `{#if statusMessage}` | |
+| Real-Debrid Token | [1721–1803](../../../app/src/App.svelte#L1721) | settings | token input, test/save; 查詢帳號 / 清除 Token only when `rdHasToken`; `rdUser` line, `rdMessage` |
+| 儲存位置 (Storage paths) | [1805–1813](../../../app/src/App.svelte#L1805) | settings | shows `dataDir`, `logDir` |
+| 主題 (Theme) | [1815–1820](../../../app/src/App.svelte#L1815) | settings | `toggleTheme` button |
+| Sidecar | [1822–1835](../../../app/src/App.svelte#L1822) | settings | `pingSidecar` button + `pingMessage` |
+| Real-Debrid (send panel) | [1837–1903](../../../app/src/App.svelte#L1837) | rd | 回到挑選 / send button (`sendButtonLabel`), no-token hint, 送出前確認 panel, `rdMessage` |
+| 匯入舊版資料 (Legacy import) | [1905–2026](../../../app/src/App.svelte#L1905) | settings; `{#if legacyShown}` [1914](../../../app/src/App.svelte#L1914) | preview / apply / report inside; preview-vs-report shown by `{#if legacyPreview}` and `{#if legacyReport}` |
+| 應用程式設定 (Settings editor) | [2028–2141](../../../app/src/App.svelte#L2028) | settings; `{#if settingsShown && settingsDraft}` [2040](../../../app/src/App.svelte#L2040) | two `<fieldset>`s (RD behaviour + UI). Bound via `bind:value={settingsDraft.rd.*/ui.*}`; the min-size `<input id="set-min-size" type="number" min="0" max="1000000" step="1">` ([2063](../../../app/src/App.svelte#L2063)) mirrors `MAX_MIN_SIZE_MB` / `validateMinSizeMb` |
+| JavDB Cookies | [2143–2295](../../../app/src/App.svelte#L2143) | settings; `{#if cookiesShown}` [2152](../../../app/src/App.svelte#L2152) | status by `storage` (keyring / file / none), refresh / open dirs / paste / two-click clear / create template |
+| 批次擷取 (Scrape) | [2297–2374](../../../app/src/App.svelte#L2297) | search | URL textarea + action row + status bar + per-URL outcome list (`{#if webGroups.length > 0}` [2341](../../../app/src/App.svelte#L2341)) + empty state |
+| 直接貼磁力 (Paste magnet) | [2376–2414](../../../app/src/App.svelte#L2376) | search | magnet textarea + register button + `registerStatus` |
+| 每個番號選取 Magnet (Select) | [2416–2669](../../../app/src/App.svelte#L2416) | select; `{#if groups.length > 0}` [2421](../../../app/src/App.svelte#L2421) | selection summary + filter row + **groups list rendering lives here** (checkbox table) |
+| 送至 Real-Debrid 進度 (Send progress) | [2671–2802](../../../app/src/App.svelte#L2671) | `{#if activeTab === "rd" && rdSendProgress.length > 0}` | status bar, cancel (only while sending), bulk copy; per-row table over `rdDisplayRows` |
+| 待處理（Real-Debrid） (Pending) | [2804–2872](../../../app/src/App.svelte#L2804) | `{#if activeTab === "rd" && pendingEntries.length > 0}` | retry-all / cancel / refresh-local / clear-all + per-row table |
 
 **RD hit-likelihood markup (2026-08-01).**
 
 | Block | Line | Rendered when | Notes |
 |---|---|---|---|
-| 送出前確認 panel | [1867–1891](../../../app/src/App.svelte#L1867) | `{#if sendPlanOpen}` | 高機率／低機率／未判定 counts + 全部送出 / 只送高機率 / 取消送出. Only appears when the batch actually contains low-likelihood rows, so a clean batch never grows an extra click. |
-| 只勾選 RD 優先候選 button | [2432](../../../app/src/App.svelte#L2432) | `{#if groups.length > 0}` | Sits in the selection-summary action row next to 只勾選目前顯示. |
-| `rd_ready` `<option>` | [2496](../../../app/src/App.svelte#L2496) | always (within the select tab) | 每組只留 select, placed directly after 全部. |
-| Per-row RD badge | [2595–2596](../../../app/src/App.svelte#L2595), [2625–2628](../../../app/src/App.svelte#L2625) | `{#if rdMark}` | `{@const rdCls = rowClassByHandle.get(m.handle_id) ?? classifyRow(m)}` → `rdBadge(rdCls)`. The map, not a direct `classifyRow(m)`: a manual row and its web twin are one BTIH and the web row is the one carrying metadata. `data-rd={rdCls}` drives the badge colour from CSS. |
-| Per-row ★ 首選 | [2629–2635](../../../app/src/App.svelte#L2629) | `{#if rdPick && rdPick.row.handle_id === m.handle_id}` | `{@const rdPick = isManualGroup(g) ? undefined : rdPickByGroup.get(g.url)}` [2512](../../../app/src/App.svelte#L2512) — per-GROUP lookup so the same BTIH in a web and a manual group cannot cross-star, and manual groups get no ★ at all (`processGroupRows` never narrows them). `title` from `rdPickTitle(tier)`. |
-| ＝網頁同筆 badge | [2619–2624](../../../app/src/App.svelte#L2619) | manual row whose handle is in `webHandleIds` | Tells the user the checkbox state is shared and RD gets it once. |
+| 送出前確認 panel | [1870–1894](../../../app/src/App.svelte#L1870) | `{#if sendPlanOpen}` | 高機率／低機率／未判定 counts + 全部送出 / 只送高機率 / 取消送出. Only appears when the batch actually contains low-likelihood rows, so a clean batch never grows an extra click. |
+| 只勾選 RD 優先候選 button | [2436](../../../app/src/App.svelte#L2436) | `{#if groups.length > 0}` | Sits in the selection-summary action row next to 只勾選目前顯示. |
+| `rd_ready` `<option>` | [2500](../../../app/src/App.svelte#L2500) | always (within the select tab) | 每組只留 select, placed directly after 全部. |
+| Per-row RD badge | [2599–2600](../../../app/src/App.svelte#L2599), [2629–2632](../../../app/src/App.svelte#L2629) | `{#if rdMark}` | `{@const rdCls = rowClassByHandle.get(m.handle_id) ?? classifyRow(m)}` → `rdBadge(rdCls)`. The map, not a direct `classifyRow(m)`: a manual row and its web twin are one BTIH and the web row is the one carrying metadata. `data-rd={rdCls}` drives the badge colour from CSS. |
+| Per-row ★ 首選 | [2633–2639](../../../app/src/App.svelte#L2633) | `{#if rdPick && rdPick.row.handle_id === m.handle_id}` | `{@const rdPick = isManualGroup(g) ? undefined : rdPickByGroup.get(g.url)}` [2516](../../../app/src/App.svelte#L2516) — per-GROUP lookup so the same BTIH in a web and a manual group cannot cross-star, and manual groups get no ★ at all (`processGroupRows` never narrows them). `title` from `rdPickTitle(tier)`. |
+| ＝網頁同筆 badge | [2623–2628](../../../app/src/App.svelte#L2623) | manual row whose handle is in `webHandleIds` | Tells the user the checkbox state is shared and RD gets it once. |
 
 ### 5.2 Event binding hotspots
 
-- **Tab bar**: [1676–1707](../../../app/src/App.svelte#L1676).
-- **Settings form binds** (drives derived `settingsErrors`/`settingsValid`): [2047, 2065, 2080, 2094, 2107](../../../app/src/App.svelte#L2047).
-- **Filter row** (drives `processedRows`): [2461, 2466, 2475–2476, 2485–2486, 2492–2493, 2502](../../../app/src/App.svelte#L2461).
-- **Selection summary row**: [2426–2448](../../../app/src/App.svelte#L2426).
-- **Group table sort header buttons**: [2566–2581](../../../app/src/App.svelte#L2566).
-- **Per-row checkbox**: [2604–2613](../../../app/src/App.svelte#L2604).
-- **Per-row magnet copy** (both row dblclick and per-row button): [2600, 2643](../../../app/src/App.svelte#L2600).
-- **Scrape action row**: [2306–2322](../../../app/src/App.svelte#L2306).
-- **Send-to-RD action row**: [1844–1858](../../../app/src/App.svelte#L1844); progress actions [2679, 2685](../../../app/src/App.svelte#L2679).
-- **Cookies action row**: [2213–2248](../../../app/src/App.svelte#L2213).
-- **Pending action row**: [2815–2831](../../../app/src/App.svelte#L2815).
-- **Per-pending row remove**: [2861](../../../app/src/App.svelte#L2861).
+- **Tab bar**: [1679–1710](../../../app/src/App.svelte#L1679).
+- **Settings form binds** (drives derived `settingsErrors`/`settingsValid`): [2050, 2069, 2084, 2098, 2111](../../../app/src/App.svelte#L2050).
+- **Filter row** (drives `processedRows`): [2465, 2470, 2479–2480, 2489–2490, 2496–2497, 2506](../../../app/src/App.svelte#L2465).
+- **Selection summary row**: [2430–2452](../../../app/src/App.svelte#L2430).
+- **Group table sort header buttons**: [2570–2585](../../../app/src/App.svelte#L2570).
+- **Per-row checkbox**: [2608–2617](../../../app/src/App.svelte#L2608).
+- **Per-row magnet copy** (both row dblclick and per-row button): [2604, 2647](../../../app/src/App.svelte#L2604).
+- **Scrape action row**: [2310–2326](../../../app/src/App.svelte#L2310).
+- **Send-to-RD action row**: [1847–1861](../../../app/src/App.svelte#L1847); progress actions [2683, 2689](../../../app/src/App.svelte#L2683).
+- **Cookies action row**: [2217–2252](../../../app/src/App.svelte#L2217).
+- **Pending action row**: [2819–2835](../../../app/src/App.svelte#L2819).
+- **Per-pending row remove**: [2865](../../../app/src/App.svelte#L2865).
 
 ### 5.3 `{#each}` lists
 
-- `legacyPreview.warnings` [1976](../../../app/src/App.svelte#L1976)
-- `legacyReport.sources` [2003](../../../app/src/App.svelte#L2003)
-- `legacyReport.warnings` [2013](../../../app/src/App.svelte#L2013)
-- `FILE_PICK_VALUES` / `THEME_VALUES` / `SCALE_PRESETS` `<option>` lists [2048, 2095, 2108](../../../app/src/App.svelte#L2048)
-- `webGroups` keyed by `g.url` (scrape outcome list) [2342](../../../app/src/App.svelte#L2342)
-- `groups` keyed by `g.url` [2506](../../../app/src/App.svelte#L2506)
-- `rows` keyed by `m.handle_id` [2590](../../../app/src/App.svelte#L2590)
-- `rdDisplayRows` keyed by `row.handle_id` [2708](../../../app/src/App.svelte#L2708)
-- `row.links` (per `completed` row) [2752](../../../app/src/App.svelte#L2752)
-- `pendingEntries` keyed by `p.torrent_id` [2852](../../../app/src/App.svelte#L2852)
+- `legacyPreview.warnings` [1979](../../../app/src/App.svelte#L1979)
+- `legacyReport.sources` [2006](../../../app/src/App.svelte#L2006)
+- `legacyReport.warnings` [2016](../../../app/src/App.svelte#L2016)
+- `FILE_PICK_VALUES` / `THEME_VALUES` / `SCALE_PRESETS` `<option>` lists [2051, 2099, 2112](../../../app/src/App.svelte#L2051)
+- `webGroups` keyed by `g.url` (scrape outcome list) [2346](../../../app/src/App.svelte#L2346)
+- `groups` keyed by `g.url` [2510](../../../app/src/App.svelte#L2510)
+- `rows` keyed by `m.handle_id` [2594](../../../app/src/App.svelte#L2594)
+- `rdDisplayRows` keyed by `row.handle_id` [2712](../../../app/src/App.svelte#L2712)
+- `row.links` (per `completed` row) [2756](../../../app/src/App.svelte#L2756)
+- `pendingEntries` keyed by `p.torrent_id` [2856](../../../app/src/App.svelte#L2856)
 
 ### 5.4 Style
 
-The `<style>` block ([2871–3422](../../../app/src/App.svelte#L2871)) is component-scoped (Svelte default). It uses CSS custom properties (`--color-*`, `--border`, `--ui-scale`) that `applyTheme` / `applyScale` and `index.css` are responsible for defining. No `@keyframes` and no nested selectors; there is one short button `transition` (press / `flash-ok` feedback) and one `@media (max-width: 760px)` block ([3406](../../../app/src/App.svelte#L3406)) that stacks the tab bar and the selection / send / plan panels on narrow windows.
+The `<style>` block ([2875–3426](../../../app/src/App.svelte#L2875)) is component-scoped (Svelte default). It uses CSS custom properties (`--color-*`, `--border`, `--ui-scale`) that `applyTheme` / `applyScale` and `index.css` are responsible for defining. No `@keyframes` and no nested selectors; there is one short button `transition` (press / `flash-ok` feedback) and one `@media (max-width: 760px)` block ([3410](../../../app/src/App.svelte#L3410)) that stacks the tab bar and the selection / send / plan panels on narrow windows.
 
 ---
 
 ## 6. Refactor hotspots
 
-Brief and factual; final judgement is the user's. Status as of HEAD `9e49603`.
+Brief and factual; final judgement is the user's. Status as of HEAD `7c877a8`.
 
 1. **`retryAllPending` ([1203–1292](../../../app/src/App.svelte#L1203)) is ~90 lines**, mixing iteration/accumulators, per-event reconciliation, post-loop pending-list refresh, and a multi-fragment summary builder that also performs a follow-up clipboard write. The former duplicated reconciliation loops are gone — both the completed and missing branches now call `applyRetryEventToProgressRows` (lib/rdSender.ts). Remaining easy split: summary-string builder vs. thin orchestrator.
 

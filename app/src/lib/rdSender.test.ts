@@ -691,6 +691,7 @@ describe("applyRetryEventToProgressRows", () => {
 describe("rdErrorMessage", () => {
   it("maps known codes to localized strings", () => {
     expect(rdErrorMessage("rd_no_token")).toContain("尚未設定");
+    expect(rdErrorMessage("rd_token_format_invalid")).toContain("格式無效");
     expect(rdErrorMessage("rd_token_invalid")).toContain("Token 無效");
     expect(rdErrorMessage("rd_premium_required")).toContain("Premium");
     expect(rdErrorMessage("rd_rate_limited")).toContain("速率限制");

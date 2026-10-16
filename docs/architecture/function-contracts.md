@@ -1,6 +1,6 @@
 # Function Contracts & Call Traces — Index
 
-**Branch**: `claude/docs-code-alignment-8xcd4e` · **Generated**: 2026-05-14 · **Last refreshed**: 2026-10-16 against HEAD `9e49603` (release 0.3.1) — index, inventory, call graph and punch list re-verified against source. **Scope**: every function in the production Tauri/Svelte/Rust/Python sidecar path, plus historical reference for the retired Tk GUI under `legacy/`.
+**Branch**: `claude/docs-code-alignment-8xcd4e` · **Generated**: 2026-05-14 · **Last refreshed**: 2026-10-16 against HEAD `7c877a8` (release 0.3.1 + PR #11) — index, inventory, call graph and punch list re-verified against source. **Scope**: every function in the production Tauri/Svelte/Rust/Python sidecar path, plus historical reference for the retired Tk GUI under `legacy/`.
 
 This document is the **entry point** to a per-layer reference set. Each layer file documents every function with: purpose, params/returns, side effects, errors, async behavior, and the **call trace** (which functions it invokes, including cross-language bridges like `invoke()` and sidecar stdio).
 
@@ -123,13 +123,13 @@ The app is a **3-tier Windows desktop application**: a Svelte 5 single-page UI (
 
 ## Cross-layer call graph
 
-The seven user-visible flows, from UI click down to Python execution. File:line links point into the per-layer docs.
+The eight user-visible flows, from UI click down to Python execution. File:line links point into the per-layer docs.
 
 ### Flow 1 — App boot
 
 ```
 main.rs::main                                    (app/src-tauri/src/main.rs:4)
-└── lib.rs::run                                  (app/src-tauri/src/lib.rs:358)
+└── lib.rs::run                                  (app/src-tauri/src/lib.rs:385)
     └── Builder::default()
         ├── .plugin(store / shell / clipboard-manager / dialog)
         ├── .setup(|app| ...)
@@ -138,9 +138,10 @@ main.rs::main                                    (app/src-tauri/src/main.rs:4)
         │   │   ├── load_cookies → migrate_cookies_from_file (cookies.txt → keyring)
         │   │   │                  else cookie_store::get_cookies
         │   │   ├── read <data_dir>/settings.json
-        │   │   └── secret_store::get_rd_token, else migrate_legacy_token
-        │   ├── block_on(SidecarManager::spawn_and_handshake)  (lib.rs:380) ⚠ blocks setup
-        │   │   │                                (app/src-tauri/src/sidecar_manager.rs:187)
+        │   │   ├── secret_store::get_rd_token, else migrate_legacy_token
+        │   │   └── commands::blank_rd_api_token(settings) — handshake never carries rd.api_token
+        │   ├── block_on(SidecarManager::spawn_and_handshake)  (lib.rs:407) ⚠ blocks setup
+        │   │   │                                (app/src-tauri/src/sidecar_manager.rs:205)
         │   │   ├── sidecar_command → app.shell().sidecar("sidecar") + JAVDB_LOG_DIR env
         │   │   ├── spawn child; async_runtime::spawn(stdout line reader → mpsc)
         │   │   ├── request("hello", { protocol_version: 1 })
@@ -203,7 +204,7 @@ App.svelte::sendSelectedToRd (click "送出已勾選") (app/src/App.svelte:994)
     └── lib/rdSender.ts::sendBatch               (app/src/lib/rdSender.ts:149)
         └── for each item:
             ├── invoke('rd_send_magnet', { handleId, options: { strategy, min_size_mb, cache_wait, code, size_label } })
-            │   → commands::rd_send_magnet       (commands.rs:425)
+            │   → commands::rd_send_magnet       (commands.rs:443)
             │     └── SidecarManager::request("rd_send_magnet", ...)
             │         ↓ sidecar.exe
             │         sidecar.py::cmd_rd_send_magnet
@@ -227,7 +228,7 @@ App.svelte::sendSelectedToRd (click "送出已勾選") (app/src/App.svelte:994)
 App.svelte::retryAllPending  (~90 lines)         (app/src/App.svelte:1203)
 └── lib/rdSender.ts::retryPending                (app/src/lib/rdSender.ts:311)
     └── for each pending entry:
-        ├── invoke('rd_check_pending', { torrentId, strategy }) → commands::rd_check_pending (commands.rs:520)
+        ├── invoke('rd_check_pending', { torrentId, strategy }) → commands::rd_check_pending (commands.rs:538)
         │   ├── SidecarManager::request("rd_check_pending", ...)
         │   │   ↓ sidecar.exe
         │   │   sidecar.py::cmd_rd_check_pending
@@ -265,7 +266,8 @@ App.svelte::saveSettings                         (app/src/App.svelte:1532)
 │   └── tauri-plugin-store → <data_dir>/settings.json (%APPDATA%\JavDBMagnet on Windows)
 └── invoke('update_sidecar_settings', { settings }) → commands::update_sidecar_settings
                                                    └── SidecarManager::request("update_settings", ...)
-   ⚠ Rust does NOT chain these — frontend must call both. (See punch list.)
+   ⚠ Rust does NOT chain these — frontend must call both. (See punch list.) The one
+     Rust-side update_settings push is the legacy .env import (Flow 7).
 ```
 
 ### Flow 7 — Legacy import (.env / cookies.txt / pending_torrents.json)
@@ -273,14 +275,43 @@ App.svelte::saveSettings                         (app/src/App.svelte:1532)
 ```
 App.svelte::applyLegacyImportConfirmed (settings panel) (app/src/App.svelte:1580)
 └── invoke('apply_legacy_import', { sourceDir })
-    → commands::apply_legacy_import              (app/src-tauri/src/commands.rs:616)
+    → commands::apply_legacy_import              (app/src-tauri/src/commands.rs:634)
       ├── validate_legacy_source (non-empty dir, not the data dir)
       ├── legacy_import::preview                 (app/src-tauri/src/legacy_import.rs)
-      ├── import_env_block → legacy_import::parse_env
+      ├── import_env_block → read_legacy_env (spawn_blocking) → legacy_import::parse_env
       │   ├── RD_API_TOKEN → secret_store::set_rd_token + sidecar rd_set_token
-      │   └── settings patch → tauri-plugin-store settings.json
+      │   │                  (sidecar: token change → _close_rd_session)
+      │   └── settings patch → import_env_settings_patch → tauri-plugin-store settings.json
+      │       └── on save: push_imported_settings → sidecar update_settings
+      │           (settings_push_body re-blanks rd.api_token; failure → report.warnings)
       ├── import_cookies_block → copy cookies.txt into data dir (restart warning)
       └── import_pending_block → legacy_import::merge_legacy_pending → pending.rs::save
+↑ back to App.svelte: env_imported → loadAndApplySettings; if the settings editor is open,
+  settingsDraft = freshSettingsDraft(updated)
+```
+
+### Flow 8 — RD token test / save / clear (settings panel)
+
+```
+App.svelte::rdTestToken (click "測試連線")        (app/src/App.svelte:873)
+└── invoke('rd_test_token', { token })           → commands::rd_test_token (commands.rs:329)
+    └── rd_test_token_with                       (commands.rs:338)
+        ├── check_candidate_token                (commands.rs:316)
+        │   "" → Err("rd_no_token"); fails secret_store::is_valid_rd_token
+        │   → Err("rd_token_format_invalid")  — returned before any sidecar RPC
+        └── SidecarManager::request("rd_user", { token })
+            ↓ sidecar.exe
+            sidecar.py::cmd_rd_user — same format gate again (code rd_token_format_invalid,
+            │                         before any HTTP), then
+            └── _rd_client(token_override).user() → GET /user
+↑ errors render via lib/rdSender.ts::rdErrorMessage(code)
+
+App.svelte::rdSaveToken                          (app/src/App.svelte:889)
+└── invoke('rd_save_token') → is_valid_rd_token → secret_store::set_rd_token
+    → sidecar rd_set_token (token changed → _close_rd_session); then invoke('rd_check_user')
+App.svelte::rdClearToken                         (app/src/App.svelte:914)
+└── invoke('rd_clear_token') → secret_store::delete_rd_token
+    → sidecar rd_set_token { token: null } → _close_rd_session
 ```
 
 ---
@@ -367,13 +398,13 @@ Each agent surfaced refactor-relevant oddities. Consolidated here.
 ### Rust backend (`rust-backend.md` "Notable Findings")
 
 - ~~**`forget_magnets` skips the `ok` check**~~ **RESOLVED M9 Phase 0-A**: updated `commands.rs` to call `ensure_ok(&resp)?`. [`commands.rs:150`](../../app/src-tauri/src/commands.rs#L150)
-- **No Rust-side log file.** Sidecar stderr is dropped on the floor ([`sidecar_manager.rs:213`](../../app/src-tauri/src/sidecar_manager.rs#L213)); the sidecar writes its own `debug.log` via `app_logging` (Rust forwards `JAVDB_LOG_DIR`). Rust's only diagnostics are six `eprintln!` calls in `lib.rs` (cookie handshake/migration + legacy-token migration, [`lib.rs:92`](../../app/src-tauri/src/lib.rs#L92)–[`194`](../../app/src-tauri/src/lib.rs#L194)), invisible from the windows-subsystem release exe.
+- **No Rust-side log file.** Sidecar stderr is dropped on the floor ([`sidecar_manager.rs:231`](../../app/src-tauri/src/sidecar_manager.rs#L231)); the sidecar writes its own `debug.log` via `app_logging` (Rust forwards `JAVDB_LOG_DIR`). Rust's only diagnostics are six `eprintln!` calls in `lib.rs` (cookie handshake/migration + legacy-token migration, [`lib.rs:93`](../../app/src-tauri/src/lib.rs#L93)–[`194`](../../app/src-tauri/src/lib.rs#L195)), invisible from the windows-subsystem release exe.
 - ~~**`SidecarManager` has no `Drop`**~~ — `SidecarInner` now implements `Drop` (kills the child) ([`sidecar_manager.rs:82`](../../app/src-tauri/src/sidecar_manager.rs#L82)). **Still no respawn-on-crash**: any timeout / closed stdout / parse error / `request_id` mismatch calls `mark_dead`, and every later `request()` fails with `sidecar is dead: …` until the user restarts the app.
-- **`block_on` during `.setup`** for the sidecar handshake. Any sidecar slowness delays window open. [`lib.rs:380`](../../app/src-tauri/src/lib.rs#L380)
+- **`block_on` during `.setup`** for the sidecar handshake. Any sidecar slowness delays window open. [`lib.rs:407`](../../app/src-tauri/src/lib.rs#L407)
 - **`STORE_FILE` is defined twice** — [`lib.rs:28`](../../app/src-tauri/src/lib.rs#L28) (also used by `commands.rs` as `crate::STORE_FILE`) and [`settings.rs:13`](../../app/src-tauri/src/settings.rs#L13). Same for `pending_torrents.json` (`pending.rs` `FILE_NAME`, `legacy_import.rs` `LEGACY_PENDING_FILE`) and `cookies.txt` (`lib.rs` literal, `commands.rs` `COOKIES_FILE_NAME`, `legacy_import.rs` `LEGACY_COOKIES_FILE`).
-- **`update_sidecar_settings` is not chained from `write_settings`** — frontend must call both. Silent footgun if a future caller only calls one.
+- **`update_sidecar_settings` is not chained from `write_settings`** — frontend must call both. Silent footgun if a future caller only calls one. (The legacy `.env` import is the exception: `push_imported_settings` sends `update_settings` from Rust after saving.)
 - **`rd_has_token` is gratuitously `async`** — no `await`, no `State<'_, _>`; it only calls the synchronous `secret_store::get_rd_token`.
-- **`_err_code` has a leading underscore despite being used** — called by `ensure_ok` (which most commands go through) and directly by `import_rd_token`. Style inconsistency.
+- **`_err_code` has a leading underscore despite being used** — called by `ensure_ok` (which most commands go through) and directly by `import_rd_token` and `settings_push_warning`. Style inconsistency.
 - **Duplicated `temp_dir` test helpers** — `pending.rs`, `legacy_import.rs`, and two separate copies in `commands.rs` (`tests_m7b`, `tests_cookies_e2e`), plus the `temp_data_dir` variant in `lib.rs`.
 - **Tests at [`legacy_import.rs:472`](../../app/src-tauri/src/legacy_import.rs#L472)** (also lines 556, 658) build the key as `["RD_API", "TOKEN"].join("_")` to keep the token-assignment line from appearing verbatim in test fixtures (audit hygiene). The parser itself still matches the literal `"RD_API_TOKEN"` at line 154.
 
@@ -389,9 +420,9 @@ Each agent surfaced refactor-relevant oddities. Consolidated here.
 
 ### Sidecar runtime (`sidecar-runtime.md`)
 
-- ~~**`cmd_forget_magnets` ignores `handle_ids`**~~ **RESOLVED M9 Phase 0-B**: updated `cmd_forget_magnets` in `sidecar.py` to support optional `handle_ids` subset deletion, reverse index cleanup, and element type validation. [`sidecar.py:637`](../../sidecar/sidecar.py#L637)
-- **`cmd_cancel` is an acknowledgement only** — it cannot interrupt in-flight JavDB or RD work because the daemon loop is synchronous. User-visible cancellation is batch-boundary cancellation in JS (`AbortSignal`), not Python-level cancellation; no Rust caller sends `cancel` at all. [`sidecar.py:778`](../../sidecar/sidecar.py#L778)
-- **`main` accepts `--daemon` but always runs daemon mode** — harmless now, but the CLI shape implies a mode switch that no longer exists. [`sidecar.py:1356`](../../sidecar/sidecar.py#L1356)
+- ~~**`cmd_forget_magnets` ignores `handle_ids`**~~ **RESOLVED M9 Phase 0-B**: updated `cmd_forget_magnets` in `sidecar.py` to support optional `handle_ids` subset deletion, reverse index cleanup, and element type validation. [`sidecar.py:639`](../../sidecar/sidecar.py#L639)
+- **`cmd_cancel` is an acknowledgement only** — it cannot interrupt in-flight JavDB or RD work because the daemon loop is synchronous. User-visible cancellation is batch-boundary cancellation in JS (`AbortSignal`), not Python-level cancellation; no Rust caller sends `cancel` at all. [`sidecar.py:780`](../../sidecar/sidecar.py#L780)
+- **`main` accepts `--daemon` but always runs daemon mode** — harmless now, but the CLI shape implies a mode switch that no longer exists. [`sidecar.py:1374`](../../sidecar/sidecar.py#L1374)
 
 ### Sidecar build/driver (`sidecar.md`)
 
