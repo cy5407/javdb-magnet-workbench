@@ -47,7 +47,7 @@
     { "id": "py_rd", "type": "backend", "label": "Real-Debrid 客戶端", "sublabel": "realdebrid.py (智慧選檔)", "tag": "REST API 調用", "pos": [590, 560], "size": [190, 68] },
 
     { "id": "javdb_cloud", "type": "cloud", "label": "JavDB 影音資料庫", "sublabel": "影片頁面與磁力清單", "tag": "Cloudflare WAF", "pos": [860, 140], "size": [190, 68] },
-    { "id": "rd_cloud", "type": "cloud", "label": "Real-Debrid 雲端快取", "sublabel": "Torrent 下載與直連解鎖", "tag": "Bearer Token / REST API", "pos": [860, 350], "size": [190, 68] },
+    { "id": "rd_cloud", "type": "cloud", "label": "Real-Debrid 雲端快取", "sublabel": "Torrent 下載與直連解鎖", "tag": "API Token / REST API", "pos": [860, 350], "size": [190, 68] },
     { "id": "logs_store", "type": "database", "label": "LOCALAPPDATA Logs 目錄", "sublabel": "%LOCALAPPDATA%\\JavDBMagnet\\logs", "tag": "rd_outcomes.jsonl / debug.log", "pos": [860, 560], "size": [190, 68] }
   ],
   "boundaries": [
