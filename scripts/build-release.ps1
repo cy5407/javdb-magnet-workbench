@@ -760,7 +760,7 @@ DATA LOCATIONS
 --------------
 Settings / cookies / pending:  %APPDATA%\JavDBMagnet\
 Logs:                          %LOCALAPPDATA%\JavDBMagnet\logs\
-RD API token:                  Windows Credential Manager (target: JavDBMagnet/RD_API_TOKEN)
+RD API token:                  Windows Credential Manager (target: RD_API_TOKEN.JavDBMagnet)
 
 REMOVAL
 -------
@@ -768,7 +768,7 @@ REMOVAL
 - 想清掉個人資料：
     rmdir /s /q %APPDATA%\JavDBMagnet
     rmdir /s /q %LOCALAPPDATA%\JavDBMagnet
-    cmdkey /delete:JavDBMagnet/RD_API_TOKEN
+    cmdkey /delete:RD_API_TOKEN.JavDBMagnet
 
 SMARTSCREEN
 -----------

@@ -1753,7 +1753,7 @@
         <!-- `target="_blank"` alone does nothing in a Tauri WebView; we
              also intercept the click and hand the URL to tauri-plugin-shell's
              `open()` so it actually opens in the user's default browser.
-             The capability is scoped to specific JavDB / RD domains in
+             The capability is scoped to the RD apitoken URL only in
              `capabilities/default.json`. -->
         <a
           href="https://real-debrid.com/apitoken"

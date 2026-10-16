@@ -10,7 +10,7 @@
 ## 3. Evidence & Ground Truth Code
 
 ### 3.1 基礎回應信封（Envelope）
-- 位於 `sidecar/sidecar.py:222-234`：
+- 位於 `sidecar/sidecar.py:223-235`：
   ```python
   def _ok(req: dict, extra: dict | None = None) -> dict:
       out = {"ok": True, "request_id": req.get("request_id")}
@@ -27,7 +27,7 @@
   ```
 
 ### 3.2 巢狀結構命令 (`fetch_javdb` 與 `rd_user`)
-- **`cmd_fetch_javdb`**（`sidecar/sidecar.py:595-604`）：
+- **`cmd_fetch_javdb`**（`sidecar/sidecar.py:596-605`）：
   ```python
   return _ok(req, {
       "result": {
@@ -41,7 +41,7 @@
   })
   ```
   `magnets_out` 陣列中每筆項目包含 `handle_id`, `name`, `size`, `tags`, `date`, `magnet_redacted`。
-- **`cmd_rd_user`**（`sidecar/sidecar.py:988-995`）：
+- **`cmd_rd_user`**（`sidecar/sidecar.py:989-996`）：
   ```python
   return _ok(req, {
       "user": {
@@ -54,13 +54,13 @@
   ```
 
 ### 3.3 平鋪結構命令 (`rd_send_magnet`, `resolve_magnet` 等)
-- **`cmd_rd_send_magnet`**（`sidecar/sidecar.py:1146-1169`）：
-  - `status="completed"` 時回傳：`{"ok": true, "request_id": ..., "status": "completed", "torrent_id": ..., "name": ..., "links": [...]}`
+- **`cmd_rd_send_magnet`**（`sidecar/sidecar.py:1147-1170`）：
+  - `status="completed"` 時回傳：`{"ok": true, "request_id": ..., "status": "completed", "torrent_id": ..., "name": ..., "links": [{"original", "download", "filename", "filesize", "streamable", "error"?}]}`
   - `status="pending"` 時回傳：`{"ok": true, "request_id": ..., "status": "pending", "torrent_id": ..., "name": ..., "rd_status": ..., "progress": ..., "files_selected": bool, "strategy": ...}`
-- **`cmd_resolve_magnet`**（`sidecar/sidecar.py:617`）：回傳 `{"ok": true, "request_id": ..., "magnet": full_uri}`。
+- **`cmd_resolve_magnet`**（`sidecar/sidecar.py:616`）：回傳 `{"ok": true, "request_id": ..., "magnet": full_uri}`。
 
 ## 4. Handshake 前置條件守衛（權威對齊）
-依據權威契約 `docs/architecture/contracts/sidecar-runtime.md:89-104`，僅有以下 **6 個命令** 受到 `if not state.handshake_done:` 守衛：
+依據 `sidecar/sidecar.py` 各 handler 進入點（權威契約見 `docs/architecture/contracts/sidecar-runtime.md` 的 Commands 表），僅有以下 **6 個命令** 受到 `if not state.handshake_done:` 守衛：
 1. `fetch_javdb`
 2. `set_cookies`
 3. `rd_user`
@@ -68,7 +68,7 @@
 5. `rd_send_magnet`
 6. `rd_check_pending`
 
-其餘 10 個命令（如 `resolve_magnet`, `register_magnets`, `forget_magnets`, `update_settings`, `cancel`, `ping`, `hello`）無 handshake 守衛。
+其餘 10 個命令（`hello`, `handshake`, `ping`, `resolve_magnet`, `resolve_magnets`, `forget_magnets`, `register_magnets`, `update_settings`, `cancel`, `shutdown`）無 handshake 守衛。
 
 ## 5. Action Patterns & Fix
 - 呼叫端必須先驗證 `resp["ok"] === true`，若為 `false` 則從 `resp["error"]["code"]` 與 `resp["error"]["message"]` 提取錯誤。

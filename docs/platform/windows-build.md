@@ -24,12 +24,18 @@ pwsh -File scripts\build-release.ps1
 `npm run release` 上，而本文件教的正是直接呼叫打包腳本——那條路完全繞過它。
 關卡因此改放在打包腳本內部，兩個入口都會跑到。
 
+紅測之後，打包腳本會確認工作樹乾淨（tracked 與 untracked 都算，也拒絕
+assume-unchanged／skip-worktree 標記），不乾淨就拒絕建置——manifest 記錄的是
+`git rev-parse HEAD`，未 commit 的變更會讓它替沒出貨的 commit 背書。建置結束後會再驗一次。
+
 `-AuditOnly` / `-AuditBinary` 不會跑紅測：紅測本身就是用這兩個模式呼叫打包
 腳本的，在那裡執行會無限遞迴。
 
 `verify-windows-build.ps1` 不打包，它只做驗證：環境齊全性 → 三個既有 gate →
-`cargo test --no-fail-fast --tests`（lib、bin 與 `tests/` 整合測試，不含 doc tests）→ 重建 sidecar 並用真的
-JSON-lines 協定跟它對話。
+`cargo test --no-fail-fast --tests`（lib、bin 與 `tests/` 整合測試，不含 doc tests）→ release-scan 紅測
+（`powershell` 與 `pwsh` 各跑一次，見第 5 項）→ 重建 sidecar 並用真的 JSON-lines 協定
+（`hello` / `register_magnets` / `shutdown`）跟它對話。`-SkipSlow` 會略過 cargo test 與 sidecar
+重建，但不會略過 release-scan 紅測。
 
 ---
 
@@ -161,7 +167,7 @@ runner 預設不啟用 SAC。repo 目前只有 `sonarcloud.yml`，需要另外�
 ## 08-01 新增的功能，建置後值得手動確認
 
 1. **送出前預判**：挑選分頁的「每組只留」下拉多了「RD 命中優先」，列上會有
-   `⚡高清` / `高清` 徽章與 ★ 首選標記；旁邊有「只勾選 RD 優先候選」按鈕。
+   `⚡高清` / `⚡` / `高清` 徽章與 ★ 首選標記；旁邊有「只勾選 RD 優先候選」按鈕。
 2. **送出前攔截**：批次含低機率列時，按送出會先出現摘要面板
    （高機率／低機率／未判定），可選「只送高機率」。
 3. **成效日誌**：送出後 `%LOCALAPPDATA%\JavDBMagnet\logs\rd_outcomes.jsonl`
@@ -175,5 +181,6 @@ runner 預設不啟用 SAC。repo 目前只有 `sonarcloud.yml`，需要另外�
 
 ## 附帶
 
-Rust 端的 `cargo test --lib` 目前是 81 passed。這個 gate 在 2026-08-01 之前
+Rust 端的 lib 單元測試目前共 89 個（2026-10-14 在 Windows 上 `cargo test --tests` 實測：lib 89、
+`sidecar_command` 整合測試 2，全過）。這個 gate 在 2026-08-01 之前
 一直被記載為「本機編不過、只能人工細審」，現在可用了——動 Rust 前請跑它。

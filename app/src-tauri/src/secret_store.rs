@@ -1,7 +1,7 @@
 //! Secret storage for the RD API token.
 //!
 //! On Windows the token lives in the Windows Credential Manager (Generic
-//! Credential, target name `JavDBMagnet/RD_API_TOKEN`). The `keyring` crate
+//! Credential, target `RD_API_TOKEN.JavDBMagnet`). The `keyring` crate
 //! routes the same calls to the right backend on macOS / Linux so the rest
 //! of the app stays platform-agnostic.
 //!
@@ -11,8 +11,8 @@
 //! - the OS credential store is the well-trodden path for Windows desktop
 //!   apps, plays nicely with corporate policy, and survives an app reinstall.
 //!
-//! Out of scope here: JavDB cookies (still plaintext at
-//! `<data_dir>/cookies.txt` for M5; DPAPI move tracked for M6/M7).
+//! JavDB cookies live in the same credential store but are handled by
+//! [`crate::cookie_store`].
 
 const SERVICE: &str = "JavDBMagnet";
 const ACCOUNT: &str = "RD_API_TOKEN";

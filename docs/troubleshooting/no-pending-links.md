@@ -2,15 +2,15 @@
 
 ## 症狀
 
-- 「送出 N 筆到 RD」進度跑完，**全部** row 顯示「RD 處理中」或都進待處理清單
-- 「複製 N 條下載直連」按鈕的 N 是 0
+- 「送出已勾選 N 筆到 RD」進度跑完，**全部** row 顯示「RD 處理中」或都進待處理清單
+- 「複製 N 條下載連結」按鈕的 N 是 0（狀態列「下載連結：0」）
 - 之前同樣的磁力可以拿到直連、今天突然都 pending
 
 ## 常見根因
 
 1. **磁力未被 RD 快取**（其他人沒下載過）→ RD 真的在從 BT 下載，需要 5–30 分鐘
 2. `cache_wait_seconds` 設太短，**RD 還在判定就被本機放棄**
-3. RD 端的 file_pick 選不到符合大小門檻的檔案，所有檔案都被跳過
+3. RD 遲遲沒把 magnet 轉成檔案清單（`magnet_conversion` 卡住，常見於 seeder 很少的磁力），cache_wait 內連選檔都來不及
 4. RD Premium 過期 → 401 全失敗（但這會走 error 不是 pending；詳見 [rd-token.md](rd-token.md)）
 
 ## 檢查
@@ -19,17 +19,21 @@
 
 ```powershell
 Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\debug.log*" `
-  -Pattern "rd_status|cache_wait|magnet_conversion|waiting_files|downloading"
+  -Pattern "status=|files_selected="
 ```
 
-關鍵字串：
+每筆在 `cache_wait_seconds` 內沒等到 `downloaded` 的磁力，都會留下一行
+`=== 磁力 [<hash 前 8 碼>] 待處理 (status=<RD 狀態>, files_selected=<True|False>) ===`。關鍵欄位：
 
 | log 訊號 | 意義 |
 |---|---|
-| `magnet_conversion` | RD 還在處理 magnet 資料（最早期） |
-| `waiting_files_selection` | RD 已轉好，等你選檔（這時 file_pick 介入） |
-| `downloading` | RD 正在從 BT 下載（要真的等） |
-| `cache_wait timeout` | 本機等夠 cache_wait_seconds 後判定未快取，加入 pending |
+| `status=magnet_conversion` | RD 還在處理 magnet 資料（最早期） |
+| `files_selected=False` | 等待期間連檔案清單都沒出來，還沒選檔（解析中） |
+| `status=waiting_files_selection` | RD 已轉好等選檔；sidecar 會在等待期間依 file_pick 自動選檔 |
+| `status=downloading` | RD 正在從 BT 下載（要真的等） |
+
+同一段時間附近的 `未快取（<狀態> <進度>%），加入待處理清單` /
+`解析中（<狀態>），加入待處理清單稍後重試` 是同一件事的 INFO 行。
 
 ### 2. 直接到 RD 後台確認
 
@@ -43,9 +47,8 @@ Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\debug.log*" `
 
 「應用程式設定」展開，確認：
 
-- `cache_wait_seconds`：預設 15。如果你之前手動改成 5 就太短了（M7c validation 已擋下 < 5，但舊資料可能殘留）
-- `min_size_mb`：預設 500。若磁力本身只含小檔案（例如 200MB 的短片），會被全跳過
-- `file_pick`：smart 是預設；改成 `all` 可以暫時繞過大小門檻看是否還是空
+- `cache_wait_seconds`：預設 15，可設 5–300（設定面板擋下範圍外的值，Rust 讀設定時也會夾回這個範圍）。設成 5 這種下限值就太短了
+- `min_size_mb` / `file_pick` **不會**造成 pending：smart 策略沒有檔案達門檻時會退回選最大檔（log：`smart 策略：沒有檔案 >= <N>MB，退回選最大檔`）；檔案清單為空時是錯誤（`沒有可選的檔案`），不是 pending
 
 ## 修復步驟
 
@@ -54,18 +57,11 @@ Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\debug.log*" `
 不用改設定，直接等：
 
 1. 看「待處理」表格
-2. 5–15 分鐘後按「**全部重試**」
-3. 已完成 → 自動移出 pending、產生直連
-4. 還在下載 → 顯示 RD 端 progress
+2. 5–15 分鐘後按「**全部重試（查 RD）**」
+3. 已完成 → 自動移出 pending、產生直連，並自動複製到剪貼簿
+4. 還在下載 → 待處理表格的「RD 狀態」「進度」欄更新為 RD 端最新值
 
 如果 30 分鐘還是 `downloading 0%`，那磁力大概率沒 seeder，到 RD 後台刪掉是合理動作。
-
-### file_pick 把所有檔案都跳過
-
-最快驗證：把 `file_pick` 暫時改成 `all` 再送一次同樣磁力。
-
-- 改 `all` 後成功 → 確認是 file_pick 邏輯問題；改回 `smart` 並把 `min_size_mb` 調低（例如 200）
-- 改 `all` 仍 pending → 不是 file_pick 問題，回頭看根因 #1
 
 ### cache_wait 太短
 

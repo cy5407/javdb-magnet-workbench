@@ -16,7 +16,7 @@
 ## 3. Verbatim Code Evidence
 
 ### 3.1 執行期命令硬性阻擋護欄
-- 位於 `.agent-hooks/recursive-delete-guard.mjs:33-39`：
+- 位於 `.agent-hooks/recursive-delete-guard.mjs:33-40`：
   ```javascript
   export function blockedReason(command) {
     for (const [label, pattern] of blockedPatterns) {
@@ -53,7 +53,7 @@
 1. **單一事實來源（Single Source of Truth）**：
    - 所有跨專案共用資產以 `my-codex-guides/catalog/` 為中央基準；專案端依 `profiles/<name>.json` 動態裝配，`.claude/` 鏡像一律由腳本自動生成，禁止手動分流維護。
 2. **三方比對部署閘門（3-Way Preflight Gate）**：
-   - 部署至專案端前，必須透過 `scripts/preflight-deploy.mjs` 比對「Catalog 期望樹」、「專案端現況」與「上次部署基準線（`.deploy-state/<profile>.json`）」。
+   - 部署至專案端前，必須透過中央庫 `my-codex-guides/scripts/preflight-deploy.mjs`（不在本 repo）比對「Catalog 期望樹」、「專案端現況」與「上次部署基準線（`.deploy-state/<profile>.json`）」。
    - **負向約束**：凡出現 `local-edit`（專案端有未回寫修改）、`conflict`（兩端皆修改）、`untracked`（無基準線且相異）時，必須 Fail-Closed 立即中止，嚴禁盲目覆寫。
 3. **採收回饋義務（Harvest Invariant）**：
    - 當專案端有新的模式修訂或技巧沉澱時，在重新部署前必須先以 `node scripts/harvest.mjs --bundle <profile>` 採收回中央庫。

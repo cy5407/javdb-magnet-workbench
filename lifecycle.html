@@ -5430,7 +5430,7 @@
           <h3>重試循環與終止出口</h3>
         </div>
         <ul>
-          <li>&bull; 佇列重試在重試額度內循環回送，直到下載完成</li>
+          <li>&bull; 佇列重試由使用者手動觸發 rd_check_pending 重新輪詢，直到完成或 RD 回報 missing</li>
           <li>&bull; WAF 阻擋與 Token 認證失敗為明確終止出口，不再回流</li>
         </ul>
       </div>

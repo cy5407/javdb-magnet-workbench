@@ -19,9 +19,10 @@
 | 5 | 憑證儲存需要 keyring daemon | 無頭環境會失敗 | 環境相依 |
 | 6 | 打包腳本寫死 Windows | 無法產出 Linux 安裝檔 | 建置流程 |
 
-實測結論：正式 build／package 仍須修好 1 與 2。若目的只是執行 Rust lib gate，
+實測結論：第 1 項已修，正式 build／package 仍須補上 2。若目的只是執行 Rust lib gate，
 可用 `TAURI_CONFIG='{"bundle":{"externalBin":[]}}' cargo test --lib` 排除打包期
-externalBin 檢查；在可用的 D-Bus keyring 環境下 **81 passed / 0 failed**。
+externalBin 檢查；在可用的 D-Bus keyring 環境下 **81 passed / 0 failed**（2026-08-01 實測；lib 單元測試
+目前共 89 個）。
 
 ---
 
@@ -32,7 +33,7 @@ externalBin 檢查；在可用的 D-Bus keyring 環境下 **81 passed / 0 failed
 > 未掛到 read_settings），而驗證 Rust 修改的前提就是讓 Rust 編得起來。
 > 本節保留原始診斷過程作為紀錄。
 
-**現況**（`app/src-tauri/Cargo.toml`）：
+**修正前**（`app/src-tauri/Cargo.toml`）：
 
 ```toml
 keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-async-persistent"] }
@@ -73,7 +74,8 @@ keyring = { version = "3", features = ["linux-native-sync-persistent", "crypto-r
 
 ## 2. Linux sidecar binary（阻斷）
 
-**現況**：`app/src-tauri/binaries/` 只有 `sidecar-x86_64-pc-windows-msvc`。
+**現況**：sidecar 打包腳本只產出 `app/src-tauri/binaries/sidecar-x86_64-pc-windows-msvc.exe`
+（`binaries/` 由 `app/src-tauri/.gitignore` 排除，clone 下來是空的）。
 Tauri 依 `tauri.conf.json` 的 `externalBin: ["binaries/sidecar"]` 加上目標
 triple 尋找，Linux 上找的是 `sidecar-x86_64-unknown-linux-gnu`。
 
@@ -94,8 +96,8 @@ python -m PyInstaller --onefile --name sidecar-x86_64-unknown-linux-gnu \
 產出 30.3 MB（Windows 版 30.3 MB），實跑 JSON-lines 協定（`hello` /
 `register_magnets` / `shutdown`）回應皆正確。
 
-注意 `spikes/pyinstaller_sidecar/` 下的 `.spec` 檔名寫死
-`sidecar-x86_64-pc-windows-msvc.spec`，`build_sidecar.py` 也以該 triple 為前提；
+注意 `spikes/pyinstaller_sidecar/build_sidecar.py` 的 `APP_NAME` 寫死
+`sidecar-x86_64-pc-windows-msvc`（建置時產生的 `.spec` 檔名與輸出檔名都跟著它）；
 要正式支援得讓 triple 可參數化。
 
 ## 3. `JAVDB_LOG_DIR` 從未被設定（✅ 已於 2026-10-14 修正）
@@ -148,7 +150,7 @@ debug.log  rd_outcomes.jsonl
 
 ## 4. 「打開資料夾」只實作 Windows（功能退化）
 
-`app/src-tauri/src/commands.rs:1198-1219` 的 `open_in_explorer` 只有
+`app/src-tauri/src/commands.rs:1211-1235` 的 `open_in_explorer` 只有
 `#[cfg(target_os = "windows")]` 分支呼叫 `explorer.exe`，其他平台回
 `open_in_explorer not implemented for this OS`。
 
@@ -164,7 +166,7 @@ Linux 走 D-Bus Secret Service，需要 GNOME Keyring 或 KWallet 在跑。
 ## 6. 打包與發布腳本（建置流程）
 
 - `scripts/build-release.ps1` 是 PowerShell，Linux 無法直接跑。
-- `spikes/pyinstaller_sidecar/build_sidecar.py` 與其 `.spec` 以 Windows triple 為前提。
+- `spikes/pyinstaller_sidecar/build_sidecar.py`（及其產生的 `.spec`）以 Windows triple 為前提。
 - `tauri.conf.json` 的 `bundle.targets` 為 `[]`（由平台預設決定），Linux 會嘗試
   產 deb/appimage，需要額外系統相依。
 
@@ -187,7 +189,8 @@ Tauri v2 在 Linux 需要 WebKitGTK。本次驗證機器上皆已具備：
   協定 smoke，**沒有真的把視窗開起來點過**。
 - **Windows 迴歸**：第 1 項的 Cargo.toml 修改未在 Windows 上實測。
 - **無 D-Bus／無 Secret Service 的降級行為**：尚未提供或驗證。具備 D-Bus keyring
-  的 Linux 環境已由 12 個 Rust cookies 端對端測試驗證實際讀寫與還原。
+  的 Linux 環境已由 `commands.rs` 的 `tests_cookies_e2e`（Rust cookies 端對端測試，目前 13 個）
+  驗證實際讀寫與還原。
 - **打包產出**：未實際產生 Linux 安裝檔。
 
 ## 若決定支援 Linux，建議順序
