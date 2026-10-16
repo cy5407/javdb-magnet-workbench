@@ -2,7 +2,7 @@
 
 ## 為什麼這條 recipe 存在
 
-M5 安全合約之一：**完整 magnet 文字（含 BTIH hash）絕不得進 log 檔**。歷史上有過一個 B1 bug：`realdebrid.py::_request` 在 DEBUG 等級記錄 `data["magnet"][:80]`，正好涵蓋完整 40 字 hash。修復 commit 是 `1a604ae`，現在 `_request` 的 debug 行經 `RealDebrid._redact_log_kwargs` 產生，magnet key 一律記 `<redacted>`（Authorization / Cookie 等 header 亦同）。
+M5 安全合約之一：**完整 magnet 文字（含 BTIH hash）絕不得進 log 檔**。歷史上有過一個 B1 bug：`realdebrid.py::_request` 在 DEBUG 等級記錄 `data["magnet"][:80]`，正好涵蓋完整 40 字 hash。修復 commit 是 `30a6eb9`，現在 `_request` 的 debug 行經 `RealDebrid._redact_log_kwargs` 產生，magnet key 一律記 `<redacted>`（Authorization / Cookie 等 header 亦同）。
 
 這條 recipe 教你怎麼自己驗證修復仍然生效，以及未來 refactor 出包時最快發現的方法。
 

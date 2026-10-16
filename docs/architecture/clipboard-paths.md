@@ -72,8 +72,8 @@ Rust 端接線：`app/src-tauri/Cargo.toml` 相依 `tauri-plugin-clipboard-manag
 
 | 日期 | 變更 | Commit |
 |---|---|---|
-| 2026-05-11（M5d 階段） | 新增 `clipboard-manager:allow-write-text` capability 解決前端 `writeText` 被擋的 bug（tactical fix） | `a56425c` |
-| 2026-05-11（M6 follow-up） | 改架構：新增 Rust `copy_rd_links_bulk`，前端 `copyRdDownloads` / `retryAllPending` 改 invoke。收回 capability，前端不再直接持有 clipboard plugin 依賴。 | （pending）|
+| 2026-05-11（M5d 階段） | 新增 `clipboard-manager:allow-write-text` capability 解決前端 `writeText` 被擋的 bug（tactical fix） | `e42ef6d` |
+| 2026-05-11（M6 follow-up） | 改架構：新增 Rust `copy_rd_links_bulk`，前端 `copyRdDownloads` / `retryAllPending` 改 invoke。收回 capability，前端不再直接持有 clipboard plugin 依賴。 | `e48c7e4` |
 
 ## 測試覆蓋
 

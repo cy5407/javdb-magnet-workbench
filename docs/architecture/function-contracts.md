@@ -70,7 +70,7 @@ Pre-Tauri implementation, fully **retired in M9**. Kept in the repo under `legac
 | `legacy/_legacy_env.py` (`load_env` `.env` parser moved out of `realdebrid.py` for F-06; only caller is `legacy/javdb_magnet_gui.py`, guarded by `tests/test_legacy_env.py`), `legacy/__init__.py` (package docstring: do not import `legacy.*` from production) | — |
 
 **Removed in M9**:
-- `javdb_magnet.py` — standalone CLI scraper, never imported by anything; deleted in Phase 2 (commit `066f9ac`)
+- `javdb_magnet.py` — standalone CLI scraper, never imported by anything; deleted in Phase 2 (M9 phase commits were later squashed into `31a54ca`)
 - `build.py` — legacy Tk PyInstaller build script, replaced by `scripts/build-release.ps1` + `spikes/pyinstaller_sidecar/build_sidecar.py`; deleted in Phase 2
 
 **Note**: `app_logging.py` and `realdebrid.py` were originally listed in this bucket as "legacy", but they remain **live** in the sidecar runtime and are now classified under Bucket 1.
@@ -400,8 +400,8 @@ Each agent surfaced refactor-relevant oddities. Consolidated here.
 
 ### Python legacy (`python-legacy.md`)
 
-- ~~**`javdb_magnet.py` is orphan/dead code** in the repo — no importer.~~ **RESOLVED M9 Phase 2** (commit `066f9ac`): file deleted.
-- ~~**~1,300 lines of widget code in `javdb_magnet_gui.py`** is bundled into `sidecar.exe` but never executed at runtime. Only `create_session` and `fetch_magnets` are imported by the sidecar entry. Removing the widget classes (or splitting the file) would shrink the .exe and remove confusion.~~ **RESOLVED M9 Phase 5-A/5-B**: four pure HTTP/parse helpers extracted to `javdb_scraper.py` (commit `39bedd3`); sidecar bundle no longer pulls in Tk (-3.02 MiB). The full Tk source moved to `legacy/javdb_magnet_gui.py` (commit `9c3612d`) and is no longer in the bundle.
+- ~~**`javdb_magnet.py` is orphan/dead code** in the repo — no importer.~~ **RESOLVED M9 Phase 2** (squashed into `31a54ca`): file deleted.
+- ~~**~1,300 lines of widget code in `javdb_magnet_gui.py`** is bundled into `sidecar.exe` but never executed at runtime. Only `create_session` and `fetch_magnets` are imported by the sidecar entry. Removing the widget classes (or splitting the file) would shrink the .exe and remove confusion.~~ **RESOLVED M9 Phase 5-A/5-B**: four pure HTTP/parse helpers extracted to `javdb_scraper.py` (squashed into `31a54ca`); sidecar bundle no longer pulls in Tk (-3.02 MiB). The full Tk source moved to `legacy/javdb_magnet_gui.py` (squashed into `31a54ca`) and is no longer in the bundle.
 - **The behavioral contract the port must preserve** is captured in `tests/test_core_logic.py` — unit tests over `parse_size_gb`, `parse_file_count` (now imported from `javdb_scraper`), `_extract_code`, `_filename_matches_code`, and `pick_files`'s 4 strategies (from `realdebrid.RealDebrid`). Treat these as the regression bar for any Rust/JS reimplementation.
 
 ---

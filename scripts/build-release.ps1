@@ -758,9 +758,10 @@ USAGE
 
 DATA LOCATIONS
 --------------
-Settings / cookies / pending:  %APPDATA%\JavDBMagnet\
+Settings / pending:            %APPDATA%\JavDBMagnet\
 Logs:                          %LOCALAPPDATA%\JavDBMagnet\logs\
 RD API token:                  Windows Credential Manager (target: RD_API_TOKEN.JavDBMagnet)
+JavDB cookies:                 Windows Credential Manager (target: JAVDB_COOKIES.JavDBMagnet)
 
 REMOVAL
 -------
@@ -769,6 +770,7 @@ REMOVAL
     rmdir /s /q %APPDATA%\JavDBMagnet
     rmdir /s /q %LOCALAPPDATA%\JavDBMagnet
     cmdkey /delete:RD_API_TOKEN.JavDBMagnet
+    cmdkey /delete:JAVDB_COOKIES.JavDBMagnet
 
 SMARTSCREEN
 -----------

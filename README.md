@@ -97,7 +97,7 @@ JavDB 需要登入後的 cookie 才能看到磁力連結。在「**4. 設定**�
 
 兩種方式都同樣會把 cookie **加密儲存到 Windows Credential Manager**（target `JAVDB_COOKIES.JavDBMagnet`），絕不長期落在純文字檔。
 
-> app 內顯示的「位置：`JavDBMagnet/JAVDB_COOKIES`」是「服務/帳戶」寫法；`keyring` crate 在 Windows 以 `<帳戶>.<服務>` 組成認證管理員裡實際的 target name，所以在「Windows 認證」清單或 `cmdkey` 中看到的是 `JAVDB_COOKIES.JavDBMagnet`（RD token 同理為 `RD_API_TOKEN.JavDBMagnet`）。
+> `keyring` crate 在 Windows 以 `<帳戶>.<服務>` 組成認證管理員裡的 target name，所以在「Windows 認證」清單或 `cmdkey` 中看到的是 `JAVDB_COOKIES.JavDBMagnet`（RD token 同理為 `RD_API_TOKEN.JavDBMagnet`）。
 
 #### 方式 A：直接貼上（推薦）
 
