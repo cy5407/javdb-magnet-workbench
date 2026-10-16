@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="generator" content="archify 2.16.0-dev.0">
+  <meta name="generator" content="archify 2.16.0">
   <title>JavDBMagnet 系統架構圖 Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
@@ -5041,15 +5041,15 @@
         <!-- Connection paths (before components for correct z-order) -->
         <path data-edge-from="ui_view" data-edge-to="ui_lib" data-edge-key="0" data-edge-id="conn_ui_to_lib" data-composition-points="140,208;140,350" d="M 140 208 L 140 350" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="ui_view" data-edge-to="rust_commands" data-edge-label="invoke()" data-edge-key="1" data-edge-id="conn_ui_to_rust" data-composition-points="230,174;320,174" d="M 230 174 L 320 174" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="rust_commands" data-edge-to="rust_sidecar_mgr" data-edge-key="3" data-edge-id="conn_rust_to_sidecar_mgr" data-composition-points="415,208;415,350" d="M 415 208 L 415 350" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="rust_sidecar_mgr" data-edge-to="rust_secret" data-edge-key="4" data-edge-id="conn_rust_mgr_to_secret" data-composition-points="415,418;415,560" d="M 415 418 L 415 560" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="rust_secret" data-edge-to="win_cred" data-edge-label="DPAPI 加密保存" data-edge-key="5" data-edge-id="conn_secret_to_cred" data-composition-points="320,594;230,594" d="M 320 594 L 230 594" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="rust_sidecar_mgr" data-edge-to="py_sidecar" data-edge-label="Stdio JSONL" data-edge-key="6" data-edge-id="conn_sidecar_mgr_to_py" data-composition-points="510,384;590,384" d="M 510 384 L 590 384" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="py_sidecar" data-edge-to="py_scraper" data-edge-key="7" data-edge-id="conn_py_to_scraper" data-composition-points="685,350;685,208" d="M 685 350 L 685 208" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="py_scraper" data-edge-to="javdb_cloud" data-edge-label="HTTPS 網頁請求" data-edge-key="8" data-edge-id="conn_scraper_to_javdb" data-composition-points="780,174;860,174" d="M 780 174 L 860 174" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="py_sidecar" data-edge-to="py_rd" data-edge-key="9" data-edge-id="conn_py_to_rd" data-composition-points="678,418;678,560" d="M 678 418 L 678 560" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="py_rd" data-edge-to="rd_cloud" data-edge-label="REST API 調用" data-edge-key="10" data-edge-id="conn_rd_to_cloud" data-composition-points="692,560;692,536;836,536;836,384;860,384" d="M 692 560 L 692 544 Q 692 536 700 536 L 828 536 Q 836 536 836 528 L 836 392 Q 836 384 844 384 L 860 384" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="py_rd" data-edge-to="logs_store" data-edge-label="寫入日誌" data-edge-key="11" data-edge-id="conn_py_rd_to_logs" data-composition-points="780,594;860,594" d="M 780 594 L 860 594" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="rust_commands" data-edge-to="rust_sidecar_mgr" data-edge-key="2" data-edge-id="conn_rust_to_sidecar_mgr" data-composition-points="415,208;415,350" d="M 415 208 L 415 350" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="rust_sidecar_mgr" data-edge-to="rust_secret" data-edge-key="3" data-edge-id="conn_rust_mgr_to_secret" data-composition-points="415,418;415,560" d="M 415 418 L 415 560" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="rust_secret" data-edge-to="win_cred" data-edge-label="DPAPI 加密保存" data-edge-key="4" data-edge-id="conn_secret_to_cred" data-composition-points="320,594;230,594" d="M 320 594 L 230 594" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="rust_sidecar_mgr" data-edge-to="py_sidecar" data-edge-label="Stdio JSONL" data-edge-key="5" data-edge-id="conn_sidecar_mgr_to_py" data-composition-points="510,384;590,384" d="M 510 384 L 590 384" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="py_sidecar" data-edge-to="py_scraper" data-edge-key="6" data-edge-id="conn_py_to_scraper" data-composition-points="685,350;685,208" d="M 685 350 L 685 208" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="py_scraper" data-edge-to="javdb_cloud" data-edge-label="HTTPS 網頁請求" data-edge-key="7" data-edge-id="conn_scraper_to_javdb" data-composition-points="780,174;860,174" d="M 780 174 L 860 174" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="py_sidecar" data-edge-to="py_rd" data-edge-key="8" data-edge-id="conn_py_to_rd" data-composition-points="678,418;678,560" d="M 678 418 L 678 560" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="py_rd" data-edge-to="rd_cloud" data-edge-label="REST API 調用" data-edge-key="9" data-edge-id="conn_rd_to_cloud" data-composition-points="692,560;692,536;836,536;836,384;860,384" d="M 692 560 L 692 544 Q 692 536 700 536 L 828 536 Q 836 536 836 528 L 836 392 Q 836 384 844 384 L 860 384" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="py_rd" data-edge-to="logs_store" data-edge-label="寫入日誌" data-edge-key="10" data-edge-id="conn_py_rd_to_logs" data-composition-points="780,594;860,594" d="M 780 594 L 860 594" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
         <g id="node-ui_view" data-node-id="ui_view" data-node-label="Svelte 5 前端介面" tabindex="0" role="button" aria-label="Focus Svelte 5 前端介面, App.svelte 單頁介面, 前端表現與憑證儲存" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="App.svelte 單頁介面" data-node-tag="響應式狀態管理" data-node-context="前端表現與憑證儲存">
@@ -5213,25 +5213,25 @@
         </g>
 
 
-        <g data-detail="context" data-edge-from="rust_secret" data-edge-to="win_cred" data-edge-label="DPAPI 加密保存" data-edge-key="5" data-edge-id="conn_secret_to_cred">
+        <g data-detail="context" data-edge-from="rust_secret" data-edge-to="win_cred" data-edge-label="DPAPI 加密保存" data-edge-key="4" data-edge-id="conn_secret_to_cred">
           <rect x="236.4" y="574" width="77.2" height="14" rx="3" class="c-mask"/>
           <text x="275" y="584" class="t-security" font-size="8" text-anchor="middle">DPAPI 加密保存</text>
         </g>
-        <g data-detail="context" data-edge-from="rust_sidecar_mgr" data-edge-to="py_sidecar" data-edge-label="Stdio JSONL" data-edge-key="6" data-edge-id="conn_sidecar_mgr_to_py">
+        <g data-detail="context" data-edge-from="rust_sidecar_mgr" data-edge-to="py_sidecar" data-edge-label="Stdio JSONL" data-edge-key="5" data-edge-id="conn_sidecar_mgr_to_py">
           <rect x="518.6" y="364" width="62.8" height="14" rx="3" class="c-mask"/>
           <text x="550" y="374" class="t-backend" font-size="8" text-anchor="middle">Stdio JSONL</text>
         </g>
 
-        <g data-detail="context" data-edge-from="py_scraper" data-edge-to="javdb_cloud" data-edge-label="HTTPS 網頁請求" data-edge-key="8" data-edge-id="conn_scraper_to_javdb">
+        <g data-detail="context" data-edge-from="py_scraper" data-edge-to="javdb_cloud" data-edge-label="HTTPS 網頁請求" data-edge-key="7" data-edge-id="conn_scraper_to_javdb">
           <rect x="781.4" y="154" width="77.2" height="14" rx="3" class="c-mask"/>
           <text x="820" y="164" class="t-backend" font-size="8" text-anchor="middle">HTTPS 網頁請求</text>
         </g>
 
-        <g data-detail="context" data-edge-from="py_rd" data-edge-to="rd_cloud" data-edge-label="REST API 調用" data-edge-key="10" data-edge-id="conn_rd_to_cloud">
+        <g data-detail="context" data-edge-from="py_rd" data-edge-to="rd_cloud" data-edge-label="REST API 調用" data-edge-key="9" data-edge-id="conn_rd_to_cloud">
           <rect x="727.8" y="516" width="72.4" height="14" rx="3" class="c-mask"/>
           <text x="764" y="526" class="t-backend" font-size="8" text-anchor="middle">REST API 調用</text>
         </g>
-        <g data-detail="context" data-edge-from="py_rd" data-edge-to="logs_store" data-edge-label="寫入日誌" data-edge-key="11" data-edge-id="conn_py_rd_to_logs">
+        <g data-detail="context" data-edge-from="py_rd" data-edge-to="logs_store" data-edge-label="寫入日誌" data-edge-key="10" data-edge-id="conn_py_rd_to_logs">
           <rect x="795.8" y="574" width="48.4" height="14" rx="3" class="c-mask"/>
           <text x="820" y="584" class="t-messagebus" font-size="8" text-anchor="middle">寫入日誌</text>
         </g>
