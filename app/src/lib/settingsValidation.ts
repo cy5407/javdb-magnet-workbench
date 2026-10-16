@@ -31,12 +31,14 @@ export const SCALE_PRESETS = [
 
 const SCALE_MIN = 0.5;
 const SCALE_MAX = 3;
+export const MAX_MIN_SIZE_MB = 1_000_000;
 
-/** min_size_mb: non-negative integer. */
+/** min_size_mb: integer in [0, 1_000_000] (mirrors Rust clamp_rd_settings & sidecar MAX_RD_MIN_SIZE_MB). */
 export function validateMinSizeMb(value: number): string | null {
   if (!Number.isFinite(value)) return "必須是數字";
   if (!Number.isInteger(value)) return "必須是整數";
   if (value < 0) return "不能為負";
+  if (value > MAX_MIN_SIZE_MB) return "最大為 1,000,000 MB";
   return null;
 }
 

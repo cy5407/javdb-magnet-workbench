@@ -2054,6 +2054,70 @@ class SessionCloseContract(unittest.TestCase):
         self.assertIs(client2.session, client.session)
         self.assertEqual(client2.session.headers.get("Authorization"), "Bearer tok-xyz")
 
+    def test_rd_set_token_clear_closes_pooled_session_and_scrubs_auth_header(self):
+        for clear_val in (None, ""):
+            state = sd.DaemonState()
+            state.handshake_done = True
+            state.rd_token = "tok-xyz"
+            fake_session = mock.MagicMock()
+            fake_session.headers = {"Authorization": "Bearer tok-xyz"}
+            state.rd_session = fake_session
+
+            resp = _call(state, {"cmd": "rd_set_token", "request_id": "r", "token": clear_val})
+            self.assertTrue(resp["ok"])
+            self.assertFalse(resp["set"])
+            self.assertIsNone(state.rd_session)
+            fake_session.close.assert_called_once()
+            self.assertNotIn("Authorization", fake_session.headers)
+
+    def test_run_daemon_eof_closes_pooled_rd_session(self):
+        state = sd.DaemonState()
+        state.handshake_done = True
+        fake_session = mock.MagicMock()
+        fake_session.headers = {"Authorization": "Bearer tok-xyz"}
+        state.rd_session = fake_session
+
+        stdin = io.StringIO("")
+        stdout = io.StringIO()
+        sd.run_daemon(stdin, stdout, state=state)
+        self.assertIsNone(state.rd_session)
+        fake_session.close.assert_called_once()
+        self.assertNotIn("Authorization", fake_session.headers)
+
+    def test_rd_user_rejects_malformed_token_override_before_network_call(self):
+        state = self._state()
+        for bad in ("abc-123", "abc 123", "abc\n", "ＡＢＣ123", "a" * 256):
+            with mock.patch.object(sd, "_rd_client") as m_client:
+                resp = _call(state, {"cmd": "rd_user", "request_id": "r", "token": bad})
+            self.assertFalse(resp["ok"], f"expected failure for {bad!r}")
+            self.assertEqual(resp["error"]["code"], "rd_token_format_invalid")
+            m_client.assert_not_called()
+
+    def test_handshake_closes_pooled_session_only_when_token_changes(self):
+        def handshake(state, token):
+            return _call(state, {
+                "cmd": "handshake", "request_id": "h",
+                "cookies": "", "rd_token": token, "settings": {}, "paths": {},
+            })
+
+        # The pooled session carries the current token's header, as
+        # _rd_client sets it. Both tokens are valid RD-format values that are
+        # also on the release-scan allowlist ("Bearer LEAKABLE").
+        state = sd.DaemonState()
+        state.rd_token = "LEAKABLE"
+        kept = mock.MagicMock()
+        kept.headers = {"Authorization": "Bearer LEAKABLE"}
+        state.rd_session = kept
+        self.assertTrue(handshake(state, "LEAKABLE")["ok"])
+        self.assertIs(state.rd_session, kept, "same token must keep the pool")
+        kept.close.assert_not_called()
+        self.assertEqual(kept.headers.get("Authorization"), "Bearer LEAKABLE")
+
+        self.assertTrue(handshake(state, "token68")["ok"])
+        self.assertIsNone(state.rd_session)
+        kept.close.assert_called_once()
+        self.assertNotIn("Authorization", kept.headers)
+
 
 class EmitBrokenPipe(unittest.TestCase):
     def test_emit_broken_pipe_exits_cleanly_sys_exit_0(self):

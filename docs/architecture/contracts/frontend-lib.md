@@ -58,7 +58,7 @@ row classes), not only through `magnetUtils.ts`.
 | `rdPriority.ts` | `RD_CACHE_PREFIXES`, `hasCachePrefix`, `hasHdResolution`, `isHdRow`, `rdDateKey`, `classifyRow`, `rdBadge`, `pickRdCandidate`, `summarizeRdLikelihood` | `RdRowClass`, `RdPickTier`, `RdCandidate` |
 | `scraper.ts` | `isRateLimitError`, `randomDelayMs`, `parseUrlBatch`, `parseMagnetBatch`, `applyScrapeProgressForRun`, `scrapeBatch` | `JitterFn`, `SleepFn`, `ScrapeProgressEvent`, `ScrapeUiSnapshot`, `ScrapeOptions` |
 | `rdSender.ts` | `collectDownloadLinksFromRow`, `sortCompletedRowsByCompletionTime`, `buildRdDisplayRows`, `formatCompletedAt`, `sendBatch`, `applyRetryEventToProgressRows`, `retryPending`, `rdErrorMessage` | `RdSendOptions`, `RdSendItem`, `RdSendBatchEvent`, `RdSendBatchOptions`, `RdRetryEvent`, `RdRetryOptions` |
-| `settingsValidation.ts` | `FILE_PICK_VALUES`, `THEME_VALUES`, `SCALE_PRESETS`, `validateMinSizeMb`, `validateCacheWaitSeconds`, `validateScale`, `validateFilePick`, `validateTheme`, `validateSettingsDraft` | `FilePickValue`, `ThemeValue` |
+| `settingsValidation.ts` | `FILE_PICK_VALUES`, `THEME_VALUES`, `SCALE_PRESETS`, `MAX_MIN_SIZE_MB`, `validateMinSizeMb`, `validateCacheWaitSeconds`, `validateScale`, `validateFilePick`, `validateTheme`, `validateSettingsDraft` | `FilePickValue`, `ThemeValue` |
 | `errText.ts` | `errText` | — |
 | `flashAction.ts` | `createFlashController` | `FlashController` |
 | `types.ts` | `defaultFilterState` | `Theme`, `PathInfo`, `UiSettings`, `RdSettings`, `Settings`, `MagnetRow`, `FetchResult`, `PingResponse`, `CopyBulkResult`, `CopyRdLinksBulkResult`, `LegacyImportPreview`, `CookiesStatus`, `LegacyImportReport`, `ScrapedGroup`, `GroupPick`, `FilterState`, `SortColumn`, `SortDirection`, `RdUserInfo`, `RdLink`, `RdSendOutcome`, `RdCheckOutcome`, `PendingEntry`, `RdSendProgress` |
@@ -1141,7 +1141,9 @@ unknown codes fall through to a generic `「（其他錯誤：${code}）」` so 
 the raw code.
 
 **Contract**:
-- Params: `code: string` — e.g. `"rd_no_token"`, `"rd_token_invalid"`, `"rd_premium_required"`,
+- Params: `code: string` — e.g. `"rd_no_token"`, `"rd_token_format_invalid"` (Rust
+  `secret_store::RD_TOKEN_FORMAT_ERR`, from `rd_save_token` / `rd_test_token`),
+  `"rd_token_invalid"`, `"rd_premium_required"`,
   `"rd_rate_limited"`, `"rd_magnet_error"`, `"rd_download_failed"`, `"rd_torrent_missing"`,
   `"rd_api_error"`, `"unknown_handle"`, `"rd_internal"`.
 - Returns: `string` — zh-Hant message.
@@ -1211,11 +1213,13 @@ Module-level constants:
 
 #### `validateMinSizeMb(value: number): string | null` *(settingsValidation.ts:35)*
 
-**Purpose**: Non-negative integer check for `rd.min_size_mb`.
+**Purpose**: Integer check for `rd.min_size_mb` within `[0, MAX_MIN_SIZE_MB]` (1,000,000 — the
+same ceiling as Rust `clamp_rd_settings` and sidecar `MAX_RD_MIN_SIZE_MB`), so the UI reports an
+out-of-range value instead of letting the backend clamp it silently.
 
 **Contract**:
 - Params: `value: number`.
-- Returns: `null` if integer ≥ 0, else `「必須是數字」`/`「必須是整數」`/`「不能為負」`.
+- Returns: `null` if integer in `[0, 1_000_000]`, else `「必須是數字」`/`「必須是整數」`/`「不能為負」`/`「最大為 1,000,000 MB」`.
 - Side effects: none. Errors: none. Async: no.
 
 **Calls**: `Number.isFinite`, `Number.isInteger`.

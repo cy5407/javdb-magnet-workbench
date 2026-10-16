@@ -327,9 +327,11 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
   5–300; `min_size_mb` 0–1,000,000), because pending retry consumes this state directly.
 - Returns: success envelope.
 - Side effects: mutates `state.cookies`, `state.rd_token`, `state.settings`, `state.paths`, `state.handshake_done`.
+  When the resulting token differs from `state.rd_token`, closes the pooled `state.rd_session`
+  first (`_close_rd_session`), so a re-handshake never reuses the old credential's pool.
 - Errors: none raised.
 
-**Calls**: `parse_cookie_string`, `_ok`.
+**Calls**: `parse_cookie_string`, `_close_rd_session`, `_ok`.
 
 **Called by**: Rust immediately after `hello`.
 
@@ -526,9 +528,12 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
 - Params: optional `token` string.
 - Returns: success with `user.username`, `type`, `expiration`, `points`; or stable RD error.
 - Side effects: performs RD `/user` HTTP request.
-- Errors: catches `RealDebridError` and generic exceptions.
+- Errors: `rd_token_format_invalid` (as the error **code**) when a non-empty `token` override
+  fails `_is_valid_rd_token` — returned before any HTTP call. Note `cmd_rd_set_token` reports
+  the same condition as code `bad_request` with message `rd_token_format_invalid`. Otherwise
+  catches `RealDebridError` and generic exceptions.
 
-**Calls**: `_rd_client`, `client._request("GET", "/user")`, `_classify_rd_error`, `_ok`, `_err`.
+**Calls**: `_is_valid_rd_token`, `_rd_client`, `client._request("GET", "/user")`, `_classify_rd_error`, `_ok`, `_err`.
 
 **Called by**: Rust `rd_test_token`, `rd_check_user`.
 
@@ -537,14 +542,18 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
 **Purpose**: Update the in-memory RD token after Rust saves or clears it.
 
 **Contract**:
-- Params: `token` string, or `null` to clear.
+- Params: `token` string, or `null` to clear (`""` is treated as a clear).
 - Returns: success with `set: bool`.
-- Side effects: mutates `state.rd_token`.
-- Errors: `bad_request` when `token` is neither string nor null.
+- Side effects: mutates `state.rd_token`. On a clear, and on a change to a different token,
+  closes the pooled `state.rd_session` (`_close_rd_session` drops its `Authorization` header,
+  closes it, and sets it to `None`), so neither the header nor keep-alive sockets outlive the
+  old credential.
+- Errors: `bad_request` when `token` is neither string nor null, or (message
+  `rd_token_format_invalid`) when it fails `_is_valid_rd_token`.
 
-**Calls**: `_ok`, `_err`.
+**Calls**: `_is_valid_rd_token`, `_close_rd_session`, `_ok`, `_err`.
 
-**Called by**: Rust `rd_save_token`, `rd_clear_token`.
+**Called by**: Rust `rd_save_token`, `rd_clear_token`, and `import_rd_token` (`apply_legacy_import`'s `.env` token step).
 
 ### `cmd_rd_send_magnet(state: DaemonState, req: dict) -> dict` ([sidecar.py:494](../../../sidecar/sidecar.py#L494))
 
@@ -618,9 +627,13 @@ no whitespace) without throwing. Booleans, malformed text, and Unicode-only digi
 - Params: text input/output streams; optional injected state for tests.
 - Returns: `None` after the loop exits cleanly — either on stdin EOF or after acknowledging `shutdown`. The CLI entry maps this to exit code 0; there is no other terminal state.
 - Side effects: reads stdin forever, writes stdout responses, mutates daemon state through handlers.
+  On any exit from the loop (EOF, `shutdown`, or a propagating error) a `finally` closes the
+  pooled `state.rd_session`. Rust normally ends the sidecar with `child.kill()`
+  (`sidecar_manager.rs`), which skips this; it matters when stdin closes because the parent
+  died without killing the child.
 - Errors: invalid JSON and non-object requests are converted to error envelopes; stream I/O errors may propagate.
 
-**Calls**: `DaemonState`, `json.loads`, `dispatch`, `_emit`.
+**Calls**: `DaemonState`, `json.loads`, `dispatch`, `_emit`, `_close_rd_session`.
 
 **Called by**: `main`.
 

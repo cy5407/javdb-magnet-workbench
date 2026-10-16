@@ -85,6 +85,24 @@ impl Drop for SidecarInner {
     }
 }
 
+#[cfg(test)]
+impl SidecarManager {
+    /// A manager whose sidecar is already dead: every `request()` fails fast
+    /// with `sidecar is dead: <reason>` and nothing is spawned. Lets command
+    /// bodies be tested for whether they reach the sidecar at all.
+    pub(crate) fn dead_for_tests(reason: &str) -> Self {
+        let (_tx, line_rx) = mpsc::unbounded_channel::<String>();
+        Self {
+            inner: Arc::new(Mutex::new(SidecarInner {
+                child: None,
+                line_rx,
+                request_counter: 0,
+                dead: Some(reason.to_string()),
+            })),
+        }
+    }
+}
+
 fn timeout_error(cmd: &str, secs: u64) -> String {
     format!("sidecar request '{cmd}' timed out after {secs}s; restart the app to recover")
 }

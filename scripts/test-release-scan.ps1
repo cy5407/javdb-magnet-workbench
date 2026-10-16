@@ -91,7 +91,7 @@ Write-Output "== 2. Scan metrics survive the function call =="
 # The manifest reads these AFTER Invoke-SourceSecretScan returns. Assigning
 # them without `$script:` inside the function makes them locals, and the whole
 # release dies at the manifest step. Assert the names are script-scoped.
-$src = Get-Content -LiteralPath $Target -Raw
+$src = Get-Content -LiteralPath $Target -Raw -Encoding utf8
 foreach ($v in 'SourceHits', 'SourceEligible', 'SourceScanned', 'SourceAllowed') {
     $localAssign = [regex]::Matches($src, '(?m)^\s*\$' + $v + '\s*=')
     Check ("`$$v is script-scoped, not function-local") ($localAssign.Count -eq 0) `

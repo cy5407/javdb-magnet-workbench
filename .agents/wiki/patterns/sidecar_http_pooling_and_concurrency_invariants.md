@@ -20,7 +20,7 @@
 ## 3. Verbatim Code Evidence
 
 ### 3.1 屬性注入與標頭同步
-- 位於 `sidecar/sidecar.py:928-932`：
+- 位於 `sidecar/sidecar.py:930-934`：
   ```python
   if session is not None and hasattr(client, "session"):
       client.session = session

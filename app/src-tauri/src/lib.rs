@@ -50,7 +50,7 @@ fn load_handshake_inputs(path_manager: &PathManager) -> (String, Option<String>,
     let cookies = load_cookies(path_manager);
 
     let settings_path = path_manager.data_dir.join(STORE_FILE);
-    let settings_value = std::fs::read_to_string(&settings_path)
+    let mut settings_value = std::fs::read_to_string(&settings_path)
         .ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
         .and_then(|v| v.get("settings").cloned())
@@ -61,6 +61,7 @@ fn load_handshake_inputs(path_manager: &PathManager) -> (String, Option<String>,
         Ok(Some(t)) if !t.is_empty() => Some(t),
         _ => migrate_legacy_token(path_manager, &settings_value),
     };
+    commands::blank_rd_api_token(&mut settings_value);
 
     (cookies, rd_token, settings_value)
 }
@@ -350,6 +351,32 @@ mod tests {
         assert!(
             path.exists(),
             "oversized file must remain so the user can fix it"
+        );
+    }
+
+    // Goes through load_handshake_inputs itself, not just the helper: the
+    // settings handed to the sidecar must not carry rd.api_token even while
+    // the legacy plaintext value is still on disk. The token is malformed on
+    // purpose: migrate_legacy_token rejects it before set_rd_token, so with
+    // this input the test only reads the credential store (a valid legacy
+    // token would be written to the keyring — do not use one here).
+    #[test]
+    fn load_handshake_inputs_never_hands_rd_api_token_to_sidecar() {
+        let pm = temp_data_dir();
+        write_wrapper(&pm, "abc-123");
+
+        let (_cookies, _token, settings) = load_handshake_inputs(&pm);
+
+        assert_eq!(settings["rd"]["api_token"], json!(""));
+        assert_eq!(settings["rd"]["file_pick"], json!("smart"));
+        assert_eq!(settings["ui"]["theme"], json!("dark"));
+        let disk: Value =
+            serde_json::from_str(&fs::read_to_string(pm.data_dir.join(STORE_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(
+            disk["settings"]["rd"]["api_token"],
+            json!("abc-123"),
+            "a malformed legacy value stays on disk so the user can fix it",
         );
     }
 }
