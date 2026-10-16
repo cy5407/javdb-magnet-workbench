@@ -1756,7 +1756,7 @@
         <!-- `target="_blank"` alone does nothing in a Tauri WebView; we
              also intercept the click and hand the URL to tauri-plugin-shell's
              `open()` so it actually opens in the user's default browser.
-             The capability is scoped to specific JavDB / RD domains in
+             The capability is scoped to the RD apitoken URL only in
              `capabilities/default.json`. -->
         <a
           href="https://real-debrid.com/apitoken"
@@ -2162,7 +2162,7 @@
               ／ Windows Credential Manager
             </p>
             <p class="muted small">
-              位置：<code>JavDBMagnet/JAVDB_COOKIES</code>（按 Win+R →
+              位置：<code>JAVDB_COOKIES.JavDBMagnet</code>（按 Win+R →
               <code>control /name Microsoft.CredentialManager</code> →
               「Windows 認證」可檢視）
             </p>
@@ -2203,7 +2203,7 @@
         <div class="inline-msg" data-kind="error">
           <p>
             <strong>確定要清除 cookies？</strong>
-            會刪除 Credential Manager 的 <code>JavDBMagnet/JAVDB_COOKIES</code>
+            會刪除 Credential Manager 的 <code>JAVDB_COOKIES.JavDBMagnet</code>
             與資料目錄的 <code>cookies.txt</code>，並清空執行中 sidecar 的 cookies。
           </p>
           <p class="muted small">
@@ -2261,7 +2261,7 @@
           </p>
           <ul class="hint" style="margin: 0.25rem 0 0.5rem 1.25rem;">
             <li>立即加密寫入 Windows Credential Manager
-              (<code>JavDBMagnet/JAVDB_COOKIES</code>)</li>
+              (<code>JAVDB_COOKIES.JavDBMagnet</code>)</li>
             <li>把新 cookies 推送到正在跑的 sidecar，<strong>不必重啟 app</strong></li>
             <li>順手清掉資料目錄裡任何過舊的 <code>cookies.txt</code></li>
           </ul>

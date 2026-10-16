@@ -51,3 +51,8 @@ Thumbs.db
 # Archify 本機編譯引擎
 .archify-engine/
 
+# Archify 產生的圖表（每份約 1.5 萬行內嵌 viewer 程式碼），由同名 *.json 在本機產生，不進 git
+/architecture.html
+/lifecycle.html
+/workflow.html
+

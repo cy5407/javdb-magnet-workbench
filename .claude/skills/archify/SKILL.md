@@ -16,6 +16,11 @@ metadata:
 >    - (b) 撰寫符合 Schema 的語意 JSON 規格（Typed JSON IR）。
 > 3. **由引擎程式碼保證品質**：利用 `bin/archify.mjs validate` 的 9 項幾何檢查自動排版避障，未通過前禁止交付。
 > 4. **語言規範**：圖表內的所有標籤（Labels）、卡片（Cards）、檢視說明（Views）一律使用**繁體中文（台灣）**。
+>
+> **引擎取得**：`.archify-engine/` 已列在 `.gitignore`，不在 repo 內。缺少時執行
+> `git clone --depth 1 --branch v2.16.0 https://github.com/tt-a1i/archify .archify-engine`
+> （3.x 目錄結構不同，`bin/` 路徑不適用）。產出的 `architecture.html`／`lifecycle.html`／
+> `workflow.html` 同樣列在 `.gitignore`：repo 只保存 `*.json` 規格，HTML 在本機產生後直接開啟檢視。
 
 ---
 

@@ -962,7 +962,7 @@ fn import_pending_block(data_dir: &Path, src: &Path, report: &mut LegacyImportRe
 // ===========================================================================
 // M7b: Cookies status + data/logs dir helpers
 //
-// Cookies are stored plaintext at <data_dir>/cookies.txt. The UI must be
+// Cookies live in the credential store (cookie_store.rs). The UI must be
 // able to surface presence / size / mtime so the user knows whether the
 // app has any session at all — but the cookie BODY must never leave Rust
 // (don't read the file contents, don't echo to logs).
@@ -984,7 +984,7 @@ pub struct CookiesStatus {
     /// - `"none"` — nothing configured; UI shows "create template".
     /// - `"file"` — plaintext `cookies.txt` present (legacy; will be
     ///   migrated to the credential store on next handshake).
-    /// - `"keyring"` — Windows Credential Manager (post-migration steady state).
+    /// - `"keyring"` — OS credential store (post-migration steady state).
     pub storage: String,
 }
 
@@ -1673,7 +1673,7 @@ mod tests_m7b {
 // End-to-end keyring tests (Goal 1/2/3 acceptance)
 //
 // These tests touch the **real** OS credential store. To avoid clobbering a
-// developer machine's actual `JavDBMagnet/JAVDB_COOKIES` entry we:
+// developer machine's actual `JAVDB_COOKIES.JavDBMagnet` entry we:
 //   1. Serialise all keyring-touching tests behind a single Mutex
 //      (cargo runs tests on multiple threads by default).
 //   2. Snapshot the user's pre-test value, clear it, run the test, then
@@ -1694,7 +1694,7 @@ mod tests_cookies_e2e {
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     /// One global mutex so concurrent keyring tests don't race over the
-    /// shared `JavDBMagnet/JAVDB_COOKIES` entry.
+    /// shared `JAVDB_COOKIES.JavDBMagnet` entry.
     fn keyring_lock() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))

@@ -11,7 +11,7 @@
 
 ## 1. Overview
 
-The **sidecar** is a PyInstaller-bundled, single-file Windows executable that wraps the project's Python scraping/Real-Debrid stack (`sidecar/sidecar.py`, plus `javdb_scraper`, `realdebrid`, `app_logging`). It ships as `sidecar-x86_64-pc-windows-msvc.exe` and is placed inside the Tauri app's `externalBin` folder so Tauri 2's sidecar resolver can discover it by target-triple naming convention.
+The **sidecar** is a PyInstaller-bundled, single-file Windows executable that wraps the project's Python scraping/Real-Debrid stack (`sidecar/sidecar.py`, plus `javdb_scraper`, `realdebrid`, `app_logging`, `rd_outcome_log`). It ships as `sidecar-x86_64-pc-windows-msvc.exe` and is placed inside the Tauri app's `externalBin` folder so Tauri 2's sidecar resolver can discover it by target-triple naming convention.
 
 This document covers the **build pipeline** only. The runtime protocol (handshake + per-command JSONL request/response over stdin/stdout) lives in [`sidecar-runtime.md`](sidecar-runtime.md). M9 Phase 8-C removed the previous `driver_rust` argv-style spike harness — it pre-dated M3 and only spoke the obsolete `<exe> fetch-javdb <url>` argv contract, which made it actively misleading once production switched to JSONL. The Tauri-side wiring (`tauri-plugin-shell` `sidecar(...)` API, command handlers, IPC types) lives in `app/src-tauri/src/sidecar_manager.rs` and `app/src-tauri/src/commands.rs`.
 
@@ -19,12 +19,13 @@ Two facts to keep in mind while reading:
 
 1. The PyInstaller `--onefile` artifact is written **directly** into the Tauri layout at `app/src-tauri/binaries/sidecar-x86_64-pc-windows-msvc.exe`. There is no separate copy step.
 2. M9 Phase 8-B added [`requirements-sidecar.txt`](../../../requirements-sidecar.txt) as the exact dependency contract. `build_sidecar.py` verifies every pinned package via `importlib.metadata` and fails fast on missing/mismatched versions; it no longer auto-installs anything.
+3. The target triple is hard-coded (`APP_NAME = "sidecar-x86_64-pc-windows-msvc"`); the script only produces the Windows binary. A Linux `sidecar-x86_64-unknown-linux-gnu` has to be built by hand — see [`linux-support.md` §2](../../platform/linux-support.md).
 
 ---
 
 ## 2. `build_sidecar.py`
 
-Top-level constants ([`build_sidecar.py:25-37`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L25-L37)):
+Top-level constants ([`build_sidecar.py:28-38`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L28-L38)):
 
 | Constant | Value | Role |
 |----------|-------|------|
@@ -37,7 +38,7 @@ Top-level constants ([`build_sidecar.py:25-37`](../../../spikes/pyinstaller_side
 | `SPEC` | `<SPIKE_DIR>/sidecar-x86_64-pc-windows-msvc.spec` | Generated `.spec` location. |
 | `REQUIREMENTS` | `<repo>/requirements-sidecar.txt` | Pinned-deps contract verified before every build. |
 
-### `_pinned_versions() -> dict[str, str]` ([`build_sidecar.py:40-62`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L40-L62))
+### `_pinned_versions() -> dict[str, str]` ([`build_sidecar.py:41-63`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L41-L63))
 
 **Purpose**: Parse `requirements-sidecar.txt` into `{lowercase_name: pinned_version}`. Strict: only `name==version` lines (plus blank lines / `#` comments) are accepted.
 
@@ -52,7 +53,7 @@ Top-level constants ([`build_sidecar.py:25-37`](../../../spikes/pyinstaller_side
 
 **Calls**: `Path.exists()`, `Path.read_text(encoding="utf-8")`, `re.compile(r"^\s*([A-Za-z0-9_.\-]+)\s*==\s*(\S+)\s*$").match`, `str.lower()`, `sys.exit`.
 
-### `ensure_pinned_deps() -> dict[str, str]` ([`build_sidecar.py:65-84`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L65-L84))
+### `ensure_pinned_deps() -> dict[str, str]` ([`build_sidecar.py:66-85`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L66-L85))
 
 **Purpose**: Verify every package in `requirements-sidecar.txt` is installed at the exact pinned version. Fail fast otherwise. Returns the pin map so `__main__` can echo a one-line summary.
 
@@ -66,7 +67,7 @@ Top-level constants ([`build_sidecar.py:25-37`](../../../spikes/pyinstaller_side
 
 **Calls**: `_pinned_versions()`, `importlib.metadata.version(name)` (catches `PackageNotFoundError`), `sys.exit`.
 
-### `clean()` ([`build_sidecar.py:87-94`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L87-L94))
+### `clean()` ([`build_sidecar.py:88-95`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L88-L95))
 
 **Purpose**: Remove previous build artifacts so each run starts from a clean state.
 
@@ -80,7 +81,7 @@ Top-level constants ([`build_sidecar.py:25-37`](../../../spikes/pyinstaller_side
 
 **Note**: `clean()` removes the **entire** `app/src-tauri/binaries/` directory, not just the sidecar exe. If other binaries land there later, this becomes destructive — `(unverified; appears to be acceptable today because the directory only holds the sidecar)`.
 
-### `build()` ([`build_sidecar.py:97-126`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L97-L126))
+### `build()` ([`build_sidecar.py:98-133`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L98-L133))
 
 **Purpose**: Invoke PyInstaller to package `sidecar/sidecar.py` into a single-file Windows console exe.
 
@@ -88,12 +89,12 @@ Top-level constants ([`build_sidecar.py:25-37`](../../../spikes/pyinstaller_side
 - Params: none.
 - Returns: `None`.
 - Preconditions: `ENTRY` must exist; otherwise prints an error and `sys.exit(1)`.
-- Side effects: runs PyInstaller as a subprocess; produces `DIST/<APP_NAME>.exe`, populates `BUILD/`, writes `.spec` to `SPEC`.
+- Side effects: prints `打包 sidecar.py → <DIST>/<APP_NAME>.exe` to stderr; runs PyInstaller as a subprocess; produces `DIST/<APP_NAME>.exe`, populates `BUILD/`, writes `.spec` to `SPEC`.
 - Errors: `subprocess.CalledProcessError` propagates if PyInstaller fails.
 
 **Calls**: `Path.exists()`, `subprocess.check_call(cmd, cwd=REPO_ROOT)`.
 
-PyInstaller command ([`build_sidecar.py:103-124`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L103-L124)):
+PyInstaller command ([`build_sidecar.py:104-131`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L104-L131)):
 
 ```
 <python> -m PyInstaller
@@ -111,12 +112,13 @@ PyInstaller command ([`build_sidecar.py:103-124`](../../../spikes/pyinstaller_si
     --hidden-import javdb_scraper          # M9: replaces javdb_magnet_gui (Tk no longer bundled)
     --hidden-import realdebrid
     --hidden-import app_logging
+    --hidden-import rd_outcome_log         # top-level import, Analysis finds it anyway; listed so the bundle is explicit
     <repo>/sidecar/sidecar.py
 ```
 
 `cwd=REPO_ROOT` is set so relative imports resolve from the repo root.
 
-### `post_build()` ([`build_sidecar.py:129-146`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L129-L146))
+### `post_build()` ([`build_sidecar.py:136-153`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L136-L153))
 
 **Purpose**: Verify the exe was produced; print size, usage hint, and log-dir hint to stderr.
 
@@ -129,7 +131,7 @@ PyInstaller command ([`build_sidecar.py:103-124`](../../../spikes/pyinstaller_si
 
 **Calls**: `Path.exists()`, `Path.stat()`, `print(..., file=sys.stderr)`.
 
-### Entry point: `if __name__ == "__main__":` ([`build_sidecar.py:149-155`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L149-L155))
+### Entry point: `if __name__ == "__main__":` ([`build_sidecar.py:156-162`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L156-L162))
 
 Sequence:
 1. `pinned = ensure_pinned_deps()` — fail fast on missing / mismatched packages.
@@ -147,7 +149,7 @@ Sequence:
 - `spikes/pyinstaller_sidecar/build/` — PyInstaller intermediates.
 - `spikes/pyinstaller_sidecar/sidecar-x86_64-pc-windows-msvc.spec` — generated spec file.
 
-**Files explicitly NOT bundled**: `.env`, `cookies.txt` (no `--add-data` flags). Confirmed by absence in [`build_sidecar.py:103-124`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L103-L124).
+**Files explicitly NOT bundled**: `.env`, `cookies.txt` (no `--add-data` flags). Confirmed by absence in [`build_sidecar.py:104-131`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L104-L131).
 
 ---
 
@@ -155,7 +157,7 @@ Sequence:
 
 End-to-end, from invocation to artifact:
 
-1. **Invocation** — `npm run sidecar:build` (or `python spikes/pyinstaller_sidecar/build_sidecar.py` directly).
+1. **Invocation** — `npm run sidecar:build` from `app/` (`python ../spikes/pyinstaller_sidecar/build_sidecar.py`; also chained by `npm run tauri:dev` / `tauri:build` and by Step 1 of `scripts/build-release.ps1`), or `python spikes/pyinstaller_sidecar/build_sidecar.py` directly from the repo root.
 2. **Pinned-deps check** — `ensure_pinned_deps()` parses [`requirements-sidecar.txt`](../../../requirements-sidecar.txt) and verifies every `name==version` against `importlib.metadata.version(name)`. Any missing or mismatched package exits with a `pip install -r requirements-sidecar.txt` hint; no implicit `pip install` is performed.
 3. **Clean** — `clean()` removes:
    - `app/src-tauri/binaries/` (entire directory)
@@ -164,7 +166,7 @@ End-to-end, from invocation to artifact:
 4. **Build** — PyInstaller is invoked with the command shown in §2 / `build()`. Key inputs:
    - Entry: `<repo>/sidecar/sidecar.py`
    - Search path: `<repo>` (for cross-package imports like `javdb_scraper`)
-   - Hidden imports: `curl_cffi`, `curl_cffi.requests`, `javdb_scraper`, `realdebrid`, `app_logging` *(M9: `javdb_magnet_gui` → `javdb_scraper`; Tk no longer bundled)*
+   - Hidden imports: `curl_cffi`, `curl_cffi.requests`, `javdb_scraper`, `realdebrid`, `app_logging`, `rd_outcome_log` *(M9: `javdb_magnet_gui` → `javdb_scraper`; Tk no longer bundled)*
    - Collected: `curl_cffi` (`--collect-all`, required for native deps)
    - Mode: `--onefile --console`
    - Working dir: `<repo>` (`cwd=REPO_ROOT`)
@@ -181,7 +183,27 @@ End-to-end, from invocation to artifact:
 - `.env`
 - `cookies.txt`
 
-(See [`build_sidecar.py:9-12`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L9-L12) and the comment block in `build()`.)
+(See [`build_sidecar.py:11-13`](../../../spikes/pyinstaller_sidecar/build_sidecar.py#L11-L13) and the comment block in `build()`.)
+
+---
+
+## 4. Release sequence (`scripts/build-release.ps1`)
+
+[`scripts/build-release.ps1`](../../../scripts/build-release.ps1) (`pwsh -File scripts\build-release.ps1`, or `npm run release` from `app/`) is the portable-release pipeline that consumes the artifact above. Order of the full-build path:
+
+1. **Scanner red tests** — runs `scripts/test-release-scan.ps1`; failure refuses to build.
+2. **Clean-tree gate** — refuses assume-unchanged / skip-worktree entries and any `git status --porcelain --untracked-files=all` output (an untracked top-level module could be pulled into `sidecar.exe` by PyInstaller); records `HEAD`.
+3. **Prepare `release/`** — removes previous `.zip` / `.msi` / `.exe`, `SHA256SUMS.txt`, `release-manifest.json`, and `release/JavDBMagnet/`.
+4. **Build sidecar** — `npm run sidecar:build` in `app/`; fails unless `app/src-tauri/binaries/sidecar-x86_64-pc-windows-msvc.exe` exists afterwards.
+5. **Build app** — `npx tauri build --no-bundle` (enables `tauri/custom-protocol`; `RUSTFLAGS` gets `--remap-path-prefix` scrubs); expects `app/src-tauri/target/release/javdbmagnet.exe`.
+6. **Stage** — copies `javdbmagnet.exe`, copies the sidecar **renamed to plain `sidecar.exe`**, writes `README.txt` into `release/JavDBMagnet/`.
+7. **Audit** — staging folder may contain only `javdbmagnet.exe`, `sidecar.exe`, `README.txt`.
+8. **Binary scan** of both exes, then **source secret scan** of tracked text files.
+9. **Zip** → `release/JavDBMagnet_<version>_portable.zip` (`<version>` from `app/package.json`).
+10. **SHA256** for the zip + both exes → `release/SHA256SUMS.txt`.
+11. **Re-verify snapshot** — `HEAD` unchanged and tree still clean, then write `release/release-manifest.json`.
+
+`-AuditOnly` (source scan only) and `-AuditBinary <file>` (binary scan of one file) exit before any of the build steps. Code signing is not performed (`$env:SIGN -eq "1"` only prints a placeholder warning and records `signing.requested: true` in the manifest).
 
 ---
 

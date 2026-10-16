@@ -2,7 +2,7 @@
 
 ## 為什麼這條 recipe 存在
 
-M5 安全合約之一：**完整 magnet 文字（含 BTIH hash）絕不得進 log 檔**。歷史上有過一個 B1 bug：`realdebrid.py::_request` 在 DEBUG 等級記錄 `data["magnet"][:80]`，正好涵蓋完整 40 字 hash。修復 commit 是 [`1a604ae`](../../README.md)，現在 magnet key 一律記 `<redacted>`。
+M5 安全合約之一：**完整 magnet 文字（含 BTIH hash）絕不得進 log 檔**。歷史上有過一個 B1 bug：`realdebrid.py::_request` 在 DEBUG 等級記錄 `data["magnet"][:80]`，正好涵蓋完整 40 字 hash。修復 commit 是 `30a6eb9`，現在 `_request` 的 debug 行經 `RealDebrid._redact_log_kwargs` 產生，magnet key 一律記 `<redacted>`（Authorization / Cookie 等 header 亦同）。
 
 這條 recipe 教你怎麼自己驗證修復仍然生效，以及未來 refactor 出包時最快發現的方法。
 
@@ -62,7 +62,7 @@ Select-String -Path "$env:LOCALAPPDATA\JavDBMagnet\logs\*" `
 無命中且你確定有跑過送 RD → 表示 `<redacted>` 那行沒被執行，可能：
 
 - 你的 sidecar.exe 是舊版（B1 修復前 build），重 build 一次
-- log level 被改成 INFO+，看不到 DEBUG（不影響安全，但驗證需要 DEBUG）
+- sidecar 找不到可寫的 log 目錄而降級 console-only，`debug.log` 根本沒寫（`debug.log` 的 file handler 固定為 DEBUG 等級，不會因 log level 設定而漏掉這行）
 
 ```powershell
 # 3. 順便確認 RD token 沒外洩

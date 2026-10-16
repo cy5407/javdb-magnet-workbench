@@ -10,7 +10,7 @@
 ## 3. Evidence & Ground Truth Code
 
 ### 3.1 429 退避限制與重試預算（Verbatim Code）
-- 位於 `realdebrid.py:20` 與 `realdebrid.py:106-124`：
+- 位於 `realdebrid.py:20` 與 `realdebrid.py:118-136`：
   ```python
   MAX_RETRY_AFTER_SECONDS = 10
 

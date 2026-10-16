@@ -9,19 +9,19 @@
   `TAURI_CONFIG='{"bundle":{"externalBin":[]}}' cargo test --no-fail-fast --tests`（lib unit tests ＋ `tests/` 整合測試）。覆寫只讓 lib
   unit tests 不受 Tauri 打包期的 externalBin 存在檢查阻擋；正式 build 仍必須提供
   Linux sidecar（見 [`docs/platform/linux-support.md`](docs/platform/linux-support.md) §2）。
-  keyring 測試需要可用的使用者 D-Bus／Secret Service。2026-08-01 實測
-  **81 passed / 0 failed**。
+  keyring 測試需要可用的使用者 D-Bus／Secret Service。2026-10-16 實測
+  **98 passed / 0 failed**（lib unit 96 ＋ `tests/sidecar_command.rs` 2）。
 - 驗收以機器可比對方式核對 baseline：既有測試案例不得刪除或弱化；刻意的
   行為契約變更允許改測試，但須說明舊期待、Red 原因與新期待。
 
-### 目前 baseline（2026-08-01）
+### 目前 baseline（2026-10-16，HEAD `7c877a8`）
 
 | Gate | 結果 |
 |---|---|
-| `pytest tests/ -q` | 426 passed, 6 subtests |
-| `npx vitest run` | 9 files / 255 tests |
+| `pytest tests/ -q` | 436 passed, 6 subtests |
+| `npx vitest run` | 9 files / 258 tests |
 | `npm run check` | 189 files, 0 errors 0 warnings |
-| Linux `TAURI_CONFIG='{"bundle":{"externalBin":[]}}' cargo test --lib` | 81 passed（需可用 D-Bus keyring） |
+| Linux `TAURI_CONFIG='{"bundle":{"externalBin":[]}}' cargo test --no-fail-fast --tests` | 98 passed（lib 96 ＋ 整合 2；需可用 D-Bus keyring） |
 
 ## 契約文件同步
 

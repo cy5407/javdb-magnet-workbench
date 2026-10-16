@@ -15,18 +15,18 @@ description: JavDB 網頁爬取、TLS 偽裝、Sidecar RPC 通信與 Real-Debrid
 - Archify 架構圖引擎維護（應使用 `archify` 專用 Skill）。
 
 ## 3. Data Flow Architecture
-本專案遵循三層式架構與單向資料流（參考 `architecture.html` 與 `workflow.html`，跨層契約以 `docs/architecture/contracts/` 為唯一真實來源）：
+本專案遵循三層式架構與單向資料流（參考 `architecture.json` 與 `workflow.json`，可用 archify skill 產生 HTML 檢視，跨層契約以 `docs/architecture/contracts/` 為唯一真實來源）：
 1. **前端表現層 (Svelte 5)**：使用者輸入 URL/Magnet，由 `scraper.ts` / `rdSender.ts` / `rdPriority.ts` 發起非同步請求。
-2. **後端控制層 (Rust Tauri 2.0)**：`commands.rs` 接收 IPC 呼叫，透過 `sidecar_manager.rs` 以 Stdio JSONL 調度 Python 進程；敏感 Token 經 `secret_store.rs` 存取 Windows Credential Manager。
+2. **後端控制層 (Rust Tauri 2.0)**：`commands.rs` 接收 IPC 呼叫，透過 `sidecar_manager.rs` 以 Stdio JSONL 調度 Python 進程；敏感 Token 經 `secret_store.rs`（`keyring` crate）存取 OS 憑證庫（Windows Credential Manager；macOS／Linux 由 `keyring` 對應後端）。
 3. **運算與資料層 (Python Sidecar)**：
    - `javdb_scraper.py`：透過 `curl_cffi` (Chrome-124 偽裝) 抓取網頁並解析磁力。
-   - `sidecar.py`：維護 `MagnetHandleTable` 記憶體映射，杜絕明文 Magnet 暴露於外部。
+   - `sidecar.py`：維護 `DaemonState.magnets`（MagnetHandleTable，handle_id → 完整 URI）記憶體映射，杜絕明文 Magnet 暴露於外部。
    - `realdebrid.py`：執行智慧選檔、429 退避與快取秒回判定。
 
 ## 4. Operational Invariants & Code Contracts
 
 ### 4.1 基礎 JSON-RPC 回應信封
-所有 Sidecar 回應均遵循以下信封格式（`sidecar/sidecar.py:222-234`）：
+所有 Sidecar 回應均遵循以下信封格式（`sidecar/sidecar.py:223-235`）：
 - **成功**：`{"ok": true, "request_id": str|null, ...payload}`
 - **失敗**：`{"ok": false, "request_id": str|null, "error": {"code": str, "message": str, "internal": str}}`；`internal` 一律存在，未提供時為空字串。
 
@@ -37,12 +37,12 @@ description: JavDB 網頁爬取、TLS 偽裝、Sidecar RPC 通信與 Real-Debrid
 - **`rd_user` (雙層巢狀)**：
   `{"ok": true, "request_id": ..., "user": {"username": str, "type": str, "expiration": str, "points": int}}`
 - **`rd_send_magnet` (信封層平鋪)**：
-  - `status="completed"`：`{"ok": true, "request_id": ..., "status": "completed", "torrent_id": str, "name": str, "links": list[str]}`
-  - `status="pending"`：`{"ok": true, "request_id": ..., "status": "pending", "torrent_id": str, "name": str, "rd_status": str, "progress": int, "files_selected": bool, "strategy": str}`
+  - `status="completed"`：`{"ok": true, "request_id": ..., "status": "completed", "torrent_id": str, "name": str, "links": [{"original": str, "download": str, "filename": str, "filesize": int, "streamable": int, "error"?: str}]}`
+  - `status="pending"`：`{"ok": true, "request_id": ..., "status": "pending", "torrent_id": str, "name": str, "rd_status": str, "progress": number, "files_selected": bool, "strategy": str}`
 - **`resolve_magnet` (信封層平鋪)**：`{"ok": true, "request_id": ..., "magnet": str}`
 
 ### 4.3 前置條件守衛（Handshake Guard）
-依據 `docs/architecture/contracts/sidecar-runtime.md`，僅以下 6 個命令受 `handshake_done` 守衛：
+依據 `sidecar/sidecar.py` 各 handler 進入點（契約：`docs/architecture/contracts/sidecar-runtime.md`），僅以下 6 個命令受 `handshake_done` 守衛：
 `fetch_javdb`、`set_cookies`、`rd_user`、`rd_set_token`、`rd_send_magnet`、`rd_check_pending`。
 
 ### 4.4 邊界限制常數
@@ -53,8 +53,8 @@ description: JavDB 網頁爬取、TLS 偽裝、Sidecar RPC 通信與 Real-Debrid
 - `MAX_RETRY_AFTER_SECONDS = 10`
 
 ### 4.5 錯誤碼與 429 退避規範
-- **核心錯誤碼**：`bad_request`, `network`, `cloudflare_block`（僅 403 觸發）, `unknown_handle`, `rd_token_missing`, `rd_token_invalid`, `rd_permission_denied`, `rd_api_error`, `internal`。
-- **429 速率限制**：單次退避上限為 10 秒，最多重試 3 次，且必須受 `deadline`（`monotonic() + cache_wait + 75.0`）預算約束。
+- **核心錯誤碼**：`bad_request`, `protocol_mismatch`, `network`, `cloudflare_block`（僅 403 觸發）, `unknown_handle`, `internal`；RD 類（`_classify_rd_error` 與 `_RD_ERR_*`）：`rd_no_token`, `rd_token_invalid`, `rd_premium_required`, `rd_rate_limited`, `rd_magnet_error`, `rd_download_failed`, `rd_api_error`, `rd_internal`。
+- **429 速率限制**：單次退避上限為 10 秒，最多重試 3 次，且必須受 `deadline` 預算約束（`rd_send_magnet` 為 `monotonic() + cache_wait + 75.0`；`rd_user`／`rd_check_pending` 為 `monotonic() + 50.0`）。
 - **隱私安全**：日誌嚴禁記錄完整 Magnet URI 或 Token，一律經 `redact_magnet()` 或保留 8 碼 BTIH 前綴。
 
 ### 4.6 連線池、並行與發布門禁契約

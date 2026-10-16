@@ -22,7 +22,7 @@
       {
         "id": "rd-path",
         "label": "Real-Debrid 轉發與直連鏈路",
-        "focus": ["ui_view", "ui_lib", "rust_sidecar_mgr", "py_sidecar", "py_rd", "rd_cloud", "logs_store"],
+        "focus": ["ui_view", "ui_lib", "rust_commands", "rust_sidecar_mgr", "py_sidecar", "py_rd", "rd_cloud", "logs_store"],
         "note": "啟發式篩選高機率種子，經由 Sidecar 提交 RD 進行智慧選檔與快取判定，生成直連並寫入成效日誌。"
       },
       {
@@ -40,15 +40,15 @@
 
     { "id": "rust_commands", "type": "backend", "label": "Tauri IPC 命令路由", "sublabel": "commands.rs (28 項命令)", "tag": "Tauri 2.0 / Rust", "pos": [320, 140], "size": [190, 68] },
     { "id": "rust_sidecar_mgr", "type": "backend", "label": "Sidecar 程序調度器", "sublabel": "sidecar_manager.rs", "tag": "Stdio JSONL 通道", "pos": [320, 350], "size": [190, 68] },
-    { "id": "rust_secret", "type": "security", "label": "認證金鑰安全模組", "sublabel": "secret_store.rs (keyring)", "tag": "無明文落地", "pos": [320, 560], "size": [190, 68] },
+    { "id": "rust_secret", "type": "security", "label": "認證金鑰安全模組", "sublabel": "secret_store.rs / cookie_store.rs", "tag": "無明文落地", "pos": [320, 560], "size": [190, 68] },
 
     { "id": "py_scraper", "type": "backend", "label": "JavDB 爬蟲解析核心", "sublabel": "javdb_scraper.py (curl_cffi)", "tag": "Chrome TLS 偽裝", "pos": [590, 140], "size": [190, 68] },
     { "id": "py_sidecar", "type": "backend", "label": "Python Sidecar 守護進程", "sublabel": "sidecar.py (Handle 暫存管理)", "tag": "PyInstaller 打包", "pos": [590, 350], "size": [190, 68] },
     { "id": "py_rd", "type": "backend", "label": "Real-Debrid 客戶端", "sublabel": "realdebrid.py (智慧選檔)", "tag": "REST API 調用", "pos": [590, 560], "size": [190, 68] },
 
     { "id": "javdb_cloud", "type": "cloud", "label": "JavDB 影音資料庫", "sublabel": "影片頁面與磁力清單", "tag": "Cloudflare WAF", "pos": [860, 140], "size": [190, 68] },
-    { "id": "rd_cloud", "type": "cloud", "label": "Real-Debrid 雲端快取", "sublabel": "Torrent 下載與直連解鎖", "tag": "OAuth / API", "pos": [860, 350], "size": [190, 68] },
-    { "id": "logs_store", "type": "database", "label": "LOCALAPPDATA Logs 目錄", "sublabel": "%LOCALAPPDATA%\\logs", "tag": "rd_outcomes / debug.log", "pos": [860, 560], "size": [190, 68] }
+    { "id": "rd_cloud", "type": "cloud", "label": "Real-Debrid 雲端快取", "sublabel": "Torrent 下載與直連解鎖", "tag": "Bearer Token / REST API", "pos": [860, 350], "size": [190, 68] },
+    { "id": "logs_store", "type": "database", "label": "LOCALAPPDATA Logs 目錄", "sublabel": "%LOCALAPPDATA%\\JavDBMagnet\\logs", "tag": "rd_outcomes.jsonl / debug.log", "pos": [860, 560], "size": [190, 68] }
   ],
   "boundaries": [
     { "kind": "region", "label": "前端表現與憑證儲存", "wraps": ["ui_view", "ui_lib", "win_cred"] },
@@ -59,7 +59,6 @@
   "connections": [
     { "id": "conn_ui_to_lib", "from": "ui_view", "to": "ui_lib", "variant": "default" },
     { "id": "conn_ui_to_rust", "from": "ui_view", "to": "rust_commands", "label": "invoke()", "variant": "emphasis" },
-    { "id": "conn_lib_to_rust_mgr", "from": "ui_lib", "to": "rust_sidecar_mgr", "label": "非同步調度", "variant": "default" },
     { "id": "conn_rust_to_sidecar_mgr", "from": "rust_commands", "to": "rust_sidecar_mgr", "variant": "default" },
     { "id": "conn_rust_mgr_to_secret", "from": "rust_sidecar_mgr", "to": "rust_secret", "variant": "security" },
     { "id": "conn_secret_to_cred", "from": "rust_secret", "to": "win_cred", "label": "DPAPI 加密保存", "variant": "security" },
