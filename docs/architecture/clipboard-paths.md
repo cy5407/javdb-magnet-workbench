@@ -19,7 +19,7 @@
 | `copyRdDownloads`、`copyRdRow`、`copyRdSingleLink` | `copy_rd_links_bulk`（連結來自 `collectDownloadLinksFromRow`／單一 link） |
 | `retryAllPending` | `copy_rd_links_bulk`（本輪重試完成的 links，寫入結果併進摘要訊息） |
 
-統一規則：**前端永遠不直接 import `@tauri-apps/plugin-clipboard-manager`**（`app/package.json` 仍列有此相依，但 `app/src` 沒有任何 import）。所有 clipboard 寫入經 Rust `app.clipboard().write_text(...)`。
+統一規則：**前端永遠不直接 import `@tauri-apps/plugin-clipboard-manager`**（`app/package.json` 也不再列此相依，2026-10-16 移除）。所有 clipboard 寫入經 Rust `app.clipboard().write_text(...)`。
 
 剪貼簿**讀取**路徑：無。前端與 Rust 都不呼叫 `readText`／`read_text`；貼上網址或磁力只靠 textarea 的原生貼上。
 
