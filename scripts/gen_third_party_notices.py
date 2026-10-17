@@ -39,6 +39,14 @@ BUILD_ONLY_PY = {"pyinstaller", "pyinstaller-hooks-contrib", "altgraph", "pefile
 EXCLUDED_PY = {"chardet"}
 
 LICENSE_FILE_RX = re.compile(r"^(licen[cs]e|copying|notice|copyright)([-_.].*)?$", re.I)
+# 套件沒有提供 SPDX 授權名稱時的佔位文字。
+LICENSE_UNSPECIFIED = "見授權全文"
+CURL_IMPERSONATE_NOTE = (
+    "curl_cffi 的原生模組靜態連結了 curl-impersonate 及其相依函式庫"
+    "（libcurl、BoringSSL 等）。各函式庫的授權條款見\n"
+    "https://github.com/lexiforest/curl-impersonate")
+# 只允許寫到 release 輸出目錄底下，避免命令列參數把檔案寫到任意位置。
+ALLOWED_OUTPUT_DIR = REPO_ROOT / "release"
 
 
 @dataclass
@@ -48,6 +56,7 @@ class Component:
     license: str
     url: str = ""
     texts: list[str] = field(default_factory=list)
+    deps: list[str] = field(default_factory=list)
 
 
 def _norm(name: str) -> str:
@@ -87,7 +96,7 @@ def _py_license(meta) -> str:
         return raw[0]
     classifiers = [c.split("::")[-1].strip() for c in meta.get_all("Classifier") or []
                    if c.startswith("License ::")]
-    return "; ".join(classifiers) or "見授權全文"
+    return "; ".join(classifiers) or LICENSE_UNSPECIFIED
 
 
 def _py_url(meta) -> str:
@@ -104,30 +113,32 @@ def _py_license_texts(dist) -> list[str]:
     return _read_texts(Path(dist.locate_file(f)) for f in files)
 
 
-def collect_python() -> list[Component]:
-    seen: dict[str, Component] = {}
+def _runtime_requires(dist) -> list[str]:
+    """Names of a distribution's non-optional requirements."""
+    return [re.split(r"[=<>!~\[ ;(]", req.strip(), maxsplit=1)[0]
+            for req in dist.requires or [] if "extra ==" not in req]
 
-    def walk(name: str) -> None:
-        key = _norm(name)
-        if key in seen or key in BUILD_ONLY_PY or key in EXCLUDED_PY:
-            return
-        try:
-            dist = md.distribution(name)
-        except md.PackageNotFoundError:
-            return
-        meta = dist.metadata
-        seen[key] = Component(meta["Name"], dist.version, _py_license(meta),
-                              _py_url(meta), _py_license_texts(dist))
-        for req in dist.requires or []:
-            if "extra ==" in req:
-                continue
-            walk(re.split(r"[=<>!~\[ ;(]", req.strip(), maxsplit=1)[0])
 
-    for root in _requirement_roots():
-        walk(root)
+def _walk_python(name: str, seen: dict[str, Component]) -> None:
+    key = _norm(name)
+    if key in seen or key in BUILD_ONLY_PY or key in EXCLUDED_PY:
+        return
+    try:
+        dist = md.distribution(name)
+    except md.PackageNotFoundError:
+        return
+    meta = dist.metadata
+    texts = _py_license_texts(dist)
+    if key == "curl-cffi":
+        texts.append(CURL_IMPERSONATE_NOTE)
+    seen[key] = Component(meta["Name"], dist.version, _py_license(meta), _py_url(meta), texts)
+    for dep in _runtime_requires(dist):
+        _walk_python(dep, seen)
 
-    comps = sorted(seen.values(), key=lambda c: c.name.lower())
 
+def _python_runtime_components() -> list[Component]:
+    """The PyInstaller bootloader and the interpreter, both embedded in sidecar.exe."""
+    comps = []
     try:
         pyi = md.distribution("pyinstaller")
         comps.append(Component(
@@ -136,19 +147,19 @@ def collect_python() -> list[Component]:
             "https://github.com/pyinstaller/pyinstaller", _py_license_texts(pyi)))
     except md.PackageNotFoundError:
         pass
-
     py_license = Path(sys.base_prefix) / "LICENSE.txt"
     comps.append(Component(
         "CPython", "%d.%d.%d" % sys.version_info[:3], "PSF-2.0",
         "https://www.python.org/", _read_texts([py_license]) if py_license.exists() else []))
-
-    for c in comps:
-        if _norm(c.name) == "curl-cffi":
-            c.texts.append(
-                "curl_cffi 的原生模組靜態連結了 curl-impersonate 及其相依函式庫"
-                "（libcurl、BoringSSL 等）。各函式庫的授權條款見\n"
-                "https://github.com/lexiforest/curl-impersonate")
     return comps
+
+
+def collect_python() -> list[Component]:
+    seen: dict[str, Component] = {}
+    for root in _requirement_roots():
+        _walk_python(root, seen)
+    comps = sorted(seen.values(), key=lambda c: c.name.lower())
+    return comps + _python_runtime_components()
 
 
 # ---------------------------------------------------------------- Rust
@@ -181,7 +192,7 @@ def collect_rust() -> list[Component]:
         crate_dir = Path(p["manifest_path"]).parent
         files = [f for f in crate_dir.iterdir() if f.is_file() and LICENSE_FILE_RX.match(f.name)]
         comps.append(Component(p["name"], p["version"],
-                               p.get("license") or "見授權全文",
+                               p.get("license") or LICENSE_UNSPECIFIED,
                                p.get("repository") or p.get("homepage") or "",
                                _read_texts(files)))
     return sorted(comps, key=lambda c: (c.name.lower(), c.version))
@@ -189,34 +200,35 @@ def collect_rust() -> list[Component]:
 
 # ---------------------------------------------------------------- 前端
 
+def _npm_component(name: str, pdir: Path) -> Component | None:
+    pj = pdir / "package.json"
+    if not pj.exists():
+        return None
+    j = json.loads(pj.read_text(encoding="utf-8"))
+    lic = j.get("license")
+    if not isinstance(lic, str):
+        lic = json.dumps(lic, ensure_ascii=False) if lic else LICENSE_UNSPECIFIED
+    repo = j.get("repository")
+    url = repo.get("url", "") if isinstance(repo, dict) else (repo or j.get("homepage", ""))
+    files = [f for f in pdir.iterdir() if f.is_file() and LICENSE_FILE_RX.match(f.name)]
+    return Component(name, j.get("version", ""), lic, url, _read_texts(files),
+                     list(j.get("dependencies", {})))
+
+
 def collect_frontend() -> list[Component]:
     pkg = json.loads((APP_DIR / "package.json").read_text(encoding="utf-8"))
-    roots = list(pkg.get("dependencies", {}))
     # Svelte 列在 devDependencies，但它的 runtime 會被編進前端 bundle。
-    roots.append("svelte")
+    pending = list(pkg.get("dependencies", {})) + ["svelte"]
     modules = APP_DIR / "node_modules"
     seen: dict[str, Component] = {}
-
-    def walk(name: str) -> None:
+    while pending:
+        name = pending.pop()
         if name in seen:
-            return
-        pdir = modules / name
-        pj = pdir / "package.json"
-        if not pj.exists():
-            return
-        j = json.loads(pj.read_text(encoding="utf-8"))
-        lic = j.get("license")
-        if not isinstance(lic, str):
-            lic = json.dumps(lic, ensure_ascii=False) if lic else "見授權全文"
-        repo = j.get("repository")
-        url = repo.get("url", "") if isinstance(repo, dict) else (repo or j.get("homepage", ""))
-        files = [f for f in pdir.iterdir() if f.is_file() and LICENSE_FILE_RX.match(f.name)]
-        seen[name] = Component(name, j.get("version", ""), lic, url, _read_texts(files))
-        for dep in j.get("dependencies", {}):
-            walk(dep)
-
-    for r in roots:
-        walk(r)
+            continue
+        comp = _npm_component(name, modules / name)
+        if comp is not None:
+            seen[name] = comp
+            pending.extend(comp.deps)
     return sorted(seen.values(), key=lambda c: c.name.lower())
 
 
@@ -253,6 +265,15 @@ def render(sections: list[tuple[str, list[Component]]]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _output_path(raw: str) -> Path | None:
+    """Resolve the output path; refuse anything outside ALLOWED_OUTPUT_DIR."""
+    base = ALLOWED_OUTPUT_DIR.resolve()
+    target = Path(raw).resolve()
+    if target == base or not target.is_relative_to(base):
+        return None
+    return target
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
@@ -266,9 +287,13 @@ def main(argv: list[str]) -> int:
         if not comps:
             print(f"{title}：沒有收集到任何元件，拒絕產出不完整的聲明", file=sys.stderr)
             return 1
-    Path(argv[1]).write_text(render(sections), encoding="utf-8", newline="\r\n")
+    target = _output_path(argv[1])
+    if target is None:
+        print(f"輸出路徑必須在 {ALLOWED_OUTPUT_DIR} 底下", file=sys.stderr)
+        return 2
+    target.write_text(render(sections), encoding="utf-8", newline="\r\n")
     total = sum(len(c) for _, c in sections)
-    print(f"THIRD_PARTY_NOTICES: {total} components → {argv[1]}", file=sys.stderr)
+    print(f"THIRD_PARTY_NOTICES: {total} components → {target}", file=sys.stderr)
     return 0
 
 

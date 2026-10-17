@@ -86,6 +86,33 @@ class MainRefusesIncompleteNotices(unittest.TestCase):
             self.assertFalse(target.exists())
 
 
+class MainRestrictsOutputPath(unittest.TestCase):
+    def _run(self, allowed: Path, target: Path) -> int:
+        one = [gen.Component("a", "1", "MIT")]
+        with mock.patch.object(gen, "ALLOWED_OUTPUT_DIR", allowed), \
+             mock.patch.object(gen, "collect_python", return_value=one), \
+             mock.patch.object(gen, "collect_rust", return_value=one), \
+             mock.patch.object(gen, "collect_frontend", return_value=one):
+            return gen.main(["gen", str(target)])
+
+    def test_writes_inside_release_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            allowed = Path(d) / "release"
+            (allowed / "JavDBMagnet").mkdir(parents=True)
+            target = allowed / "JavDBMagnet" / "THIRD_PARTY_NOTICES.txt"
+            self.assertEqual(self._run(allowed, target), 0)
+            self.assertIn("- a 1 — MIT", target.read_text(encoding="utf-8"))
+
+    def test_refuses_path_outside_release_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            allowed = Path(d) / "release"
+            allowed.mkdir()
+            for target in (Path(d) / "elsewhere.txt", allowed / ".." / "escape.txt"):
+                with self.subTest(target=str(target)):
+                    self.assertEqual(self._run(allowed, target), 2)
+                    self.assertFalse(target.exists())
+
+
 class ChardetStaysOutOfSidecar(unittest.TestCase):
     def test_requirements_do_not_install_chardet(self):
         lines = (ROOT / "requirements-sidecar.txt").read_text(encoding="utf-8").splitlines()
