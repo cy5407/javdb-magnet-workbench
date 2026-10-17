@@ -38,7 +38,7 @@ class Ps1Encoding(unittest.TestCase):
         # 再跑一次 release-scan 測試的 verify 腳本，一定要在掃描範圍內。
         names = {p.name for p in _ps1_files()}
         required = {"build-release.ps1", "test-release-scan.ps1", "verify-windows-build.ps1"}
-        self.assertTrue(required <= names, sorted(required - names))
+        self.assertLessEqual(required, names, sorted(required - names))
 
 
 if __name__ == "__main__":

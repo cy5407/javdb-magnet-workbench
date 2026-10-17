@@ -346,12 +346,13 @@ def build_report(events: list[dict], threshold_ms: int, min_n: int,
     if not include_repeats:
         scored, dropped = dedupe_first_per_btih(scored)
 
-    out: list[str] = []
-    out.append("RD 送出成效報表")
-    out.append("=" * 72)
-    out.append(f"事件總數 {len(events)}；送出 {len(labeled)}；納入統計 {len(scored)}；"
-               f"環境錯誤 {len(errors)}（token／速率限制／API 錯誤，與磁力無關，"
-               f"不計入命中率；磁力終態失敗已計入「沒人有」）")
+    out: list[str] = [
+        "RD 送出成效報表",
+        "=" * 72,
+        f"事件總數 {len(events)}；送出 {len(labeled)}；納入統計 {len(scored)}；"
+        f"環境錯誤 {len(errors)}（token／速率限制／API 錯誤，與磁力無關，"
+        f"不計入命中率；磁力終態失敗已計入「沒人有」）",
+    ]
     if errors:
         codes = defaultdict(int)
         for r in errors:
@@ -392,10 +393,12 @@ def build_report(events: list[dict], threshold_ms: int, min_n: int,
     if no_prefix < min_n:
         warns.append(f"「無前綴」只有 {no_prefix} 筆樣本")
     if warns:
-        out.append("⚠ 選擇偏誤警告：" + "、".join(warns) + "。")
-        out.append("  沒有對照組就無法證明推薦規則有效 —— 你只會看到推薦那類的命中率，")
-        out.append("  卻不知道隨便挑一個是不是也一樣高。偶爾走「全部送出」而不是")
-        out.append("  「只送高機率」，日誌才會累積到對照樣本。")
+        out.extend([
+            "⚠ 選擇偏誤警告：" + "、".join(warns) + "。",
+            "  沒有對照組就無法證明推薦規則有效 —— 你只會看到推薦那類的命中率，",
+            "  卻不知道隨便挑一個是不是也一樣高。偶爾走「全部送出」而不是",
+            "  「只送高機率」，日誌才會累積到對照樣本。",
+        ])
 
     return "\n".join(out)
 
