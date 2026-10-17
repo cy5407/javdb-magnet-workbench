@@ -383,7 +383,12 @@ class RealDebrid:
                 }
 
             poll_count += 1
-            wait_s = 0.8 if poll_count == 1 else (1.5 if poll_count == 2 else 3.0)
+            if poll_count == 1:
+                wait_s = 0.8
+            elif poll_count == 2:
+                wait_s = 1.5
+            else:
+                wait_s = 3.0
             time.sleep(wait_s)
 
         return self._build_pending_result(
