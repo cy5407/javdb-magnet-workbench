@@ -82,9 +82,12 @@ def fetch_magnets(url: str, session, cookies: dict) -> dict:
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
+    title = "未知"
     title_h2 = soup.find("h2", class_="title")
-    title_tag = title_h2.find(class_="current-title") if title_h2 is not None else None
-    title = title_tag.get_text(strip=True) if title_tag is not None else "未知"
+    if title_h2:
+        title_tag = title_h2.find(class_="current-title")
+        if title_tag is not None:
+            title = title_tag.get_text(strip=True)
 
     code_tag = soup.select_one(".panel-block .value a")
     code = ""
@@ -94,7 +97,9 @@ def fetch_magnets(url: str, session, cookies: dict) -> dict:
 
     magnets = []
     magnets_content = soup.find(id="magnets-content")
-    items = magnets_content.find_all(class_="item") if magnets_content is not None else []
+    items = []
+    if magnets_content:
+        items = magnets_content.find_all(class_="item")
     for item in items:
         magnet_name = item.find(class_="magnet-name")
         link_tag = magnet_name.find("a") if magnet_name else None

@@ -603,6 +603,25 @@ class ProcessMagnet(unittest.TestCase):
         self.assertIn("沒有可選的檔案", str(cm.exception))
         dele.assert_called_once_with("T-5")
 
+    def test_poll_backoff_schedule_is_0_8_then_1_5_then_3_0(self):
+        # Four non-terminal polls then downloaded: the waits between polls must
+        # follow the 0.8 / 1.5 / 3.0 schedule and stay at 3.0 afterwards.
+        info_dl = {"status": "downloading", "filename": "p", "progress": 10}
+        info_done = {"status": "downloaded", "filename": "p",
+                     "links": [], "progress": 100}
+        clk = _FakeClock(sleep_advance=1.0)
+        waits = []
+
+        def _sleep(secs):
+            waits.append(secs)
+            clk.sleep(secs)
+
+        with mock.patch("realdebrid.time.time", new=clk.time),              mock.patch("realdebrid.time.sleep", new=_sleep),              mock.patch.object(self.rd, "add_magnet", return_value="T-8"),              mock.patch.object(self.rd, "torrent_info",
+                               side_effect=[info_dl] * 4 + [info_done]):
+            out = self.rd.process_magnet(self.SAMPLE_MAGNET, cache_wait=100)
+        self.assertEqual(out["status"], "completed")
+        self.assertEqual(waits, [0.8, 1.5, 3.0, 3.0])
+
     def test_timeout_returns_pending(self):
         # Loop enters once (status=downloading), sleeps once → clock jumps
         # past deadline → while-check fails → return pending. One sleep is
