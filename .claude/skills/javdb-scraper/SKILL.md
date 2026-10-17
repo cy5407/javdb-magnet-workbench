@@ -1,6 +1,6 @@
 ---
 name: javdb-scraper
-description: JavDB 網頁爬取、TLS 偽裝、Sidecar RPC 通信與 Real-Debrid 雲端快取整合 SOP
+description: JavDB 爬取、Sidecar RPC 與 Real-Debrid 整合的操作規範與跨層契約。修改或呼叫 sidecar 命令（fetch_javdb、rd_send_magnet、rd_check_pending 等）、番號與磁力解析、Real-Debrid 選檔／快取／429 退避，或檢查 RPC 回傳形狀時使用；純前端樣式與 Archify 圖表不適用。
 ---
 
 # JavDB Scraper & Real-Debrid Acceleration Skill
@@ -26,7 +26,7 @@ description: JavDB 網頁爬取、TLS 偽裝、Sidecar RPC 通信與 Real-Debrid
 ## 4. Operational Invariants & Code Contracts
 
 ### 4.1 基礎 JSON-RPC 回應信封
-所有 Sidecar 回應均遵循以下信封格式（`sidecar/sidecar.py:223-235`）：
+所有 Sidecar 回應均遵循以下信封格式（`sidecar/sidecar.py` 的 `_ok`／`_err`）：
 - **成功**：`{"ok": true, "request_id": str|null, ...payload}`
 - **失敗**：`{"ok": false, "request_id": str|null, "error": {"code": str, "message": str, "internal": str}}`；`internal` 一律存在，未提供時為空字串。
 
