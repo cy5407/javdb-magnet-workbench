@@ -25,10 +25,13 @@ beautifulsoup4==4.14.3
 # `RequestsDependencyWarning` and keep the bundle byte-stable across
 # environments. urllib3 2.7.0 fixes CVE-2026-44431 (cross-origin
 # Authorization-forward in streaming) and CVE-2026-44432 (decompression
-# bomb safeguard bypass). chardet stays in the 5.x line — requests 2.34.x
-# supports `chardet>=3.0.2,<6.0.0`, and 6.0.0.post1 trips the warning.
+# bomb safeguard bypass).
+#
+# chardet is deliberately NOT installed: it is LGPL, and requests prefers it
+# over charset-normalizer (MIT) whenever it is importable, which would bundle
+# an LGPL module into the single-file sidecar.exe. build_sidecar.py also passes
+# `--exclude-module chardet` so a stray install in the build env cannot leak in.
 urllib3==2.7.0
 charset-normalizer==3.4.4
 idna==3.15
 certifi==2026.1.4
-chardet==5.2.0

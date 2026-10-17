@@ -127,6 +127,9 @@ def build():
         # 仍明列的理由與上面三個相同——不倚賴 Analysis 的推斷結果，讓打包內容
         # 由這份清單顯式決定。
         "--hidden-import", "rd_outcome_log",
+        # chardet 是 LGPL；requests 在它可匯入時會優先用它，所以即使建置環境
+        # 裝了也要排除，讓 requests 改用 charset-normalizer（MIT）。
+        "--exclude-module", "chardet",
         str(ENTRY),
     ]
     # cmd is a literal PyInstaller argv built in this file (no user input).

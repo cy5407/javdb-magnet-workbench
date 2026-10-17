@@ -11,8 +11,9 @@
 #                                 `tauri/custom-protocol` feature so the
 #                                 release binary embeds dist/ instead of
 #                                 reaching for the dev server
-#   3. Stage release/JavDBMagnet/ (javdbmagnet.exe + sidecar.exe + README.txt)
-#   4. Audit staging dir         (whitelist: exe + exe + README.txt; nothing else)
+#   3. Stage release/JavDBMagnet/ (javdbmagnet.exe + sidecar.exe + README.txt
+#                                 + LICENSE.txt + THIRD_PARTY_NOTICES.txt)
+#   4. Audit staging dir         (whitelist: the five files above; nothing else)
 #   5. Binary content scan       (tokens / magnets / Cloudflare cookies must NOT
 #                                 appear in either exe)
 #   6. Source secret scan        (same patterns, case-insensitive, over every
@@ -777,9 +778,21 @@ SMARTSCREEN
 首次啟動可能跳 SmartScreen 警告（未做 code signing）。比對 SHA256 後
 按「更多資訊 → 仍要執行」即可。
 
+LICENSE
+-------
+PolyForm Noncommercial 1.0.0（見 LICENSE.txt）：個人與非商業用途可免費使用；
+商業用途需另行取得作者授權。第三方元件的授權見 THIRD_PARTY_NOTICES.txt。
+
 詳見 repo 內 README.md / docs/troubleshooting/。
 "@
 Set-Content -Path (Join-Path $StagingDir "README.txt") -Value $ReadmeContent -Encoding utf8
+
+# PolyForm 要求轉散佈時附上授權條款與 Required Notice；第三方元件（MIT／Apache／
+# BSD 等）要求散佈二進位檔時附上原作者的版權與授權聲明。聲明由打包 sidecar 所用
+# 的同一個 `python` 產生，列出的 Python 套件才會與 sidecar.exe 內容一致。
+Copy-Item -LiteralPath (Join-Path $RepoRoot "LICENSE") -Destination (Join-Path $StagingDir "LICENSE.txt") -Force
+& python (Join-Path $RepoRoot "scripts\gen_third_party_notices.py") (Join-Path $StagingDir "THIRD_PARTY_NOTICES.txt")
+if ($LASTEXITCODE -ne 0) { FailExit "THIRD_PARTY_NOTICES.txt generation failed" }
 
 $StagedFiles = Get-ChildItem $StagingDir -Recurse -File | Select-Object FullName, Length
 Write-Host "    Staged files (" $StagedFiles.Count "):" -ForegroundColor Gray
@@ -792,7 +805,7 @@ $StagedFiles | ForEach-Object {
 # Step 5: Audit staging folder — strict whitelist
 # ---------------------------------------------------------------------------
 Step "Auditing portable folder (whitelist)"
-$AllowedNames = @('javdbmagnet.exe', 'sidecar.exe', 'README.txt')
+$AllowedNames = @('javdbmagnet.exe', 'sidecar.exe', 'README.txt', 'LICENSE.txt', 'THIRD_PARTY_NOTICES.txt')
 # Explicitly verify none of the forbidden names slipped in even if the
 # whitelist somehow expanded.
 $ForbiddenNames = @('.env','.gitignore','cookies.txt','pending_torrents.json','magnet.txt')
