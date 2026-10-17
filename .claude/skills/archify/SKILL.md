@@ -1,6 +1,6 @@
 ---
 name: archify
-description: 本專案專用的架構與契約視覺化 Skill。強制利用本機 Archify Node.js 程式化編譯引擎 (.archify-engine/archify/bin/archify.mjs) 進行幾何求解、碰撞檢測與 HTML 渲染。嚴禁 AI 手寫 SVG 坐標，確保產出人類高可讀性、零穿透、且 100% 忠實對應 Codebase 實體契約的互動圖表。
+description: 以本機 Archify 引擎產出本專案的架構、資料流與跨層契約互動圖（HTML）。使用者要求畫架構圖、流程圖、契約圖，或更新 architecture.html／workflow.html 時使用；圖形座標由引擎求解，不手寫 SVG。
 license: MIT
 metadata:
   version: "2.17-engine-enforced"
